@@ -1,0 +1,27 @@
+Forward:
+  TarEukF: "CCAGCASCYGCGGTAATTCC"
+  ArchF: "YGCGGTAAYTCCAGCTC"
+  VESPAF: "AGCAGCCGCGGTAATTCC"
+
+Reverse:
+  TarEukR: "ACTTTCGTTCTTGATYRA"
+  Meta1R: "CYCCTACYYTMGYYCTKGA"
+  Meta2R: "DCTKTCGTYCTTGATYRA"
+  VESPAR: "TCCGTCAATTYCTTNAASTTTC"
+
+Pairs:
+  - TarEuk:
+    - TarEukF
+    - TarEukR
+  - Meta1:
+    - TarEukF
+    - Meta1R
+  - Meta2:
+    - TarEukF
+    - Meta2R
+  - Arch:
+    - ArchF
+    - TarEukR
+  - VESPA:
+    - VESPAF
+    - VESPAR

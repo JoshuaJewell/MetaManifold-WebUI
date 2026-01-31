@@ -1,0 +1,129 @@
+This is cutadapt 4.2 with Python 3.11.2
+Command line parameters: -g CCAGCASCYGCGGTAATTCC -G ACTTTCGTTCTTGATYRA -G CYCCTACYYTMGYYCTKGA -m 200 --discard-untrimmed -o ./outputs/fastq/JIN-Nu-mul_R1_trimmed.fastq.gz -p ./outputs/fastq/JIN-Nu-mul_R2_trimmed.fastq.gz ./outputs/fastq/JIN-Nu-mul_*_L001_R1_001.fastq.gz ./outputs/fastq/JIN-Nu-mul_*_L001_R2_001.fastq.gz
+Processing paired-end reads on 1 core ...
+ERROR: [Errno 2] No such file or directory: './outputs/fastq/JIN-Nu-mul_*_L001_R1_001.fastq.gz'
+This is cutadapt 4.2 with Python 3.11.2
+Command line parameters: -g CCAGCASCYGCGGTAATTCC -G ACTTTCGTTCTTGATYRA -G CYCCTACYYTMGYYCTKGA -m 200 --discard-untrimmed -o ./outputs/fastq/JIN-Nu-mul_R1_trimmed.fastq.gz -p ./outputs/fastq/JIN-Nu-mul_R2_trimmed.fastq.gz ./inputs/fastq/JIN-Nu-mul_S54_L001_R1_001.fastq.gz ./inputs/fastq/JIN-Nu-mul_S54_L001_R2_001.fastq.gz
+Processing paired-end reads on 1 core ...
+Finished in 7.733 s (32.926 µs/read; 1.82 M reads/minute).
+
+=== Summary ===
+
+Total read pairs processed:            234,851
+  Read 1 with adapter:                 229,487 (97.7%)
+  Read 2 with adapter:                 177,592 (75.6%)
+
+== Read fate breakdown ==
+Pairs that were too short:                 404 (0.2%)
+Pairs discarded as untrimmed:           60,591 (25.8%)
+Pairs written (passing filters):       173,856 (74.0%)
+
+Total basepairs processed:   117,895,202 bp
+  Read 1:    58,947,601 bp
+  Read 2:    58,947,601 bp
+Total written (filtered):     80,551,787 bp (68.3%)
+  Read 1:    39,926,366 bp
+  Read 2:    40,625,421 bp
+
+=== First read: Adapter 1 ===
+
+Sequence: CCAGCASCYGCGGTAATTCC; Type: regular 5'; Length: 20; Trimmed: 229487 times
+
+Minimum overlap: 3
+No. of allowed errors:
+1-9 bp: 0; 10-19 bp: 1; 20 bp: 2
+
+Overview of removed sequences
+length	count	expect	max.err	error counts
+3	604	3669.5	0	604
+4	100	917.4	0	100
+5	10	229.3	0	10
+9	1	0.9	0	1
+10	8	0.2	1	3 5
+11	4	0.1	1	3 1
+12	16	0.0	1	8 8
+13	10	0.0	1	2 8
+14	16	0.0	1	7 9
+15	10	0.0	1	4 6
+16	16	0.0	1	2 14
+17	28	0.0	1	13 15
+18	120	0.0	1	15 44 61
+19	1565	0.0	1	373 697 495
+20	51044	0.0	2	42814 4174 4056
+21	77925	0.0	2	66902 5338 5685
+22	49668	0.0	2	42264 3789 3615
+23	48268	0.0	2	42172 2777 3319
+24	71	0.0	2	14 50 7
+29	1	0.0	2	1
+68	1	0.0	2	1
+78	1	0.0	2	0 0 1
+
+
+=== Second read: Adapter 2 ===
+
+Sequence: ACTTTCGTTCTTGATYRA; Type: regular 5'; Length: 18; Trimmed: 120098 times
+
+Minimum overlap: 3
+No. of allowed errors:
+1-9 bp: 0; 10-18 bp: 1
+
+Overview of removed sequences
+length	count	expect	max.err	error counts
+3	281	3669.5	0	281
+4	254	917.4	0	254
+5	2	229.3	0	2
+6	1	57.3	0	1
+7	3	14.3	0	3
+10	2	0.2	1	0 2
+11	4	0.1	1	3 1
+12	2	0.0	1	1 1
+13	6	0.0	1	1 5
+14	8	0.0	1	4 4
+15	19	0.0	1	10 9
+16	11	0.0	1	3 8
+17	443	0.0	1	50 393
+18	63922	0.0	1	32105 31817
+19	19015	0.0	1	13804 5211
+20	13766	0.0	1	10057 3709
+21	21942	0.0	1	15923 6019
+22	33	0.0	1	9 24
+60	2	0.0	1	0 2
+61	2	0.0	1	0 2
+184	2	0.0	1	0 2
+185	80	0.0	1	1 79
+186	197	0.0	1	169 28
+187	42	0.0	1	32 10
+188	37	0.0	1	22 15
+189	19	0.0	1	17 2
+190	2	0.0	1	0 2
+191	1	0.0	1	1
+
+
+=== Second read: Adapter 3 ===
+
+Sequence: CYCCTACYYTMGYYCTKGA; Type: regular 5'; Length: 19; Trimmed: 57494 times
+
+Minimum overlap: 3
+No. of allowed errors:
+1-9 bp: 0; 10-19 bp: 1
+
+Overview of removed sequences
+length	count	expect	max.err	error counts
+3	351	3669.5	0	351
+4	103	917.4	0	103
+9	1	0.9	0	1
+10	5	0.2	1	2 3
+11	13	0.1	1	2 11
+12	19	0.0	1	4 15
+13	487	0.0	1	21 466
+14	51676	0.0	1	7573 44103
+15	2734	0.0	1	387 2347
+16	1438	0.0	1	352 1086
+17	647	0.0	1	129 518
+19	1	0.0	1	0 1
+47	1	0.0	1	0 1
+165	3	0.0	1	3
+182	7	0.0	1	0 7
+183	1	0.0	1	0 1
+184	5	0.0	1	2 3
+185	2	0.0	1	0 2
