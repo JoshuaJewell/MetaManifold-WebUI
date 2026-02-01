@@ -254,5 +254,5 @@ rsconnect/
 ### Other ###
 # Things with ambiguous intellectual property
 internal
-inputs/fastq
+inputs/fastq/
 cutadapt/output_*

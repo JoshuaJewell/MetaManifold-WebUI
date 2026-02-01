@@ -1,0 +1,34 @@
+# Mappings from Division -> Supergroup
+mappings:
+  Rhizaria: Rhizaria
+  Alveolata: Alveolata
+  Stramenopiles: Stramenopiles
+  Hemimastigophora: Hemimastigophora
+  Discoba: Discoba
+  Metamonada: Metamonada
+  Telonemia: Telonemia
+  Ancyromonadida: Ancyromonadida
+
+# Taxonomic filters: exclude rows where these columns contain these substrings
+filters:
+  - column: Domain
+    pattern: Bacteria
+  - column: Domain
+    pattern: Archaea
+  - column: Domain
+    pattern: Eukaryota:plas
+  - column: Domain
+    pattern: Eukaryota:mito
+  - column: Supergroup
+    pattern: TSAR:chro
+  - column: Subdivision
+    pattern: Metazoa
+  - column: Subdivision
+    pattern: Fungi
+  - column: Division
+    pattern: Rhodophyta
+  - column: Class
+    pattern: Embryophyceae
+
+# Optional: whether to remove empty/unassigned domains by default
+remove_empty_domain: true
