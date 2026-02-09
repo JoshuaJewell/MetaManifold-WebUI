@@ -73,7 +73,7 @@ export merge_taxonomy_counts, filter_table
     Reads taxonomy TSV from vsearch and counts CSV from DADA2 and returns a merged DataFrame.
     """
     function merge_taxonomy_counts(
-        taxonomy_vsearch_path::AbstractString = "./vsearch/taxonomy.tsv",  # Fixed default paths
+        taxonomy_vsearch_path::AbstractString = "./vsearch/taxonomy.tsv",
         counts_csv_path::AbstractString = "./DADA2/tax_counts_fasta.csv")
         
         @info("Merging taxonomy counts.")

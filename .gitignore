@@ -258,5 +258,10 @@ inputs/fastq/
 cutadapt/output_*
 
 ### Lock files ###
-.~lock.
+.~lock.*
 .csv#
+
+### Bits I don't want to share yet ###
+hide.*
+DADA2
+vsearch
