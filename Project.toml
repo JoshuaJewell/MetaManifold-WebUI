@@ -1,0 +1,19 @@
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+RCall = "6f49c342-dc21-5d91-9882-a32aef131414"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
+TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
+YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
+
+[compat]
+CSV = "0.10"
+DataFrames = "1.8"
+RCall = "0.14"
+StatsBase = "0.34"
+StatsPlots = "0.15"
+TimeZones = "1.22"
+YAML = "0.4"
+julia = "1"

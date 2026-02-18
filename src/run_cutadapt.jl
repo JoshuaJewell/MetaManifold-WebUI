@@ -160,9 +160,3 @@ export cutadapt
         )
     end
 end
-
-primers_path = "./inputs/primers.yml"
-primer_pairs = ["TarEuk", "Meta2"]
-fastq_input_dir = "./inputs/fastq/"
-fastq_output_dir = "./cutadapt/fastq/"
-optional_args = "-m 200 --discard-untrimmed"

@@ -1,0 +1,61 @@
+workspace:
+  root: "/path/to/project"
+  input_dir: "/path/to/fastqs"
+
+file_patterns:
+  forward: "_R1_trimmed.fastq.gz"
+  reverse: "_R2_trimmed.fastq.gz"
+  sample_name_split: "_"
+  sample_name_index: 1
+  mode: "paired"              # paired | forward | reverse
+
+filter_trim:
+  trunc_q: 2
+  trunc_len: [220, 220]       # [forward, reverse]; first value used for single-end
+  max_ee: [3, 3]
+  min_len: 175
+  max_n: 0
+  match_ids: true
+  rm_phix: true
+
+dada:
+  seed: 123
+  nbases: 200000000
+  max_consist: 15
+  pool_method: "pseudo"       # none | pseudo | true
+
+merge:
+  min_overlap: 20
+  max_mismatch: 0
+  trim_overhang: true
+
+asv:
+  band_size_min: 250          # null to skip length filtering
+  band_size_max: 256
+  denovo_method: "consensus"
+
+taxonomy:
+  skip: false                 # true to skip taxonomy and use alternative output mode
+  uri: "https://github.com/pr2database/pr2database/releases/download/v5.0.0/pr2_version_5.0.0_SSU_dada2.fasta.gz"
+  multithread: true
+  min_boot: 0
+  levels:
+    - "Domain"
+    - "Supergroup"
+    - "Division"
+    - "Subdivision"
+    - "Class"
+    - "Order"
+    - "Family"
+    - "Genus"
+    - "Species"
+
+output:
+  bootstraps: "combined"      # none | combined | separate
+  combined_mode: "regular"    # regular (taxonomy + counts) | alternative (SeqName + Sequence + counts, no taxonomy)
+  seq_table_prefix: "seqtab_nochim"
+  fasta_prefix: "asvs"
+  taxa_prefix: "taxonomy"
+  combined_filename: "tax_counts.xlsx"
+
+verbose: true
