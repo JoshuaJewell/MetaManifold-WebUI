@@ -68,13 +68,17 @@ export merge_taxonomy_counts, filter_table
     end
 
     """
-    merge_taxonomy_counts(taxonomy_vsearch_path, counts_csv_path)
+        merge_taxonomy_counts(taxonomy_vsearch_path, counts_csv_path)
 
     Reads taxonomy TSV from vsearch and counts CSV from DADA2 and returns a merged DataFrame.
+
+    ## Arguments:
+    - `taxonomy_vsearch_path` (): Path to vsearch output file.
+    - `counts_csv_path`: Path to DADA2 idtax output file.
     """
     function merge_taxonomy_counts(
-        taxonomy_vsearch_path::AbstractString = "./vsearch/taxonomy.tsv",
-        counts_csv_path::AbstractString = "./DADA2/tax_counts_fasta.csv")
+        taxonomy_vsearch_path,
+        counts_csv_path)
         
         @info("Merging taxonomy counts.")
 
@@ -147,7 +151,8 @@ export merge_taxonomy_counts, filter_table
     end
 
     """
-    filter_table(merged_df; filters_yaml_path, remove_empty_domain_override)
+        filter_table(merged_df; filters_yaml_path, remove_empty_domain_override)
+
     Applies protist filtering to a merged DataFrame produced by merge_taxonomy_counts using rules defined in a YAML file.
 
     ## Arguments:

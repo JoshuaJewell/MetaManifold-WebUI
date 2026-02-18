@@ -5,8 +5,9 @@ export dada2
     using RCall
 
     """
-    dada2(dada2_config_dir)
-    Most adorable little wrapper that simply passes the dada2 config to R to run through its pipeline.
+        dada2(dada2_config_dir)
+
+    Most adorable little wrapper that simply passes the dada2 config to R to run through its pipeline. Requires dada2.r in src.
 
     ## Arguments:
     - `dada2_config_dir`: Path to DADA2 YAML config.
