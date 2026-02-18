@@ -260,3 +260,4 @@ cutadapt/output_*
 ### Bits I don't want to share yet ###
 hide.*
 output/
+pipelinesteps.txt
