@@ -63,7 +63,7 @@ export cutadapt
 
         # Messy filesystem stuff
         time = chop("$(now(localzone()))", tail = 13)
-        fastq_out_dir = cutadapt_dir * "output_$time/"
+        fastq_out_dir = cutadapt_dir * "$time/"
         log_dir = fastq_out_dir * "/logs/"
         stats_path = joinpath(log_dir, "cutadapt_primer_trimming_stats.txt")
         summary_path = joinpath(log_dir, "cutadapt_trimmed_percentage.txt")

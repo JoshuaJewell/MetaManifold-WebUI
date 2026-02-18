@@ -22,7 +22,7 @@ primer_pairs = ["TarEuk", "Meta2"]
 optional_args = "-m 200 --discard-untrimmed"
 
 # DADA2 parameters
-dada2_config_dir = joinpath(config_dir, "dada2_config.yml")
+dada2_config_dir = joinpath(config_dir, "dada2.yml")
 
 # Merge and filter (DADA2-VSEARCH) parameters
 multiv = joinpath(output_dir, "vsearch/taxonomy_multi_pool.tsv")
@@ -35,14 +35,14 @@ protist_filter = joinpath(config_dir, "protist_filter.yml")
 merged_outfile_multi = joinpath(output_dir, "merged_multi.csv")
 merged_outfile_vespa = joinpath(output_dir, "merged_vespa.csv")
 
-filtered_outfile_multi = joinpath(output_dir, "protist_filtered_vespa.csv")
+filtered_outfile_multi = joinpath(output_dir, "protist_filtered_multi.csv")
 filtered_outfile_vespa = joinpath(output_dir, "protist_filtered_vespa.csv")
 
 ## Main
 
 #cutadapt(primer_pairs, primers_config, fastq_input_dir, cutadapt_dir, optional_args = optional_args)
 
-#dada2(dada_config_dir)
+#dada2(dada2_config_dir)
 
 #CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid))
 #CSV.write(merged_outfile_vespa, merge_taxonomy_counts(vespav, vespad))
