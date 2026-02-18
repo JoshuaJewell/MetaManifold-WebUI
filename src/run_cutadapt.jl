@@ -136,20 +136,20 @@ export cutadapt
     This would execute `cutadapt` with arguments `-g CCAGCASCYGCGGTAATTCC -G ACTTTCGTTCTTGATYRA -G DCTKTCGTYCTTGATYRA`.
 
     ## Arguments
-    - `primer_pairs` (default: [""]): Specify primers in string array format.
-    - `primers_path` (default: "./inputs/primers.yml"): Specify path of YAML file for primers.
-    - `fastq_in_dir` (default: "./inputs/fastq/"): Specify path of *_*_L001_R1_001.fastq.gz and *_*_L001_R2_001.fastq.gz files for cutadapt.
-    - `cutadapt_dir` (default: "./cutadapt/"): Specify an output directory for trimmed .fastq.gz and logs.
+    - `primer_pairs`: Specify primers in string array format.
+    - `primers_path`: Specify path of YAML file for primers.
+    - `fastq_in_dir`: Specify path of *_*_L001_R1_001.fastq.gz and *_*_L001_R2_001.fastq.gz files for cutadapt.
+    - `cutadapt_dir`: Specify an output directory for trimmed .fastq.gz and logs.
 
     ## Keyword Arguments
     - `optional_args` (optional, default: "-m 200 --discard-untrimmed"): Specify additional arguments passed to `cutadapt` command.
 
     """
     function cutadapt(
-        primer_pairs = [""],
-        primers_path = "./inputs/primers.yml", 
-        fastq_in_dir = "./inputs/fastq/", 
-        cutadapt_dir = "./cutadapt/"; 
+        primer_pairs,
+        primers_path, 
+        fastq_in_dir, 
+        cutadapt_dir; 
         optional_args = "-m 200 --discard-untrimmed"
     )
         run_cutadapt(

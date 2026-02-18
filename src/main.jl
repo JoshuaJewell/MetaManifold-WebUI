@@ -1,31 +1,51 @@
 include("run_cutadapt.jl")
+include("run_dada2.jl")
 include("merge_and_filter_taxa.jl")
 
-using CSV, RCall
-using .Cutadapt, .TaxonomyTableTools
+using CSV
+using .Cutadapt, .TaxonomyTableTools, .DADA2
 
-## Instantiate
-primers_path = "./inputs/primers.yml"
+## Instantiate filesystem
+# Root directories
+data_dir = "./data"
+config_dir = "./config"
+output_dir = "./output"
+
+# Cutadapt paths
+fastq_input_dir = joinpath(data_dir, "fastq")
+cutadapt_dir = joinpath(output_dir, "cutadapt")
+primers_config = joinpath(config_dir, "primers.yml")
+
+## Instantiate parameters
+# Cutadapt parameters
 primer_pairs = ["TarEuk", "Meta2"]
-fastq_input_dir = "./inputs/fastq/"
-cutadapt_dir = "./cutadapt/"
 optional_args = "-m 200 --discard-untrimmed"
 
-multiv = "./vsearch/taxonomy_multi_pool.tsv"
-vespav = "./vsearch/taxonomy_vespa_pool_fwdonly.tsv"
-multid = "./DADA2/tax_counts_fasta_multi_pool.csv"
-vespad = "./DADA2/tax_counts_fasta_vespa_pool_fwdonly.csv"
+# DADA2 parameters
+dada2_config_dir = joinpath(config_dir, "dada2_config.yml")
 
-dada2_config_path = "./inputs/dada2_config.yml"
+# Merge and filter (DADA2-VSEARCH) parameters
+multiv = joinpath(output_dir, "vsearch/taxonomy_multi_pool.tsv")
+vespav = joinpath(output_dir, "vsearch/taxonomy_vespa_pool_fwdonly.tsv")
+multid = joinpath(output_dir, "dada2/tax_counts_fasta_multi_pool.csv")
+vespad = joinpath(output_dir, "dada2/tax_counts_fasta_vespa_pool_fwdonly.csv")
+
+protist_filter = joinpath(config_dir, "protist_filter.yml")
+
+merged_outfile_multi = joinpath(output_dir, "merged_multi.csv")
+merged_outfile_vespa = joinpath(output_dir, "merged_vespa.csv")
+
+filtered_outfile_multi = joinpath(output_dir, "protist_filtered_vespa.csv")
+filtered_outfile_vespa = joinpath(output_dir, "protist_filtered_vespa.csv")
 
 ## Main
 
-#cutadapt(primer_pairs, primers_path, fastq_input_dir, cutadapt_dir, optional_args = optional_args)
+#cutadapt(primer_pairs, primers_config, fastq_input_dir, cutadapt_dir, optional_args = optional_args)
 
-#R"system(paste('Rscript', './src/dada2.r', $dada2_config_path))"
+#dada2(dada_config_dir)
 
-#CSV.write("protist_filtered_vespa_pool.csv", filter_table(merge_taxonomy_counts(vespav, vespad),"./inputs/protist_filter.yml"))
-#CSV.write("protist_filtered_vespa_pool.csv", filter_table(merge_taxonomy_counts(vespav, vespad),"./inputs/protist_filter.yml"))
+#CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid))
+#CSV.write(merged_outfile_vespa, merge_taxonomy_counts(vespav, vespad))
 
-#CSV.write("merged_multi_pool.csv", merge_taxonomy_counts(multiv, multid))
-#CSV.write("merged_vespa_pool.csv", merge_taxonomy_counts(vespav, vespad))
+#CSV.write(filtered_outfile_multi, filter_table(merge_taxonomy_counts(vespav, vespad), protist_filter))
+#CSV.write(filtered_outfile_vespa, filter_table(merge_taxonomy_counts(vespav, vespad), protist_filter))

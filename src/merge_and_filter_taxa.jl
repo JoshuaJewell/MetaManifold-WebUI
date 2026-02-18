@@ -148,9 +148,7 @@ export merge_taxonomy_counts, filter_table
 
     """
     filter_table(merged_df; filters_yaml_path, remove_empty_domain_override)
-    Applies protist filtering to a merged DataFrame produced by merge_taxonomy_counts.
-
-    Applies protist filtering to a merged DataFrame using rules defined in a YAML file.
+    Applies protist filtering to a merged DataFrame produced by merge_taxonomy_counts using rules defined in a YAML file.
 
     ## Arguments:
     - `merged_df`: Input DataFrame with taxonomy columns.
@@ -178,7 +176,7 @@ export merge_taxonomy_counts, filter_table
 
         @info "Filtering table using configuration from $filters_yaml_path"
 
-        # === Load mappings ===
+        # Load mappings
         mapping_config = get(config, "mappings", Dict())
         if !isempty(mapping_config)
             @assert mapping_config isa AbstractDict "mappings must be a dictionary in YAML"
@@ -194,7 +192,7 @@ export merge_taxonomy_counts, filter_table
             ]
         end
 
-        # === Load remove_empty_domain flag ===
+        # Load remove_empty_domain flag
         remove_empty = get(config, "remove_empty_domain", true)
         if remove_empty_domain_override !== nothing
             remove_empty = remove_empty_domain_override
@@ -209,7 +207,7 @@ export merge_taxonomy_counts, filter_table
                 df)
         end
 
-        # === Load and apply filters ===
+        # Load and apply filters
         raw_filters = get(config, "filters", [])
         @assert raw_filters isa Vector "filters must be a list in YAML"
 
