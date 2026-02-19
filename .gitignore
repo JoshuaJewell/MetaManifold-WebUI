@@ -243,17 +243,20 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
-### R.Bookdown Stack ###
+### R.Bookdown Stack
 # R package: bookdown caching files
 /*_files/
 
-### Other ###
+# vscode
+.vscode
+
+### Other
 # Things with ambiguous intellectual property
 internal
 data/fastq/
 cutadapt/output_*
 
-### Lock files ###
+### Lock files
 .~lock.*
 .csv#
 
@@ -261,7 +264,7 @@ cutadapt/output_*
 bin/
 config/tools.yml
 
-### Bits I don't want to share yet ###
+### Bits I don't want to share yet
 hide.*
 output/
 pipelinesteps.txt
