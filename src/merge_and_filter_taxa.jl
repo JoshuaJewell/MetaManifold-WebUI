@@ -195,6 +195,12 @@ export merge_taxonomy_counts, filter_table
                 ismissing(d) ? s : (haskey(mapping, string(d)) ? mapping[string(d)] : s)
                 for (d, s) in zip(df.Division, df.Supergroup)
             ]
+        elseif !isempty(mapping)
+            missing_cols = filter(c -> c ∉ names(df), ["Division", "Supergroup"])
+            @warn "Supergroup remapping skipped: column(s) not present in data: " *
+                  "$(join(missing_cols, ", ")). The mappings block in your filter config " *
+                  "may be tuned for a different reference database (e.g. PR2). " *
+                  "Available columns: $(join(names(df), ", "))"
         end
 
         # Load remove_empty_domain flag
@@ -204,12 +210,16 @@ export merge_taxonomy_counts, filter_table
         end
 
         # Optionally remove blank/unassigned Domain entries
-        if remove_empty && ("Domain" in names(df))
+        if remove_empty && "Domain" in names(df)
             df = filter(row ->
                 !ismissing(row.Domain) &&
                 !isempty(strip(string(row.Domain))) &&
                 lowercase(strip(string(row.Domain))) != "blank",
                 df)
+        elseif remove_empty
+            @warn "remove_empty_domain skipped: 'Domain' column not present in data. " *
+                  "This setting may be tuned for a different reference database (e.g. PR2). " *
+                  "Available columns: $(join(names(df), ", "))"
         end
 
         # Load and apply filters
@@ -224,7 +234,9 @@ export merge_taxonomy_counts, filter_table
             @assert typeof(pattern) <: AbstractString "filter pattern must be a string"
 
             if !(colname in names(df))
-                @warn "Skipping filter: column '$colname' not found in data."
+                @warn "Skipping filter: column '$colname' not present in data. " *
+                      "This filter may be tuned for a different reference database (e.g. PR2). " *
+                      "Available columns: $(join(names(df), ", "))"
                 continue
             end
 

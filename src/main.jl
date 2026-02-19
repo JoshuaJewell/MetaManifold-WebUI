@@ -1,9 +1,38 @@
+#!/usr/bin/env julia
+
 include("run_cutadapt.jl")
 include("run_dada2.jl")
 include("merge_and_filter_taxa.jl")
 
 using CSV
+using YAML
 using .Cutadapt, .TaxonomyTableTools, .DADA2
+
+## Tools loading (to move to new module at some point)
+"""
+    load_tools(config_path) -> Dict{String,String}
+
+Read config/tools.yml and return a Dict of tool name => resolved path.
+If the file does not exist, returns an empty Dict so tools fall back to PATH.
+Paths with `@` are SSH remote paths (user@host:/path), the calling module is
+responsible for routing those calls via SSH.
+"""
+function load_tools(config_path = joinpath(@__DIR__, "..", "config", "tools.yml"))
+    isfile(config_path) || return Dict{String,String}()
+    data = YAML.load_file(config_path)
+    tools = Dict{String,String}()
+    for (name, info) in data
+        path = info isa Dict ? get(info, "path", nothing) : nothing
+        path !== nothing && (tools[name] = string(path))
+    end
+    tools
+end
+
+# Return the configured binary path for `tool_key`, or `default` if not set.
+tool_bin(tools, tool_key, default = tool_key) = get(tools, tool_key, default)
+
+# Load resolved tool paths from config/tools.yml (empty Dict if not present)
+tools = load_tools()
 
 ## Instantiate filesystem
 # Root directories
@@ -40,7 +69,8 @@ filtered_outfile_vespa = joinpath(output_dir, "protist_filtered_vespa.csv")
 
 ## Main
 
-#cutadapt(primer_pairs, primers_config, fastq_input_dir, cutadapt_dir, optional_args = optional_args)
+#cutadapt(primer_pairs, primers_config, fastq_input_dir, cutadapt_dir,
+#    optional_args = optional_args, cutadapt_bin = tool_bin(tools, "cutadapt"))
 
 #dada2(dada2_config_dir)
 

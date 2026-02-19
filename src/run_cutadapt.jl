@@ -58,7 +58,7 @@ export cutadapt
         return chop(args)
     end
 
-    function run_cutadapt(primer_args, optional_args, fastq_in_dir, cutadapt_dir)
+    function run_cutadapt(primer_args, optional_args, fastq_in_dir, cutadapt_dir, cutadapt_bin)
         samples = []
 
         # Messy filesystem stuff
@@ -88,7 +88,7 @@ export cutadapt
             outputR2 = fastq_out_dir * sample * "_R2_trimmed.fastq.gz"
 
             @info("On sample $i/$nsamples ($sample).")
-            cutadapt_cmd = "cutadapt $primer_args $optional_args -o $outputR1 -p $outputR2 $inputR1 $inputR2"
+            cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR1 -p $outputR2 $inputR1 $inputR2"
 
             open(stats_path, "a") do io
                 run(pipeline(`bash -lc $cutadapt_cmd`; stdout=io, stderr=io))
@@ -143,20 +143,23 @@ export cutadapt
 
     ## Keyword Arguments
     - `optional_args` (optional, default: "-m 200 --discard-untrimmed"): Specify additional arguments passed to `cutadapt` command.
+    - `cutadapt_bin` (optional, default: "cutadapt"): Path to the cutadapt binary. Defaults to PATH lookup. Set via `config/tools.yml` and `load_tools()` in main.jl.
 
     """
     function cutadapt(
         primer_pairs,
-        primers_path, 
-        fastq_in_dir, 
-        cutadapt_dir; 
-        optional_args = "-m 200 --discard-untrimmed"
+        primers_path,
+        fastq_in_dir,
+        cutadapt_dir;
+        optional_args = "-m 200 --discard-untrimmed",
+        cutadapt_bin  = "cutadapt"
     )
         run_cutadapt(
             get_primer_args(primer_pairs, primers_path),
             optional_args,
             fastq_in_dir,
-            cutadapt_dir
+            cutadapt_dir,
+            cutadapt_bin
         )
     end
 end

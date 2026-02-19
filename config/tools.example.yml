@@ -1,0 +1,28 @@
+# Template for tool path configuration. Copy to config/tools.yml and edit as
+# needed, or run install.sh to generate it automatically.
+#
+# Path options:
+#   null              - use the managed install in bin/  (download by install.sh)
+#   "/path/to/tool"   - absolute local path
+#   "tool"            - bare name; looked up in PATH at runtime
+#   "user@host:/path" - remote SSH path; the pipeline wraps the call with ssh
+#
+# Note: config/tools.yml is gitignored (machine-specific). Commit
+#       config/tools.example.yml instead.
+
+cutadapt:
+  path: null
+
+fastqc:
+  path: null
+
+multiqc:
+  path: null
+
+vsearch:
+  path: null
+  # Remote example (vsearch on a compute server):
+  # path: "user@bioserver:/home/user/software/vsearch"
+
+cd_hit_est:
+  path: null

@@ -1,5 +1,5 @@
 workspace:
-  root: "/path/to/project"
+  root: "./output/dada2/"
   input_dir: "/path/to/fastqs"
 
 file_patterns:

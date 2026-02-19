@@ -257,6 +257,10 @@ cutadapt/output_*
 .~lock.*
 .csv#
 
+### Downloaded binaries and tool paths
+bin/
+config/tools.yml
+
 ### Bits I don't want to share yet ###
 hide.*
 output/
