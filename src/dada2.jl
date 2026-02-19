@@ -30,6 +30,7 @@ module DADA2
 export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
        chimera_removal, assign_taxonomy
 
+    import Downloads
     using Logging, RCall, YAML
 
     # Helpers
@@ -110,11 +111,10 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     # Workspace
     function setup_workspace(root)
         dirs = Dict(
-            "Tables"   => joinpath(root, "Tables"),
-            "Analysis" => joinpath(root, "Analysis"),
-            "Taxonomy" => joinpath(root, "Taxonomy"),
-            "Figures"  => joinpath(root, "Figures"),
-            "Filtered" => joinpath(root, "Filtered"),
+            "Tables"      => joinpath(root, "Tables"),
+            "Checkpoints" => joinpath(root, "Checkpoints"),
+            "Figures"     => joinpath(root, "Figures"),
+            "Filtered"    => joinpath(root, "Filtered"),
         )
         for d in values(dirs)
             mkpath(d)
@@ -178,10 +178,10 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
         out_rev_arg = mode == "paired"  ? rev_out   : nothing
 
         ckpts = Dict(
-            "filter"  => joinpath(dirs["Analysis"], "ckpt_filter.RData"),
-            "errors"  => joinpath(dirs["Analysis"], "ckpt_errors.RData"),
-            "denoise" => joinpath(dirs["Analysis"], "ckpt_denoise.RData"),
-            "chimera" => joinpath(dirs["Analysis"], "ckpt_chimera.RData"),
+            "filter"  => joinpath(dirs["Checkpoints"], "ckpt_filter.RData"),
+            "errors"  => joinpath(dirs["Checkpoints"], "ckpt_errors.RData"),
+            "denoise" => joinpath(dirs["Checkpoints"], "ckpt_denoise.RData"),
+            "chimera" => joinpath(dirs["Checkpoints"], "ckpt_chimera.RData"),
         )
 
         (; cfg, verbose, mode, dirs, sample_names, single_sample,
@@ -409,8 +409,8 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     Review `Tables/pipeline_stats.csv` for unexpected read loss at any stage
     before committing to the (potentially long) `assign_taxonomy()` step.
 
-    Requires: `Analysis/ckpt_filter.RData`, `Analysis/ckpt_denoise.RData`
-    Saves: `Analysis/ckpt_chimera.RData`
+    Requires: `Checkpoints/ckpt_filter.RData`, `Checkpoints/ckpt_denoise.RData`
+    Saves: `Checkpoints/ckpt_chimera.RData`
     """
     function chimera_removal(config_path::String; progress=nothing)
         emit    = _emitter(progress)
@@ -493,8 +493,8 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     This is typically the longest step. Set `taxonomy.skip = true` in config to
     skip assignment and output sequence/count data only.
 
-    Requires: `Analysis/ckpt_chimera.RData`
-    Saves: `Analysis/checkpoint.RData` (full R environment snapshot)
+    Requires: `Checkpoints/ckpt_chimera.RData`
+    Saves: `Checkpoints/checkpoint.RData` (full R environment snapshot)
     """
     function assign_taxonomy(config_path::String; progress=nothing)
         emit    = _emitter(progress)
@@ -519,14 +519,32 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
         if !get(ctx.cfg["taxonomy"], "skip", false)
             emit("Assigning taxonomy")
             tax_uri     = ctx.cfg["taxonomy"]["uri"]
-            tax_dir     = ctx.dirs["Taxonomy"]
             multithread = get(ctx.cfg["taxonomy"], "multithread", true)
             min_boot    = get(ctx.cfg["taxonomy"], "min_boot", 0)
             tax_levels  = ctx.cfg["taxonomy"]["levels"]
+
+            db_path = if isfile(tax_uri)
+                # taxonomy.uri is a local path — use it directly
+                emit("Using local taxonomy database: $tax_uri")
+                tax_uri
+            else
+                # taxonomy.uri is a URL — download to shared project databases dir
+                db_dir = abspath(get(ctx.cfg, "databases_dir", "./databases"))
+                mkpath(db_dir)
+                cached = joinpath(db_dir, basename(tax_uri))
+                if !isfile(cached)
+                    emit("Downloading taxonomy database: $tax_uri")
+                    Downloads.download(tax_uri, cached)
+                    emit("Written: $cached")
+                else
+                    emit("Using cached taxonomy database: $cached")
+                end
+                cached
+            end
+
             R"""
-            db_path     <- fetch_taxonomy_db($tax_uri, $tax_dir)
             taxa_result <- run_assign_taxonomy(
-                seq_table_nochim, db_path,
+                seq_table_nochim, $db_path,
                 list(multithread=$multithread, min_boot=$min_boot, levels=$tax_levels),
                 $verbose)
             taxa_df <- write_taxa_table(taxa_result$tax, taxa_result$boot, index,
@@ -537,7 +555,7 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
             emit("Skipping taxonomy (taxonomy.skip = true)")
         end
 
-        checkpoint = joinpath(ctx.dirs["Analysis"], "checkpoint.RData")
+        checkpoint = joinpath(ctx.dirs["Checkpoints"], "checkpoint.RData")
         R"save.image($checkpoint)"
         emit("Checkpoint: $checkpoint")
 
@@ -575,7 +593,7 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     - `tax_counts.xlsx`         — combined taxonomy + per-sample counts
     - `pipeline_stats.csv`      — read counts at each pipeline stage
 
-    Written to `workspace.root/Analysis/`:
+    Written to `workspace.root/Checkpoints/`:
     - `ckpt_filter.RData`   — filter_stats
     - `ckpt_errors.RData`   — fwd_errors, rev_errors
     - `ckpt_denoise.RData`  — dada objects, merged, unfiltered seq_table
@@ -583,11 +601,11 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     - `checkpoint.RData`    — full R environment snapshot
     """
     function dada2(config_path::String; progress=nothing)
-        prefilter_qc(config_path;    progress)
-        filter_trim(config_path;     progress)
-        learn_errors(config_path;    progress)
-        denoise(config_path;         progress)
-        chimera_removal(config_path; progress)
+        #prefilter_qc(config_path;    progress)
+        #filter_trim(config_path;     progress);     R"gc()"
+        #learn_errors(config_path;    progress);     R"gc()"
+        #denoise(config_path;         progress);     R"gc()"
+        #chimera_removal(config_path; progress);     R"gc()"
         assign_taxonomy(config_path; progress)
     end
 

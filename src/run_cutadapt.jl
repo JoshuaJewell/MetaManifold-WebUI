@@ -112,7 +112,7 @@ export cutadapt
     """
         function cutadapt(primer_pairs, primers_path, fastq_in_dir, fastq_out_dir, optional_args)
     
-    Requires `cutadapt` installed and in PATH. Runs `cutadapt` command with as many primer pairs as necessary (useful for multiplex) and any optional parameters. Primer aguments are determined from YAML file in format:
+    Requires `cutadapt` installed. Runs `cutadapt` command with as many primer pairs as necessary (useful for multiplex) and any optional parameters. Primer aguments are determined from YAML file in format:
     ``` YAML
         Forward:
             PrimerF: "CCAGCASCYGCGGTAATTCC"

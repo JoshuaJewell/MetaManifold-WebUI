@@ -260,8 +260,9 @@ cutadapt/output_*
 .~lock.*
 .csv#
 
-### Downloaded binaries and tool paths
+### Tool paths, downloaded binaries and databases
 bin/
+databases/
 config/tools.yml
 
 ### Bits I don't want to share yet

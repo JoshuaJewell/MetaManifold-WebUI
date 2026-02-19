@@ -29,10 +29,10 @@ library(tidyverse)
 plot_quality_profiles <- function(fwd_files, rev_files, output_pdf) {
   pdf(output_pdf, width = 8, height = 6)
   if (!is.null(fwd_files) && length(fwd_files) > 0) {
-    plotQualityProfile(fwd_files[seq_len(min(3L, length(fwd_files)))])
+    print(plotQualityProfile(fwd_files[seq_len(min(3L, length(fwd_files)))]))
   }
   if (!is.null(rev_files) && length(rev_files) > 0) {
-    plotQualityProfile(rev_files[seq_len(min(3L, length(rev_files)))])
+    print(plotQualityProfile(rev_files[seq_len(min(3L, length(rev_files)))]))
   }
   dev.off()
   invisible(NULL)
@@ -43,8 +43,8 @@ plot_quality_profiles <- function(fwd_files, rev_files, output_pdf) {
 # the error model did not converge. If so, try increasing nbases or max_consist.
 plot_error_rates <- function(fwd_errors, rev_errors, output_pdf) {
   pdf(output_pdf, width = 8, height = 6)
-  if (!is.null(fwd_errors)) plotErrors(fwd_errors, nominalQ = TRUE)
-  if (!is.null(rev_errors)) plotErrors(rev_errors, nominalQ = TRUE)
+  if (!is.null(fwd_errors)) print(plotErrors(fwd_errors, nominalQ = TRUE))
+  if (!is.null(rev_errors)) print(plotErrors(rev_errors, nominalQ = TRUE))
   dev.off()
   invisible(NULL)
 }

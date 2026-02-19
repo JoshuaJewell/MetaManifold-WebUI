@@ -43,6 +43,7 @@ output_dir = "./output"
 # Cutadapt paths
 fastq_input_dir = joinpath(data_dir, "fastq")
 cutadapt_dir = joinpath(output_dir, "cutadapt")
+vsearch_dir = joinpath(output_dir, "vsearch")
 primers_config = joinpath(config_dir, "primers.yml")
 
 ## Instantiate parameters
@@ -72,7 +73,7 @@ filtered_outfile_vespa = joinpath(output_dir, "protist_filtered_vespa.csv")
 #cutadapt(primer_pairs, primers_config, fastq_input_dir, cutadapt_dir,
 #    optional_args = optional_args, cutadapt_bin = tool_bin(tools, "cutadapt"))
 
-#dada2(dada2_config_dir)
+dada2(dada2_config_dir)
 
 #CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid))
 #CSV.write(merged_outfile_vespa, merge_taxonomy_counts(vespav, vespad))
