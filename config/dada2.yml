@@ -40,7 +40,7 @@ taxonomy:
   skip: false                 # true to skip taxonomy and use alternative output mode
   uri: "https://github.com/pr2database/pr2database/releases/download/v5.0.0/pr2_version_5.0.0_SSU_dada2.fasta.gz"
   # uri: "/path/to/local/database.fasta.gz"  # use a local file instead of downloading
-  multithread: 48
+  multithread: 8               # higher values increase memory use significantly (mclapply forks one process per thread)
   min_boot: 0
   levels:
     - "Domain"

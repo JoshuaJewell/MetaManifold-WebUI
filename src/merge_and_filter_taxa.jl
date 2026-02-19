@@ -35,24 +35,28 @@ export merge_taxonomy_counts, filter_table
                 "Domain","Supergroup","Division","Subdivision","Class","Order",
                 "Family","Genus","Species"]
         out_rows = Vector{Vector{String}}(undef, nrow(df))
-        
+
         for (i, r) in enumerate(eachrow(df))
-            parts = split(r.sseqtax, '|')
-            # Always create full row with proper positioning
-            data = Vector{String}(undef, length(header))
+            data = fill("", length(header))
             data[1] = string(r.SeqName)
             data[2] = string(r.Pident)
-            
-            # Fill taxonomy fields (positions 3 to end)
-            for j in 1:min(length(parts), length(header)-2)
-                data[j+2] = parts[j]
+
+            tax_str = r.sseqtax
+            if occursin('|', tax_str)
+                # Full PR2 format: Accession|rRNA|Organellum|specimen|Domain|...|Species
+                parts = split(tax_str, '|')
+                for j in 1:min(length(parts), length(header) - 2)
+                    data[j + 2] = parts[j]
+                end
+            else
+                # Taxonomy-only format: Domain;Supergroup;...;Species[;]
+                # No accession/rRNA/Organellum/specimen — those stay as empty strings
+                parts = filter(!isempty, split(tax_str, ';'))
+                for j in 1:min(length(parts), length(header) - 6)
+                    data[j + 6] = parts[j]
+                end
             end
-            
-            # Fill remaining fields with empty strings
-            for j in (length(parts)+3):length(header)
-                data[j] = ""
-            end
-            
+
             out_rows[i] = data
         end
         return header, out_rows
@@ -141,6 +145,16 @@ export merge_taxonomy_counts, filter_table
                 end
             end
             rename!(df_counts_prepared, seq_id_col => "SeqName")
+        end
+
+        # Rename any columns in the DADA2 file that clash with vsearch taxonomy
+        # columns (e.g. Domain, Supergroup, … when counts_csv_path is taxonomy.csv)
+        overlap = filter(!=(Symbol("SeqName")),
+                         intersect(Symbol.(names(df_taxonomy)),
+                                   Symbol.(names(df_counts_prepared))))
+        if !isempty(overlap)
+            rename!(df_counts_prepared,
+                    [String(c) => String(c) * "_dada2" for c in overlap])
         end
 
         # Left join instead of outerjoin to keep all taxonomy rows

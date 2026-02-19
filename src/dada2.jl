@@ -503,6 +503,19 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
 
         isfile(ctx.ckpts["chimera"]) ||
             error("Chimera checkpoint not found. Run chimera_removal() first.")
+
+        # Drop all data objects accumulated from prior stages before the
+        # memory-intensive taxonomy subprocess runs. Named globals in R's
+        # environment are reachable and gc() won't collect them; rm() them
+        # explicitly so they don't inflate the subprocess's memory footprint.
+        # lsf.str() returns function names; setdiff keeps those intact.
+        R"""
+        .data_objs <- setdiff(ls(), lsf.str())
+        if (length(.data_objs) > 0L) rm(list = .data_objs)
+        rm(.data_objs)
+        gc()
+        """
+
         chimera_ckpt = ctx.ckpts["chimera"]
         R"load($chimera_ckpt)"
 
@@ -519,7 +532,7 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
         if !get(ctx.cfg["taxonomy"], "skip", false)
             emit("Assigning taxonomy")
             tax_uri     = ctx.cfg["taxonomy"]["uri"]
-            multithread = get(ctx.cfg["taxonomy"], "multithread", true)
+            multithread = get(ctx.cfg["taxonomy"], "multithread", 4)
             min_boot    = get(ctx.cfg["taxonomy"], "min_boot", 0)
             tax_levels  = ctx.cfg["taxonomy"]["levels"]
 
@@ -550,13 +563,14 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
             taxa_df <- write_taxa_table(taxa_result$tax, taxa_result$boot, index,
                                         $tables_dir, $taxa_prefix, $boot_mode)
             """
+            R"gc()"
             comb_mode == "regular" && R"combined_input <- taxa_df"
         else
             emit("Skipping taxonomy (taxonomy.skip = true)")
         end
 
         checkpoint = joinpath(ctx.dirs["Checkpoints"], "checkpoint.RData")
-        R"save.image($checkpoint)"
+        R"save(seq_table_nochim, index, combined_input, file=$checkpoint)"
         emit("Checkpoint: $checkpoint")
 
         R"write_combined_table(combined_input, seq_table_nochim, $tables_dir, $combined_file)"
@@ -601,11 +615,11 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     - `checkpoint.RData`    — full R environment snapshot
     """
     function dada2(config_path::String; progress=nothing)
-        #prefilter_qc(config_path;    progress)
-        #filter_trim(config_path;     progress);     R"gc()"
-        #learn_errors(config_path;    progress);     R"gc()"
-        #denoise(config_path;         progress);     R"gc()"
-        #chimera_removal(config_path; progress);     R"gc()"
+        prefilter_qc(config_path;    progress)
+        filter_trim(config_path;     progress);     R"gc()"
+        learn_errors(config_path;    progress);     R"gc()"
+        denoise(config_path;         progress);     R"gc()"
+        chimera_removal(config_path; progress);     R"gc()"
         assign_taxonomy(config_path; progress)
     end
 

@@ -63,8 +63,8 @@ export cutadapt
 
         # Messy filesystem stuff
         time = chop("$(now(localzone()))", tail = 13)
-        fastq_out_dir = cutadapt_dir * "$time/"
-        log_dir = fastq_out_dir * "/logs/"
+        fastq_out_dir = joinpath(cutadapt_dir, time)
+        log_dir = joinpath(fastq_out_dir, "logs")
         stats_path = joinpath(log_dir, "cutadapt_primer_trimming_stats.txt")
         summary_path = joinpath(log_dir, "cutadapt_trimmed_percentage.txt")
         stats_basename = basename(stats_path)
@@ -81,11 +81,11 @@ export cutadapt
 
         nsamples = length(samples)
         for (i, sample) in enumerate(samples)
-            inputR1 = fastq_in_dir * sample * "_*_L001_R1_001.fastq.gz"
-            inputR2 = fastq_in_dir * sample * "_*_L001_R2_001.fastq.gz"
+            inputR1 = joinpath(fastq_in_dir, sample * "_*_L001_R1_001.fastq.gz")
+            inputR2 = joinpath(fastq_in_dir, sample * "_*_L001_R2_001.fastq.gz")
 
-            outputR1 = fastq_out_dir * sample * "_R1_trimmed.fastq.gz"
-            outputR2 = fastq_out_dir * sample * "_R2_trimmed.fastq.gz"
+            outputR1 = joinpath(fastq_out_dir, sample * "_R1_trimmed.fastq.gz")
+            outputR2 = joinpath(fastq_out_dir, sample * "_R2_trimmed.fastq.gz")
 
             @info("On sample $i/$nsamples ($sample).")
             cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR1 -p $outputR2 $inputR1 $inputR2"

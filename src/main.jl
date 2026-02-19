@@ -3,10 +3,11 @@
 include("run_cutadapt.jl")
 include("dada2.jl")
 include("merge_and_filter_taxa.jl")
+include("run_vsearch.jl")
 
 using CSV
 using YAML
-using .Cutadapt, .TaxonomyTableTools, .DADA2
+using .Cutadapt, .TaxonomyTableTools, .DADA2, .VSEARCH
 
 ## Tools loading (to move to new module at some point)
 """
@@ -43,40 +44,42 @@ output_dir = "./output"
 # Cutadapt paths
 fastq_input_dir = joinpath(data_dir, "fastq")
 cutadapt_dir = joinpath(output_dir, "cutadapt")
-vsearch_dir = joinpath(output_dir, "vsearch")
 primers_config = joinpath(config_dir, "primers.yml")
+
+# DADA2/VSEARCH paths
+fasta_outfile = joinpath(output_dir, "dada2/Tables/asvs.fasta")
+reference_database = "./databases/pr2_version_5.0.0_SSU_dada2.fasta.gz"
+vsearch_dir = joinpath(output_dir, "vsearch")
 
 ## Instantiate parameters
 # Cutadapt parameters
 primer_pairs = ["TarEuk", "Meta2"]
-optional_args = "-m 200 --discard-untrimmed"
+cutadapt_optional_args = "-m 200 --discard-untrimmed"
 
 # DADA2 parameters
 dada2_config_dir = joinpath(config_dir, "dada2.yml")
 
+# VSEARCH parameters
+vsearch_optional_args = "--id 0.75 --query_cov 0.8"
+
 # Merge and filter (DADA2-VSEARCH) parameters
-multiv = joinpath(output_dir, "vsearch/taxonomy_multi_pool.tsv")
-vespav = joinpath(output_dir, "vsearch/taxonomy_vespa_pool_fwdonly.tsv")
-multid = joinpath(output_dir, "dada2/tax_counts_fasta_multi_pool.csv")
-vespad = joinpath(output_dir, "dada2/tax_counts_fasta_vespa_pool_fwdonly.csv")
+multiv = joinpath(output_dir, "vsearch/taxonomy.tsv")
+multid = joinpath(output_dir, "dada2/Tables/taxonomy.csv")
 
 protist_filter = joinpath(config_dir, "protist_filter.yml")
 
-merged_outfile_multi = joinpath(output_dir, "merged_multi.csv")
-merged_outfile_vespa = joinpath(output_dir, "merged_vespa.csv")
-
-filtered_outfile_multi = joinpath(output_dir, "protist_filtered_multi.csv")
-filtered_outfile_vespa = joinpath(output_dir, "protist_filtered_vespa.csv")
+merged_outfile_multi = joinpath(output_dir, "merged/merged_multi.csv")
+filtered_outfile_multi = joinpath(output_dir, "merged/protist_filtered_multi.csv")
 
 ## Main
 
-#cutadapt(primer_pairs, primers_config, fastq_input_dir, cutadapt_dir,
-#    optional_args = optional_args, cutadapt_bin = tool_bin(tools, "cutadapt"))
+cutadapt(primer_pairs, primers_config, fastq_input_dir, cutadapt_dir, optional_args = cutadapt_optional_args, cutadapt_bin = tool_bin(tools, "cutadapt"))
 
 dada2(dada2_config_dir)
 
-#CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid))
-#CSV.write(merged_outfile_vespa, merge_taxonomy_counts(vespav, vespad))
+vsearch(fasta_outfile, reference_database, vsearch_dir, optional_args = vsearch_optional_args, vsearch_bin = tool_bin(tools, "vsearch"))
 
-#CSV.write(filtered_outfile_multi, filter_table(merge_taxonomy_counts(vespav, vespad), protist_filter))
-#CSV.write(filtered_outfile_vespa, filter_table(merge_taxonomy_counts(vespav, vespad), protist_filter))
+mkpath(dirname(merged_outfile_multi))
+
+CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid))
+CSV.write(filtered_outfile_multi, filter_table(merge_taxonomy_counts(multiv, multid), protist_filter))
