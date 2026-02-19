@@ -1,4 +1,6 @@
-module DADA2
+module OldDADA2
+
+# This is now obsolete, I guess...how sad, it was quite cute.
 
 export dada2
 

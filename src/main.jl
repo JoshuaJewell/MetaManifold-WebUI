@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 
 include("run_cutadapt.jl")
-include("run_dada2.jl")
+include("dada2.jl")
 include("merge_and_filter_taxa.jl")
 
 using CSV
