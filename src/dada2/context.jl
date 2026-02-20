@@ -34,39 +34,19 @@
     end
 
     # Resolve the DADA2 taxonomy database from config when no external path is
-    # provided. Supports the databases:/taxonomy.database: scheme (preferred)
-    # and the legacy taxonomy.uri: key for backwards compatibility.
+    # provided. Reads taxonomy.database key and looks it up in the databases: section.
     function _resolve_taxonomy_db(cfg, emit)
         tax_cfg = cfg["taxonomy"]
-        if haskey(tax_cfg, "database")
-            db_key  = string(tax_cfg["database"])
-            db_cfg  = get(cfg, "databases", Dict())
-            haskey(db_cfg, db_key) ||
-                error("taxonomy.database = \"$db_key\" not found in databases: section")
-            fmt_cfg = get(db_cfg[db_key], "dada2", nothing)
-            isnothing(fmt_cfg) &&
-                error("databases.$db_key.dada2 is not configured")
-            db_dir = abspath(get(db_cfg, "dir", "./databases"))
-            mkpath(db_dir)
-            return _download_db_if_needed("$(db_key)_dada2", fmt_cfg, db_dir, emit)
-        end
-        # Legacy: taxonomy.uri
-        tax_uri = tax_cfg["uri"]
-        if isfile(tax_uri)
-            emit("Using local taxonomy database: $tax_uri")
-            return tax_uri
-        end
-        db_dir = abspath(get(cfg, "databases_dir", "./databases"))
+        db_key  = string(tax_cfg["database"])
+        db_cfg  = get(cfg, "databases", Dict())
+        haskey(db_cfg, db_key) ||
+            error("taxonomy.database = \"$db_key\" not found in databases: section")
+        fmt_cfg = get(db_cfg[db_key], "dada2", nothing)
+        isnothing(fmt_cfg) &&
+            error("databases.$db_key.dada2 is not configured")
+        db_dir = abspath(get(db_cfg, "dir", "./databases"))
         mkpath(db_dir)
-        cached = joinpath(db_dir, basename(tax_uri))
-        if !isfile(cached)
-            emit("Downloading taxonomy database: $tax_uri")
-            Downloads.download(tax_uri, cached)
-            emit("Written: $cached")
-        else
-            emit("Using cached taxonomy database: $cached")
-        end
-        return cached
+        return _download_db_if_needed("$(db_key)_dada2", fmt_cfg, db_dir, emit)
     end
 
     # Config
@@ -87,21 +67,8 @@
         mode in ("paired", "forward", "reverse") ||
             error("file_patterns.mode must be one of: paired, forward, reverse")
 
-        boot_mode = get(cfg["output"], "bootstraps", "combined")
-        boot_mode in ("none", "combined", "separate") ||
-            error("output.bootstraps must be one of: none, combined, separate")
-
-        if !get(cfg["taxonomy"], "skip", false)
-            has_uri = haskey(cfg["taxonomy"], "uri")
-            has_db  = haskey(cfg["taxonomy"], "database")
-            has_uri || has_db ||
-                error("taxonomy: configure `database` (referencing a databases: entry) " *
-                      "or `uri` when skip is not true")
-        end
-
-        combined_mode = get(cfg["output"], "combined_mode", "regular")
-        combined_mode in ("regular", "alternative") ||
-            error("output.combined_mode must be one of: regular, alternative")
+        haskey(cfg["taxonomy"], "database") ||
+            error("taxonomy.database is required")
     end
 
     # File discovery

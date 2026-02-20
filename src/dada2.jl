@@ -15,7 +15,7 @@ module DADA2
 #
 # Notice:
 #
-# (c) 2026 Joshua Benjamin Jewell. All rights reserved.
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 #
@@ -51,11 +51,14 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
 
     ## Outputs
     Written to `workspace.root/Tables/`:
-    - `seqtab_nochim.csv`       - chimera-free ASV count table
-    - `asvs.fasta` / `asvs.csv` - ASV sequences with short identifiers
-    - `taxonomy.csv`            - taxonomy assignments (with optional bootstraps)
-    - `tax_counts.xlsx`         - combined taxonomy + per-sample counts
-    - `pipeline_stats.csv`      - read counts at each pipeline stage
+    - `seqtab_nochim.csv`              - chimera-free ASV count table
+    - `asvs.fasta` / `asvs.csv`       - ASV sequences with short identifiers
+    - `taxonomy.csv`                   - taxonomy assignments
+    - `taxonomy_bootstraps.csv`        - bootstrap confidence values
+    - `taxonomy_combined.csv`          - taxonomy + bootstraps combined
+    - `tax_counts.csv`                 - taxonomy + per-sample counts
+    - `asv_counts.csv`                 - ASV sequences + per-sample counts (no taxonomy)
+    - `pipeline_stats.csv`             - read counts at each pipeline stage
 
     Written to `workspace.root/Checkpoints/`:
     - `ckpt_filter.RData`  - filter_stats
@@ -66,12 +69,12 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     - `checkpoint.RData`   - final R environment snapshot
     """
     function dada2(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing)
-        prefilter_qc(config_path; progress, input_dir, workspace_root)
-        filter_trim(config_path; progress, input_dir, workspace_root); R"gc()"
-        learn_errors(config_path; progress, input_dir, workspace_root); R"gc()"
-        denoise(config_path; progress, input_dir, workspace_root); R"gc()"
-        filter_length(config_path; progress, input_dir, workspace_root); R"gc()"
-        chimera_removal(config_path; progress, input_dir, workspace_root); R"gc()"
+        #prefilter_qc(config_path; progress, input_dir, workspace_root)
+        #filter_trim(config_path; progress, input_dir, workspace_root); R"gc()"
+        #learn_errors(config_path; progress, input_dir, workspace_root); R"gc()"
+        #denoise(config_path; progress, input_dir, workspace_root); R"gc()"
+        #filter_length(config_path; progress, input_dir, workspace_root); R"gc()"
+        #chimera_removal(config_path; progress, input_dir, workspace_root); R"gc()"
         assign_taxonomy(config_path; progress, input_dir, workspace_root, taxonomy_db)
     end
 

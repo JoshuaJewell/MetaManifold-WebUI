@@ -202,47 +202,37 @@ write_fasta <- function(seq_table, tables_dir, prefix) {
 }
 
 # Writes taxonomy assignments to CSV. Bootstrap confidence values (0-100 per
-# taxonomic rank) are handled based on bootstrap_mode:
-#   none     - taxonomy columns only
-#   combined - taxonomy and bootstrap columns in one file (suffix: _boot)
-#   separate - taxonomy and bootstraps written to two separate files
+# taxonomic rank)
 # Returns taxa_df (SeqName + Sequence + taxonomy), used by write_combined_table().
-write_taxa_table <- function(tax_matrix, boot_matrix, index, tables_dir,
-                             prefix, bootstrap_mode) {
+write_taxa_table <- function(tax_matrix, boot_matrix, index, tables_dir, prefix) {
   taxa_df <- as.data.frame(tax_matrix, stringsAsFactors = FALSE)
   taxa_df$Sequence <- rownames(taxa_df)
   taxa_df <- dplyr::left_join(index, taxa_df, by = "Sequence")
 
-  if (bootstrap_mode == "combined") {
-    boot_df <- as.data.frame(boot_matrix, stringsAsFactors = FALSE)
-    colnames(boot_df) <- paste0(colnames(boot_df), "_boot")
-    boot_df$Sequence <- rownames(boot_matrix)
-    combined_df <- dplyr::left_join(taxa_df, boot_df, by = "Sequence")
-    write.csv(combined_df, file.path(tables_dir, paste0(prefix, ".csv")),
-              quote = FALSE, row.names = FALSE)
-  } else {
-    write.csv(taxa_df, file.path(tables_dir, paste0(prefix, ".csv")),
-              quote = FALSE, row.names = FALSE)
-    if (bootstrap_mode == "separate") {
-      boot_df <- as.data.frame(boot_matrix, stringsAsFactors = FALSE)
-      boot_df$Sequence <- rownames(boot_matrix)
-      boot_df <- dplyr::left_join(index, boot_df, by = "Sequence")
-      write.csv(boot_df,
-                file.path(tables_dir, paste0(prefix, "_bootstraps.csv")),
-                quote = FALSE, row.names = FALSE)
-    }
-  }
+  write.csv(taxa_df, file.path(tables_dir, paste0(prefix, ".csv")),
+            quote = FALSE, row.names = FALSE)
+
+  boot_df <- as.data.frame(boot_matrix, stringsAsFactors = FALSE)
+  colnames(boot_df) <- paste0(colnames(boot_df), "_boot")
+  boot_df$Sequence <- rownames(boot_matrix)
+  boot_df <- dplyr::left_join(index, boot_df, by = "Sequence")
+  write.csv(boot_df, file.path(tables_dir, paste0(prefix, "_bootstraps.csv")),
+            quote = FALSE, row.names = FALSE)
+
+  combined_df <- dplyr::left_join(taxa_df, boot_df, by = c("SeqName", "Sequence"))
+  write.csv(combined_df, file.path(tables_dir, paste0(prefix, "_combined.csv")),
+            quote = FALSE, row.names = FALSE)
 
   taxa_df
 }
 
-# Joins taxonomy (or index for alternative mode) with per-sample counts and
-# writes an Excel workbook.
-write_combined_table <- function(taxa_df, seq_table, tables_dir, filename) {
+# Joins taxonomy with per-sample counts
+write_combined_table <- function(taxa_df, index, seq_table, tables_dir, tax_filename, asv_filename) {
   seq_t <- as.data.frame(t(seq_table), stringsAsFactors = FALSE)
   seq_t <- tibble::rownames_to_column(seq_t, "Sequence")
-  combined <- dplyr::left_join(taxa_df, seq_t, by = "Sequence")
-  output_path <- file.path(tables_dir, filename)
-  write.csv(combined, output_path, quote = FALSE, row.names = FALSE)
+  write.csv(dplyr::left_join(taxa_df, seq_t, by = "Sequence"),
+            file.path(tables_dir, tax_filename), quote = FALSE, row.names = FALSE)
+  write.csv(dplyr::left_join(index, seq_t, by = "Sequence"),
+            file.path(tables_dir, asv_filename), quote = FALSE, row.names = FALSE)
   invisible(NULL)
 }

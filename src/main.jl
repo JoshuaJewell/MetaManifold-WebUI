@@ -66,7 +66,7 @@ dbs = ensure_databases(dada2_config_path)
 
 #cutadapt(primer_pairs, primers_config, fastq_input_dir, trimmed_dir, optional_args = cutadapt_optional_args)
 
-#dada2(dada2_config_path, input_dir = trimmed_dir, workspace_root = dada2_dir, taxonomy_db = dbs["pr2_dada2"])
+dada2(dada2_config_path, input_dir = trimmed_dir, workspace_root = dada2_dir, taxonomy_db = dbs["pr2_dada2"])
 
 #vsearch(fasta_outfile, dbs["pr2_vsearch"], vsearch_dir, optional_args = vsearch_optional_args)
 

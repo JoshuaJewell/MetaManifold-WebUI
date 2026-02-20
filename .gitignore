@@ -264,6 +264,7 @@ cutadapt/output_*
 bin/
 databases/
 config/tools.yml
+config/dada2.yml
 
 ### Bits I don't want to share yet
 hide.*

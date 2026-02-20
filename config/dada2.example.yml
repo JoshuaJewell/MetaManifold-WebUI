@@ -1,6 +1,6 @@
 workspace:
   root: "./output/dada2/"
-  input_dir: "./output/cutadapt/output_2026-01-31T19:51"
+  input_dir: "./output/cutadapt/"   # path to trimmed FASTQ directory
 
 file_patterns:
   forward: "_R1_trimmed.fastq.gz"
@@ -46,8 +46,17 @@ databases:
 
 taxonomy:
   database: pr2               # key into databases: section above
-  skip: false                 # true to skip taxonomy and use alternative output mode
   multithread: 4              # higher values increase memory use significantly (mclapply forks one process per thread)
+  # DISCLAIMER: Configuring a remote host causes this pipeline to connect via SSH,
+  # transfer files, execute Rscript, and delete the staging directory on the remote
+  # server. You are solely responsible for ensuring you have authorisation to use
+  # the configured host and that staging_dir is a safe path to write to and delete.
+  # The authors accept no liability for data loss or misuse arising from this feature.
+  remote:                     # omit or set host to null to run locally
+    host: ~                   # user@hostname
+    rscript: "Rscript"        # path to Rscript on the server
+    staging_dir: "/absolute/path/on/server"  # must be an explicit absolute path on the server
+    db_path: ~                # path to pre-installed database on server; null to transfer local copy
   min_boot: 0
   levels:
     - "Domain"
@@ -61,11 +70,10 @@ taxonomy:
     - "Species"
 
 output:
-  bootstraps: "combined"      # none | combined | separate
-  combined_mode: "regular"    # regular (taxonomy + counts) | alternative (SeqName + Sequence + counts, no taxonomy)
   seq_table_prefix: "seqtab_nochim"
   fasta_prefix: "asvs"
   taxa_prefix: "taxonomy"
-  combined_filename: "tax_counts.xlsx"
+  combined_filename: "tax_counts.csv"
+  asv_filename: "asv_counts.csv"
 
 verbose: true

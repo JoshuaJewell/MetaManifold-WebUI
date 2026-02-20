@@ -87,12 +87,14 @@ This allows you to referenece one or multiple primer pairs within the pipeline b
 
 ### Configuring DADA2 (`dada2.yml`)
 
-> **Performance tip:** For large datasets and reference databases, consider installing the [optimised DADA2 fork](https://github.com/JoshuaJewell/dada2) in place of the standard Bioconductor package. It provides acceleration for CPU and Nvidia CUDA GPUs for taxonomy assignment, with no changes to the API or configuration required. This fork is experimental, so if you encounter unexpected results, the standard Bioconductor release should be considered the reference implementation.
+> **Performance tip:** For large datasets and reference databases, consider installing the [optimised DADA2 fork](https://github.com/JoshuaJewell/dada2) in place of the standard Bioconductor package. It provides acceleration for CPU and Nvidia CUDA GPUs for taxonomy assignment, with no changes to the API or configuration required. This fork is experimental, so if you encounter unexpected results, the standard Bioconductor release should be considered the reference implementation. It was too experimental for me, so opted to offload assignTaxonomy() to server in dada2.yml...
+
+Copy `config/dada2.example.yml` to `config/dada2.yml` and edit it. It contains your local paths and optionally remote server credentials and should never be shared.
 
 ```yaml
 workspace:
   root: "./output/dada2/"      # output directories are created here
-  input_dir: "/path/to/fastqs" # trimmed FASTQ input (cutadapt output)
+  input_dir: "./output/cutadapt/" # trimmed FASTQ input (cutadapt output)
 
 file_patterns:
   forward: "_R1_trimmed.fastq.gz"
@@ -101,49 +103,52 @@ file_patterns:
   sample_name_index: 1         # which element is the sample name (1-based)
   mode: "paired"               # paired | forward | reverse
 
-##Filter and trim - corresponds to DADA2's `filterAndTrim()`:
-
+# Filter and trim - DADA2's filterAndTrim():
 filter_trim:
-  trunc_q: 2        # truncate reads at first base with quality less than this
-  trunc_len: [220, 220]  # truncate F and R reads to this length; single value for single-end
-  max_ee: [3, 3]    # maximum errors permitted in F and R reads
-  min_len: 175      # discard reads shorter than this after truncation
-  max_n: 0          # discard reads containing any ambiguous bases
-  match_ids: true   # require F/R read ID's to match
-  rm_phix: true     # remove PhiX spike-in reads
+  trunc_q: 2
+  trunc_len: [220, 220]        # [forward, reverse]; first value used for single-end
+  max_ee: [3, 3]               # maximum expected errors in F and R reads
+  min_len: 175
+  max_n: 0
+  match_ids: true
+  rm_phix: true
 
-##Denoising - corresponds to `learnErrors()` and `dada()`:
-
+# Denoising - learnErrors() and dada():
 dada:
-  seed: 123              # random seed for reproducibility
-  nbases: 200000000      # bases used to learn the error model
-  max_consist: 15        # error model convergence iterations
-  pool_method: "pseudo"  # none | pseudo | true
-                         # pseudo improves sensitivity for rare variants across samples
+  seed: 123
+  nbases: 200000000
+  max_consist: 15
+  pool_method: "pseudo"        # none | pseudo | true
 
-## Merging - `mergePairs()`, paired mode only:
-
+# Merging - mergePairs(), paired mode only:
 merge:
-  min_overlap: 20    # minimum overlap between F and R reads
-  max_mismatch: 0    # mismatches permitted in the overlap region
+  min_overlap: 20
+  max_mismatch: 0
   trim_overhang: true
 
-## ASV length filtering and chimera removal:
-
+# ASV length filtering and chimera removal:
 asv:
-  band_size_min: 250       # retain only ASVs within this length range (null to skip)
-  band_size_max: 256
-  denovo_method: "consensus"  # chimera removal method: consensus | pooled | per-sample
+  band_size_min: 200           # null to skip length filtering
+  band_size_max: 430
+  denovo_method: "consensus"   # consensus | pooled | per-sample
 
-## Taxonomy - `assignTaxonomy()` against a reference database:
+# Reference databases - downloaded and cached on first use:
+databases:
+  dir: "./databases"
+  pr2:
+    dada2:
+      uri: "https://..."       # DADA2-format FASTA
+      local: ~                 # set to a local path to skip download
+    vsearch:
+      uri: "https://..."       # vsearch-format FASTA
+      local: ~
 
+# Taxonomy - assignTaxonomy() against the configured database:
 taxonomy:
-  skip: false   # set true to skip taxonomy and output SeqName + Sequence + counts only
-  uri: "https://github.com/pr2database/pr2database/releases/download/v5.0.0/pr2_version_5.0.0_SSU_dada2.fasta.gz"
-                # URL or local path to a DADA2-formatted reference FASTA
-  multithread: true
-  min_boot: 0   # minimum bootstrap confidence to retain an assignment (0–100)
-  levels:       # taxonomic ranks in the reference database (must match its headers)
+  database: pr2                # key into databases: section above
+  multithread: 4               # threads for assignTaxonomy(); higher = more RAM
+  min_boot: 0                  # minimum bootstrap confidence to retain (0-100)
+  levels:
     - "Domain"
     - "Supergroup"
     - "Division"
@@ -154,16 +159,37 @@ taxonomy:
     - "Genus"
     - "Species"
 
-## Output
+  # Optional: offload the memory-intensive assignTaxonomy() step to a remote
+  # server via SSH. Omit or set host to null to run locally.
+  # DISCLAIMER: You are solely responsible for ensuring you have authorisation
+  # to use the configured host. See dada2.example.yml for the full disclaimer.
+  remote:
+    host: ~                    # user@hostname
+    rscript: "Rscript"         # path to Rscript on the server
+    staging_dir: "/absolute/path/on/server"
+    db_path: ~                 # absolute path to database on server (null = transfer local copy)
 
+# Output filenames (all written to workspace.root/Tables/):
 output:
-  bootstraps: "combined"         # none | combined (appended columns) | separate (second sheet)
-  combined_mode: "regular"       # regular: taxonomy + counts  |  alternative: SeqName + Sequence + counts
   seq_table_prefix: "seqtab_nochim"
   fasta_prefix: "asvs"
   taxa_prefix: "taxonomy"
-  combined_filename: "tax_counts.xlsx"
+  combined_filename: "tax_counts.csv"
+  asv_filename: "asv_counts.csv"
 ```
+
+**Outputs written to `workspace.root/Tables/`:**
+
+| File | Contents |
+|------|----------|
+| `seqtab_nochim.csv` | Chimera-free ASV count table (samples × ASVs) |
+| `asvs.fasta` / `asvs.csv` | ASV sequences with short identifiers (seq1, seq2, …) |
+| `taxonomy.csv` | Taxonomy assignments per ASV |
+| `taxonomy_bootstraps.csv` | Bootstrap confidence values per rank |
+| `taxonomy_combined.csv` | Taxonomy + bootstrap columns combined |
+| `tax_counts.csv` | Taxonomy + per-sample counts |
+| `asv_counts.csv` | ASV sequences + per-sample counts (no taxonomy) |
+| `pipeline_stats.csv` | Read counts retained at each pipeline stage |
 
 ### Configuring taxonomic filtering (`protist_filter.yml`)
 
@@ -244,12 +270,27 @@ SampleName_*_L001_R2_001.fastq.gz
 ### Output structure
 
 ```
-output/
-├── cutadapt/         # Trimmed FASTQ pairs and per-run logs
-├── dada2/            # ASV count table, FASTA, taxonomy CSV, pipeline stats
-└── vsearch/          # Taxonomy TSV files
-merged_multi.csv      # Merged DADA2 + vsearch results
-protist_filtered.csv  # After taxonomic filtering
+output/{project_name}/
+├── cutadapt/                    # Trimmed FASTQ pairs and logs
+├── FastQC/                      # FastQC HTML reports
+├── dada2/
+│   ├── Tables/
+│   │   ├── seqtab_nochim.csv    # ASV count table
+│   │   ├── asvs.fasta           # ASV sequences
+│   │   ├── asvs.csv             # ASV sequence index
+│   │   ├── taxonomy.csv         # Taxonomy assignments
+│   │   ├── taxonomy_bootstraps.csv
+│   │   ├── taxonomy_combined.csv
+│   │   ├── tax_counts.csv       # Taxonomy + per-sample counts
+│   │   ├── asv_counts.csv       # Sequences + per-sample counts
+│   │   └── pipeline_stats.csv
+│   ├── Figures/                 # Quality profile and error rate PDFs
+│   └── Checkpoints/             # RData checkpoints for stage resumption
+├── vsearch/
+│   └── taxonomy.tsv
+└── merged/
+    ├── merged_multi.csv         # Merged DADA2 + vsearch taxonomy + counts
+    └── protist_filtered_multi.csv
 ```
 
 ## Third-party tools
