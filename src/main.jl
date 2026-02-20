@@ -1,40 +1,13 @@
 #!/usr/bin/env julia
 
 include("databases.jl")
-include("run_cutadapt.jl")
+include("call_tools.jl")
 include("dada2.jl")
 include("merge_and_filter_taxa.jl")
-include("run_vsearch.jl")
 
 using CSV
 using YAML
-using .Databases, .Cutadapt, .TaxonomyTableTools, .DADA2, .VSEARCH
-
-## Tools loading (to move to new module at some point)
-"""
-    load_tools(config_path) -> Dict{String,String}
-
-Read config/tools.yml and return a Dict of tool name => resolved path.
-If the file does not exist, returns an empty Dict so tools fall back to PATH.
-Paths with `@` are SSH remote paths (user@host:/path), the calling module is
-responsible for routing those calls via SSH.
-"""
-function load_tools(config_path = joinpath(@__DIR__, "..", "config", "tools.yml"))
-    isfile(config_path) || return Dict{String,String}()
-    data = YAML.load_file(config_path)
-    tools = Dict{String,String}()
-    for (name, info) in data
-        path = info isa Dict ? get(info, "path", nothing) : nothing
-        path !== nothing && (tools[name] = string(path))
-    end
-    tools
-end
-
-# Return the configured binary path for `tool_key`, or `default` if not set.
-tool_bin(tools, tool_key, default = tool_key) = get(tools, tool_key, default)
-
-# Load resolved tool paths from config/tools.yml (empty Dict if not present)
-tools = load_tools()
+using .Databases, .Tools, .TaxonomyTableTools, .DADA2
 
 ## Instantiate filesystem
 # Root directories
@@ -44,11 +17,14 @@ output_dir = "./output"
 
 # Project name - all stage outputs live under output/{project_name}/
 # Re-running with the same project_name overwrites previous results.
-project_name = "project"
+project_name = "Multiplex_pool"
 project_dir  = joinpath(output_dir, project_name)
+fastq_input_dir = joinpath(data_dir, project_name)
+
+# QC paths
+fastqc_dir = joinpath(project_dir, "FastQC")
 
 # Cutadapt paths
-fastq_input_dir = joinpath(data_dir, "fastq")
 trimmed_dir = joinpath(project_dir, "cutadapt")
 primers_config = joinpath(config_dir, "primers.yml")
 
@@ -85,11 +61,13 @@ protist_filter = joinpath(config_dir, "protist_filter.yml")
 dbs = ensure_databases(dada2_config_path)
 
 ## Main
-#cutadapt(primer_pairs, primers_config, fastq_input_dir, trimmed_dir, optional_args = cutadapt_optional_args, cutadapt_bin  = tool_bin(tools, "cutadapt"))
+fastqc_all(fastq_input_dir, fastqc_dir)
+
+cutadapt(primer_pairs, primers_config, fastq_input_dir, trimmed_dir, optional_args = cutadapt_optional_args)
 
 #dada2(dada2_config_path, input_dir = trimmed_dir, workspace_root = dada2_dir, taxonomy_db = dbs["pr2_dada2"])
 
-vsearch(fasta_outfile, dbs["pr2_vsearch"], vsearch_dir, optional_args = vsearch_optional_args, vsearch_bin = tool_bin(tools, "vsearch"))
+vsearch(fasta_outfile, dbs["pr2_vsearch"], vsearch_dir, optional_args = vsearch_optional_args)
 
 CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid))
 CSV.write(filtered_outfile_multi, filter_table(merge_taxonomy_counts(multiv, multid), protist_filter))

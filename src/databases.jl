@@ -5,8 +5,8 @@ module Databases
 #
 # Usage:
 #   dbs = ensure_databases("config/dada2.yml")
-#   dbs["pr2_dada2"]   # → resolved local path for DADA2 assignTaxonomy
-#   dbs["pr2_vsearch"] # → resolved local path for VSEARCH --db
+#   dbs["pr2_dada2"]   # -> resolved local path for DADA2 assignTaxonomy
+#   dbs["pr2_vsearch"] # -> resolved local path for VSEARCH --db
 #
 # Keys follow the pattern  "<database_name>_<format>",  e.g. "pr2_dada2",
 # "pr2_vsearch".  Format names map to the sub-keys under each database entry
@@ -67,7 +67,7 @@ function _resolve_entry(key, fmt_info, db_dir)
                 @info "[$key] Using local file: $local_p"
                 return local_p
             end
-            @warn "[$key] Configured local path not found: $local_p — falling back to uri"
+            @warn "[$key] Configured local path not found: $local_p - falling back to uri"
         end
     end
 

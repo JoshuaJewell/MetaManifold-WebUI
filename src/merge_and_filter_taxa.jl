@@ -1,5 +1,9 @@
 module TaxonomyTableTools
 
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+#
+# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
 using CSV, DataFrames, Logging, YAML
 
 export merge_taxonomy_counts, filter_table
@@ -50,7 +54,7 @@ export merge_taxonomy_counts, filter_table
                 end
             else
                 # Taxonomy-only format: Domain;Supergroup;...;Species[;]
-                # No accession/rRNA/Organellum/specimen — those stay as empty strings
+                # No accession/rRNA/Organellum/specimen - those stay as empty strings
                 parts = filter(!isempty, split(tax_str, ';'))
                 for j in 1:min(length(parts), length(header) - 6)
                     data[j + 6] = parts[j]
@@ -148,7 +152,7 @@ export merge_taxonomy_counts, filter_table
         end
 
         # Rename any columns in the DADA2 file that clash with vsearch taxonomy
-        # columns (e.g. Domain, Supergroup, … when counts_csv_path is taxonomy.csv)
+        # columns (e.g. Domain, Supergroup, ... when counts_csv_path is taxonomy.csv)
         overlap = filter(!=(Symbol("SeqName")),
                          intersect(Symbol.(names(df_taxonomy)),
                                    Symbol.(names(df_counts_prepared))))
