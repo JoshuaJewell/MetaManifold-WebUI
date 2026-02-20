@@ -19,6 +19,7 @@ export vsearch
 
     """
     function vsearch(fasta_in_dir, reference_database, vsearch_dir; optional_args = "--id 0.75 --query_cov 0.8", vsearch_bin = "vsearch")
+        mkpath(vsearch_dir)
         outfile = joinpath(vsearch_dir, "taxonomy.tsv")
 
         cmd = "$vsearch_bin --usearch_global $fasta_in_dir --db $reference_database --blast6out $outfile $optional_args"

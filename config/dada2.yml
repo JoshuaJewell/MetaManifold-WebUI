@@ -34,13 +34,20 @@ asv:
   band_size_max: 430
   denovo_method: "consensus"
 
-databases_dir: "./databases"   # shared cache for taxonomy/vsearch databases; can be absolute or relative to working directory
+databases:
+  dir: "./databases"          # shared cache directory; absolute or relative to working directory
+  pr2:
+    dada2:
+      uri: "https://github.com/pr2database/pr2database/releases/download/v5.0.0/pr2_version_5.0.0_SSU_dada2.fasta.gz"
+      local: ~                # set to a local path to skip download
+    vsearch:
+      uri: "https://github.com/pr2database/pr2database/releases/download/v5.1.0.0/pr2_version_5.1.0_SSU_taxo_long.fasta.gz"
+      local: ~                # set to a local path to skip download
 
 taxonomy:
+  database: pr2               # key into databases: section above
   skip: false                 # true to skip taxonomy and use alternative output mode
-  uri: "https://github.com/pr2database/pr2database/releases/download/v5.0.0/pr2_version_5.0.0_SSU_dada2.fasta.gz"
-  # uri: "/path/to/local/database.fasta.gz"  # use a local file instead of downloading
-  multithread: 8               # higher values increase memory use significantly (mclapply forks one process per thread)
+  multithread: 4              # higher values increase memory use significantly (mclapply forks one process per thread)
   min_boot: 0
   levels:
     - "Domain"

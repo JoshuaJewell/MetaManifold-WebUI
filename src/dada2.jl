@@ -40,6 +40,67 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     _emitter(::Nothing)           = msg -> @info msg
     _emitter(ch::Channel{String}) = msg -> put!(ch, msg)
 
+    # Database resolution helpers
+
+    # Download `uri` to `db_dir/basename(uri)` if not already cached.
+    # Respects the optional `local:` override in `fmt_info`.
+    function _download_db_if_needed(key, fmt_info, db_dir, emit)
+        local_p = get(fmt_info, "local", nothing)
+        if !isnothing(local_p)
+            local_p = string(local_p)
+            if !isempty(local_p)
+                isfile(local_p) && (emit("[$key] Using local file: $local_p"); return local_p)
+                @warn "[$key] Configured local path not found: $local_p — falling back to uri"
+            end
+        end
+        uri    = fmt_info["uri"]
+        cached = joinpath(db_dir, basename(uri))
+        if isfile(cached)
+            emit("[$key] Using cached: $cached")
+        else
+            emit("[$key] Downloading: $uri")
+            Downloads.download(uri, cached)
+            emit("[$key] Saved to: $cached")
+        end
+        return cached
+    end
+
+    # Resolve the DADA2 taxonomy database from config when no external path is
+    # provided. Supports the `databases: / taxonomy.database:` scheme (preferred)
+    # and the legacy `taxonomy.uri:` key for backwards compatibility.
+    function _resolve_taxonomy_db(cfg, emit)
+        tax_cfg = cfg["taxonomy"]
+        if haskey(tax_cfg, "database")
+            db_key  = string(tax_cfg["database"])
+            db_cfg  = get(cfg, "databases", Dict())
+            haskey(db_cfg, db_key) ||
+                error("taxonomy.database = \"$db_key\" not found in databases: section")
+            fmt_cfg = get(db_cfg[db_key], "dada2", nothing)
+            isnothing(fmt_cfg) &&
+                error("databases.$db_key.dada2 is not configured")
+            db_dir = abspath(get(db_cfg, "dir", "./databases"))
+            mkpath(db_dir)
+            return _download_db_if_needed("$(db_key)_dada2", fmt_cfg, db_dir, emit)
+        end
+        # Legacy: taxonomy.uri
+        tax_uri = tax_cfg["uri"]
+        if isfile(tax_uri)
+            emit("Using local taxonomy database: $tax_uri")
+            return tax_uri
+        end
+        db_dir = abspath(get(cfg, "databases_dir", "./databases"))
+        mkpath(db_dir)
+        cached = joinpath(db_dir, basename(tax_uri))
+        if !isfile(cached)
+            emit("Downloading taxonomy database: $tax_uri")
+            Downloads.download(tax_uri, cached)
+            emit("Written: $cached")
+        else
+            emit("Using cached taxonomy database: $cached")
+        end
+        return cached
+    end
+
     # Config
     function validate_config(cfg)
         required = ["workspace", "file_patterns", "filter_trim", "dada",
@@ -62,8 +123,12 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
         boot_mode in ("none", "combined", "separate") ||
             error("output.bootstraps must be one of: none, combined, separate")
 
-        if !get(cfg["taxonomy"], "skip", false) && !haskey(cfg["taxonomy"], "uri")
-            error("taxonomy.uri is required when taxonomy.skip is not true")
+        if !get(cfg["taxonomy"], "skip", false)
+            has_uri = haskey(cfg["taxonomy"], "uri")
+            has_db  = haskey(cfg["taxonomy"], "database")
+            has_uri || has_db ||
+                error("taxonomy: configure `database` (referencing a databases: entry) " *
+                      "or `uri` when skip is not true")
         end
 
         combined_mode = get(cfg["output"], "combined_mode", "regular")
@@ -127,11 +192,25 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     # validates config, discovers files, handles the single-sample fallback, and
     # computes all path variables. Returns a NamedTuple so stage functions can
     # extract what they need without repeating boilerplate.
-    function _pipeline_context(config_path::String)
+    #
+    # Optional overrides (used when main.jl manages directory layout):
+    #   input_dir      — overrides cfg["workspace"]["input_dir"]
+    #   workspace_root — overrides cfg["workspace"]["root"]
+    function _pipeline_context(config_path::String; input_dir=nothing, workspace_root=nothing)
         functions_r = joinpath(@__DIR__, "dada2_functions.r")
         R"source($functions_r)"
 
-        cfg     = YAML.load_file(config_path)
+        cfg = YAML.load_file(config_path)
+
+        # Apply caller-supplied overrides before validation so that validate_config
+        # sees the final paths (including the isdir check on input_dir).
+        if !isnothing(input_dir)
+            cfg["workspace"]["input_dir"] = input_dir
+        end
+        if !isnothing(workspace_root)
+            cfg["workspace"]["root"] = workspace_root
+        end
+
         validate_config(cfg)
         verbose = get(cfg, "verbose", true)
         mode    = get(cfg["file_patterns"], "mode", "paired")
@@ -198,9 +277,9 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     Review `Figures/quality_unfiltered.pdf` to choose `truncLen` and `maxEE`
     values in config before running `filter_trim()`.
     """
-    function prefilter_qc(config_path::String; progress=nothing)
+    function prefilter_qc(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
         emit = _emitter(progress)
-        ctx  = _pipeline_context(config_path)
+        ctx  = _pipeline_context(config_path; input_dir, workspace_root)
 
         emit("Plotting unfiltered quality profiles")
         fwd_for_plot   = isempty(ctx.fwd_files) ? nothing : ctx.fwd_files
@@ -223,9 +302,9 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
 
     Saves: `Analysis/ckpt_filter.RData`
     """
-    function filter_trim(config_path::String; progress=nothing)
+    function filter_trim(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
         emit    = _emitter(progress)
-        ctx     = _pipeline_context(config_path)
+        ctx     = _pipeline_context(config_path; input_dir, workspace_root)
         ft      = ctx.cfg["filter_trim"]
         trunc_len = ft["trunc_len"]
         max_ee    = ft["max_ee"]
@@ -293,9 +372,9 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
 
     Saves: `Analysis/ckpt_errors.RData`
     """
-    function learn_errors(config_path::String; progress=nothing)
+    function learn_errors(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
         emit    = _emitter(progress)
-        ctx     = _pipeline_context(config_path)
+        ctx     = _pipeline_context(config_path; input_dir, workspace_root)
         seed    = get(ctx.cfg["dada"], "seed", 123)
         nbases  = ctx.cfg["dada"]["nbases"]
         max_con = ctx.cfg["dada"]["max_consist"]
@@ -339,9 +418,9 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     Requires: `Analysis/ckpt_errors.RData`
     Saves: `Analysis/ckpt_denoise.RData` (unfiltered seq_table)
     """
-    function denoise(config_path::String; progress=nothing)
+    function denoise(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
         emit    = _emitter(progress)
-        ctx     = _pipeline_context(config_path)
+        ctx     = _pipeline_context(config_path; input_dir, workspace_root)
         verbose = ctx.verbose
         fwd_out = ctx.fwd_out
         rev_out = ctx.rev_out
@@ -412,9 +491,9 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     Requires: `Checkpoints/ckpt_filter.RData`, `Checkpoints/ckpt_denoise.RData`
     Saves: `Checkpoints/ckpt_chimera.RData`
     """
-    function chimera_removal(config_path::String; progress=nothing)
+    function chimera_removal(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
         emit    = _emitter(progress)
-        ctx     = _pipeline_context(config_path)
+        ctx     = _pipeline_context(config_path; input_dir, workspace_root)
         verbose = ctx.verbose
         mode    = ctx.mode
 
@@ -496,9 +575,9 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     Requires: `Checkpoints/ckpt_chimera.RData`
     Saves: `Checkpoints/checkpoint.RData` (full R environment snapshot)
     """
-    function assign_taxonomy(config_path::String; progress=nothing)
+    function assign_taxonomy(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing)
         emit    = _emitter(progress)
-        ctx     = _pipeline_context(config_path)
+        ctx     = _pipeline_context(config_path; input_dir, workspace_root)
         verbose = ctx.verbose
 
         isfile(ctx.ckpts["chimera"]) ||
@@ -531,29 +610,12 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
 
         if !get(ctx.cfg["taxonomy"], "skip", false)
             emit("Assigning taxonomy")
-            tax_uri     = ctx.cfg["taxonomy"]["uri"]
             multithread = get(ctx.cfg["taxonomy"], "multithread", 4)
             min_boot    = get(ctx.cfg["taxonomy"], "min_boot", 0)
             tax_levels  = ctx.cfg["taxonomy"]["levels"]
 
-            db_path = if isfile(tax_uri)
-                # taxonomy.uri is a local path — use it directly
-                emit("Using local taxonomy database: $tax_uri")
-                tax_uri
-            else
-                # taxonomy.uri is a URL — download to shared project databases dir
-                db_dir = abspath(get(ctx.cfg, "databases_dir", "./databases"))
-                mkpath(db_dir)
-                cached = joinpath(db_dir, basename(tax_uri))
-                if !isfile(cached)
-                    emit("Downloading taxonomy database: $tax_uri")
-                    Downloads.download(tax_uri, cached)
-                    emit("Written: $cached")
-                else
-                    emit("Using cached taxonomy database: $cached")
-                end
-                cached
-            end
+            db_path = isnothing(taxonomy_db) ?
+                _resolve_taxonomy_db(ctx.cfg, emit) : taxonomy_db
 
             R"""
             taxa_result <- run_assign_taxonomy(
@@ -614,13 +676,13 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     - `ckpt_chimera.RData`  — seq_table_nochim, index
     - `checkpoint.RData`    — full R environment snapshot
     """
-    function dada2(config_path::String; progress=nothing)
-        prefilter_qc(config_path;    progress)
-        filter_trim(config_path;     progress);     R"gc()"
-        learn_errors(config_path;    progress);     R"gc()"
-        denoise(config_path;         progress);     R"gc()"
-        chimera_removal(config_path; progress);     R"gc()"
-        assign_taxonomy(config_path; progress)
+    function dada2(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing)
+        prefilter_qc(config_path;    progress, input_dir, workspace_root)
+        filter_trim(config_path;     progress, input_dir, workspace_root);     R"gc()"
+        learn_errors(config_path;    progress, input_dir, workspace_root);     R"gc()"
+        denoise(config_path;         progress, input_dir, workspace_root);     R"gc()"
+        chimera_removal(config_path; progress, input_dir, workspace_root);     R"gc()"
+        assign_taxonomy(config_path; progress, input_dir, workspace_root, taxonomy_db)
     end
 
 end

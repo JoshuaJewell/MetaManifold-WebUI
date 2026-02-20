@@ -1,5 +1,6 @@
 #!/usr/bin/env julia
 
+include("databases.jl")
 include("run_cutadapt.jl")
 include("dada2.jl")
 include("merge_and_filter_taxa.jl")
@@ -7,7 +8,7 @@ include("run_vsearch.jl")
 
 using CSV
 using YAML
-using .Cutadapt, .TaxonomyTableTools, .DADA2, .VSEARCH
+using .Databases, .Cutadapt, .TaxonomyTableTools, .DADA2, .VSEARCH
 
 ## Tools loading (to move to new module at some point)
 """
@@ -41,15 +42,27 @@ data_dir = "./data"
 config_dir = "./config"
 output_dir = "./output"
 
+# Project name - all stage outputs live under output/{project_name}/
+# Re-running with the same project_name overwrites previous results.
+project_name = "project"
+project_dir  = joinpath(output_dir, project_name)
+
 # Cutadapt paths
 fastq_input_dir = joinpath(data_dir, "fastq")
-cutadapt_dir = joinpath(output_dir, "cutadapt")
+trimmed_dir = joinpath(project_dir, "cutadapt")
 primers_config = joinpath(config_dir, "primers.yml")
 
-# DADA2/VSEARCH paths
-fasta_outfile = joinpath(output_dir, "dada2/Tables/asvs.fasta")
-reference_database = "./databases/pr2_version_5.0.0_SSU_dada2.fasta.gz"
-vsearch_dir = joinpath(output_dir, "vsearch")
+# DADA2 paths
+dada2_dir = joinpath(project_dir, "dada2")
+
+# VSEARCH paths
+vsearch_dir = joinpath(project_dir, "vsearch")
+fasta_outfile = joinpath(dada2_dir, "Tables/asvs.fasta")
+
+# Merge/filter paths (derived from project_dir)
+merged_dir = joinpath(project_dir, "merged")
+merged_outfile_multi = joinpath(merged_dir, "merged_multi.csv")
+filtered_outfile_multi = joinpath(merged_dir, "protist_filtered_multi.csv")
 
 ## Instantiate parameters
 # Cutadapt parameters
@@ -57,29 +70,26 @@ primer_pairs = ["TarEuk", "Meta2"]
 cutadapt_optional_args = "-m 200 --discard-untrimmed"
 
 # DADA2 parameters
-dada2_config_dir = joinpath(config_dir, "dada2.yml")
+dada2_config_path = joinpath(config_dir, "dada2.yml")
 
 # VSEARCH parameters
 vsearch_optional_args = "--id 0.75 --query_cov 0.8"
 
 # Merge and filter (DADA2-VSEARCH) parameters
-multiv = joinpath(output_dir, "vsearch/taxonomy.tsv")
-multid = joinpath(output_dir, "dada2/Tables/taxonomy.csv")
+multiv = joinpath(vsearch_dir, "taxonomy.tsv")
+multid = joinpath(dada2_dir, "Tables/taxonomy.csv")
 
 protist_filter = joinpath(config_dir, "protist_filter.yml")
 
-merged_outfile_multi = joinpath(output_dir, "merged/merged_multi.csv")
-filtered_outfile_multi = joinpath(output_dir, "merged/protist_filtered_multi.csv")
+# Download/use database
+dbs = ensure_databases(dada2_config_path)
 
 ## Main
+#cutadapt(primer_pairs, primers_config, fastq_input_dir, trimmed_dir, optional_args = cutadapt_optional_args, cutadapt_bin  = tool_bin(tools, "cutadapt"))
 
-cutadapt(primer_pairs, primers_config, fastq_input_dir, cutadapt_dir, optional_args = cutadapt_optional_args, cutadapt_bin = tool_bin(tools, "cutadapt"))
+#dada2(dada2_config_path, input_dir = trimmed_dir, workspace_root = dada2_dir, taxonomy_db = dbs["pr2_dada2"])
 
-dada2(dada2_config_dir)
-
-vsearch(fasta_outfile, reference_database, vsearch_dir, optional_args = vsearch_optional_args, vsearch_bin = tool_bin(tools, "vsearch"))
-
-mkpath(dirname(merged_outfile_multi))
+vsearch(fasta_outfile, dbs["pr2_vsearch"], vsearch_dir, optional_args = vsearch_optional_args, vsearch_bin = tool_bin(tools, "vsearch"))
 
 CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid))
 CSV.write(filtered_outfile_multi, filter_table(merge_taxonomy_counts(multiv, multid), protist_filter))

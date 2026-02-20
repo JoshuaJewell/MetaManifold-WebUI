@@ -3,7 +3,6 @@ module Cutadapt
 export cutadapt
 
     using YAML
-    using TimeZones
     using Logging
 
     # Prevent duplication of primers. Must be instantiated outside get_primers() loop. Global scope may be an issue.
@@ -61,13 +60,10 @@ export cutadapt
     function run_cutadapt(primer_args, optional_args, fastq_in_dir, cutadapt_dir, cutadapt_bin)
         samples = []
 
-        # Messy filesystem stuff
-        time = chop("$(now(localzone()))", tail = 13)
-        fastq_out_dir = joinpath(cutadapt_dir, time)
-        log_dir = joinpath(fastq_out_dir, "logs")
-        stats_path = joinpath(log_dir, "cutadapt_primer_trimming_stats.txt")
-        summary_path = joinpath(log_dir, "cutadapt_trimmed_percentage.txt")
-        stats_basename = basename(stats_path)
+        log_dir          = joinpath(cutadapt_dir, "logs")
+        stats_path       = joinpath(log_dir, "cutadapt_primer_trimming_stats.txt")
+        summary_path     = joinpath(log_dir, "cutadapt_trimmed_percentage.txt")
+        stats_basename   = basename(stats_path)
         summary_basename = basename(summary_path)
 
         isdir(log_dir) || mkpath(log_dir)
@@ -77,15 +73,15 @@ export cutadapt
             push!(samples, split(f, '_')[1])
         end
 
-        @info("cutadapt running at $time with arguments: $primer_args $optional_args.")
+        @info("cutadapt running with arguments: $primer_args $optional_args.")
 
         nsamples = length(samples)
         for (i, sample) in enumerate(samples)
             inputR1 = joinpath(fastq_in_dir, sample * "_*_L001_R1_001.fastq.gz")
             inputR2 = joinpath(fastq_in_dir, sample * "_*_L001_R2_001.fastq.gz")
 
-            outputR1 = joinpath(fastq_out_dir, sample * "_R1_trimmed.fastq.gz")
-            outputR2 = joinpath(fastq_out_dir, sample * "_R2_trimmed.fastq.gz")
+            outputR1 = joinpath(cutadapt_dir, sample * "_R1_trimmed.fastq.gz")
+            outputR2 = joinpath(cutadapt_dir, sample * "_R2_trimmed.fastq.gz")
 
             @info("On sample $i/$nsamples ($sample).")
             cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR1 -p $outputR2 $inputR1 $inputR2"
@@ -93,7 +89,6 @@ export cutadapt
             open(stats_path, "a") do io
                 run(pipeline(`bash -lc $cutadapt_cmd`; stdout=io, stderr=io))
             end
-
         end
 
         samples_str = join(samples, " ")
@@ -106,7 +101,8 @@ export cutadapt
             run(pipeline(`bash -lc $cmd`))
         end
 
-        @info("cutadapt complete. Output available in $fastq_out_dir.")
+        @info("cutadapt complete. Output available in $cutadapt_dir.")
+        return cutadapt_dir
     end
 
     """
@@ -154,7 +150,7 @@ export cutadapt
         optional_args = "-m 200 --discard-untrimmed",
         cutadapt_bin  = "cutadapt"
     )
-        run_cutadapt(
+        return run_cutadapt(
             get_primer_args(primer_pairs, primers_path),
             optional_args,
             fastq_in_dir,
