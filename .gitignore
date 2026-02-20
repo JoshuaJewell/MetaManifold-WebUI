@@ -253,7 +253,7 @@ rsconnect/
 ### Other
 # Things with ambiguous intellectual property
 internal
-data/fastq/
+data/
 cutadapt/output_*
 
 ### Lock files
