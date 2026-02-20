@@ -22,7 +22,7 @@ project_dir  = joinpath(output_dir, project_name)
 fastq_input_dir = joinpath(data_dir, project_name)
 
 # QC paths
-fastqc_dir = joinpath(project_dir, "FastQC")
+qc_dir = joinpath(project_dir, "QC")
 
 # Cutadapt paths
 trimmed_dir = joinpath(project_dir, "cutadapt")
@@ -62,13 +62,13 @@ protist_filter = joinpath(config_dir, "protist_filter.yml")
 dbs = ensure_databases(dada2_config_path)
 
 ## Main
-#fastqc_all(fastq_input_dir, fastqc_dir)
+multiqc(fastq_input_dir, qc_dir)
 
 #cutadapt(primer_pairs, primers_config, fastq_input_dir, trimmed_dir, optional_args = cutadapt_optional_args)
 
-dada2(dada2_config_path, input_dir = trimmed_dir, workspace_root = dada2_dir, taxonomy_db = dbs["pr2_dada2"])
+#dada2(dada2_config_path, input_dir = trimmed_dir, workspace_root = dada2_dir, taxonomy_db = dbs["pr2_dada2"])
 
 #vsearch(fasta_outfile, dbs["pr2_vsearch"], vsearch_dir, optional_args = vsearch_optional_args)
 
-CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid));     @info "Written: $merged_outfile_multi"
-CSV.write(filtered_outfile_multi, filter_table(merge_taxonomy_counts(multiv, multid), protist_filter)); @info "Written: $filtered_outfile_multi"
+#CSV.write(merged_outfile_multi, merge_taxonomy_counts(multiv, multid));     @info "Written: $merged_outfile_multi"
+#CSV.write(filtered_outfile_multi, filter_table(merge_taxonomy_counts(multiv, multid), protist_filter)); @info "Written: $filtered_outfile_multi"

@@ -4,7 +4,7 @@ module Tools
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-export cutadapt, vsearch, fastqc_all, fastqc_one
+export cutadapt, vsearch, multiqc, fastqc
 
     using YAML
     using Logging
@@ -188,42 +188,55 @@ export cutadapt, vsearch, fastqc_all, fastqc_one
         )
     end
 
-    ## FastQC
+    ## FastQC / MultiQC
     """
-        function fastqc_all(fastq_in_dir; optional_args = "-t 20 --extract --delete", fastqc_bin = "fastqc")
+        multiqc(fastq_in_dir, qc_dir; fastqc_args, multiqc_args, fastqc_bin, multiqc_bin)
 
-    Requires `fastqc` installed. Runs `fastqc` command with any optional parameters on a whole set.
+    Run FastQC on all FASTQ files in `fastq_in_dir`, saving individual reports to
+    `qc_dir/fastqc/`, then aggregate them into a MultiQC summary report at `qc_dir/`.
 
     ## Arguments
-    - `fastq_in_dir`: Specify path of fastq files to qc.
+    - `fastq_in_dir`: Directory containing `.fastq` or `.fastq.gz` files.
+    - `qc_dir`: Parent output directory. FastQC reports go to `qc_dir/fastqc/`;
+      the MultiQC summary report goes to `qc_dir/`.
 
     ## Keyword Arguments
-    - `optional_args` (optional, default: "-t 20 --extract --delete"): Specify additional arguments passed to `fastqc` command.
-    - `fastqc_bin` (optional, default: "fastqc"): Path to the fastqc binary. Defaults to PATH lookup. Set via `config/tools.yml` and `load_tools()` in main.jl.
-
+    - `fastqc_args` (optional, default: `"-t 20 --extract --delete"`): Additional arguments passed to `fastqc`.
+    - `multiqc_args` (optional, default: `""`): Additional arguments passed to `multiqc`.
+    - `fastqc_bin` (optional): Path to the fastqc binary. Set via `config/tools.yml`.
+    - `multiqc_bin` (optional): Path to the multiqc binary. Set via `config/tools.yml`.
     """
-    function fastqc_all(fastq_in_dir, fastqc_dir; optional_args = "-t 20 --extract --delete", fastqc_bin = tool_bin("fastqc"))
+    function multiqc(fastq_in_dir, qc_dir;
+                     fastqc_args  = "-t 20 --extract --delete",
+                     multiqc_args = "",
+                     fastqc_bin   = tool_bin("fastqc"),
+                     multiqc_bin  = tool_bin("multiqc"))
+        fastqc_dir = joinpath(qc_dir, "fastqc")
         mkpath(fastqc_dir)
         @info "FastQC running on $fastq_in_dir"
-        cmd = "$fastqc_bin $fastq_in_dir/*.fastq* -o $fastqc_dir $optional_args"
-        run(`bash -lc $cmd`)
+        fqc_cmd = "$fastqc_bin $fastq_in_dir/*.fastq* -o $fastqc_dir $fastqc_args"
+        run(`bash -lc $fqc_cmd`)
         @info "FastQC complete. Output: $fastqc_dir"
+        @info "MultiQC running on $fastqc_dir"
+        mqc_cmd = "$multiqc_bin $fastqc_dir -o $qc_dir $multiqc_args"
+        run(`bash -lc $mqc_cmd`)
+        @info "MultiQC complete. Output: $qc_dir"
     end
 
     """
-        function fastqc_one(fastq_in_file; optional_args = "-t 20 --extract --delete", fastqc_bin = "fastqc")
+        fastqc(fastq_in_file, fastqc_dir; optional_args, fastqc_bin)
 
-    Requires `fastqc` installed. Runs `fastqc` command with any optional parameters on a whole set.
+    Run FastQC on a single FASTQ file. No MultiQC report is generated.
 
     ## Arguments
-    - `fastq_in_file`: Specify path of fastq file to qc.
+    - `fastq_in_file`: Path to a single `.fastq` or `.fastq.gz` file.
+    - `fastqc_dir`: Output directory for the FastQC report.
 
     ## Keyword Arguments
-    - `optional_args` (optional, default: "-t 20 --extract --delete"): Specify additional arguments passed to `fastqc` command.
-    - `fastqc_bin` (optional, default: "fastqc"): Path to the fastqc binary. Defaults to PATH lookup. Set via `config/tools.yml` and `load_tools()` in main.jl.
-
+    - `optional_args` (optional, default: `"-t 20 --extract --delete"`): Additional arguments passed to `fastqc`.
+    - `fastqc_bin` (optional): Path to the fastqc binary. Set via `config/tools.yml`.
     """
-    function fastqc_one(fastq_in_file, fastqc_dir; optional_args = "-t 20 --extract --delete", fastqc_bin = tool_bin("fastqc"))
+    function fastqc(fastq_in_file, fastqc_dir; optional_args = "-t 20 --extract --delete", fastqc_bin = tool_bin("fastqc"))
         mkpath(fastqc_dir)
         @info "FastQC running on $fastq_in_file"
         cmd = "$fastqc_bin $fastq_in_file -o $fastqc_dir $optional_args"

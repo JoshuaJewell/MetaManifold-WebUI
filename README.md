@@ -272,7 +272,9 @@ SampleName_*_L001_R2_001.fastq.gz
 ```
 output/{project_name}/
 ├── cutadapt/                    # Trimmed FASTQ pairs and logs
-├── FastQC/                      # FastQC HTML reports
+├── QC/
+│   ├── fastqc/                  # Per-file FastQC HTML reports
+│   └── multiqc_report.html      # MultiQC summary across all samples
 ├── dada2/
 │   ├── Tables/
 │   │   ├── seqtab_nochim.csv    # ASV count table
