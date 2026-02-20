@@ -15,7 +15,6 @@
 # https://creativecommons.org/licenses/by/4.0/.
 
 library(dada2)
-library(openxlsx)
 library(tidyverse)
 # library(yaml)
 
@@ -244,8 +243,6 @@ write_combined_table <- function(taxa_df, seq_table, tables_dir, filename) {
   seq_t <- tibble::rownames_to_column(seq_t, "Sequence")
   combined <- dplyr::left_join(taxa_df, seq_t, by = "Sequence")
   output_path <- file.path(tables_dir, filename)
-  openxlsx::write.xlsx(combined, output_path, overwrite = TRUE,
-                       asTable = FALSE, sheetName = "1.sampling",
-                       firstRow = TRUE, zoom = 90, keepNA = TRUE)
+  write.csv(combined, output_path, quote = FALSE, row.names = FALSE)
   invisible(NULL)
 }

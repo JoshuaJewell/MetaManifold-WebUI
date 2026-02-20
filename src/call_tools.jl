@@ -204,10 +204,10 @@ export cutadapt, vsearch, fastqc_all, fastqc_one
     """
     function fastqc_all(fastq_in_dir, fastqc_dir; optional_args = "-t 20 --extract --delete", fastqc_bin = tool_bin("fastqc"))
         mkpath(fastqc_dir)
-
+        @info "FastQC running on $fastq_in_dir"
         cmd = "$fastqc_bin $fastq_in_dir/*.fastq* -o $fastqc_dir $optional_args"
         run(`bash -lc $cmd`)
-
+        @info "FastQC complete. Output: $fastqc_dir"
     end
 
     """
@@ -225,10 +225,10 @@ export cutadapt, vsearch, fastqc_all, fastqc_one
     """
     function fastqc_one(fastq_in_file, fastqc_dir; optional_args = "-t 20 --extract --delete", fastqc_bin = tool_bin("fastqc"))
         mkpath(fastqc_dir)
-
+        @info "FastQC running on $fastq_in_file"
         cmd = "$fastqc_bin $fastq_in_file -o $fastqc_dir $optional_args"
         run(`bash -lc $cmd`)
-
+        @info "FastQC complete. Output: $fastqc_dir"
     end
 
     ## VSEARCH
@@ -249,9 +249,9 @@ export cutadapt, vsearch, fastqc_all, fastqc_one
     function vsearch(fasta_in_dir, reference_database, vsearch_dir; optional_args = "--id 0.75 --query_cov 0.8", vsearch_bin = tool_bin("vsearch"))
         mkpath(vsearch_dir)
         outfile = joinpath(vsearch_dir, "taxonomy.tsv")
-
+        @info "VSEARCH running: $fasta_in_dir against $(basename(reference_database))"
         cmd = "$vsearch_bin --usearch_global $fasta_in_dir --db $reference_database --blast6out $outfile $optional_args"
         run(`bash -lc $cmd`)
-
+        @info "VSEARCH complete. Output: $outfile"
     end
 end

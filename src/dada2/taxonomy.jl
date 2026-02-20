@@ -39,7 +39,7 @@
         seq_prefix    = get(ctx.cfg["output"], "seq_table_prefix", "seqtab_nochim")
         fasta_prefix  = get(ctx.cfg["output"], "fasta_prefix", "asvs")
         taxa_prefix   = get(ctx.cfg["output"], "taxa_prefix", "taxonomy")
-        combined_file = get(ctx.cfg["output"], "combined_filename", "tax_counts.xlsx")
+        combined_file = get(ctx.cfg["output"], "combined_filename", "tax_counts.csv")
         boot_mode     = get(ctx.cfg["output"], "bootstraps", "combined")
         comb_mode     = get(ctx.cfg["output"], "combined_mode", "regular")
         tables_dir    = ctx.dirs["Tables"]

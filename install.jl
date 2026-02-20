@@ -398,8 +398,7 @@ function resolve_tool(
     end
 end
 
-# Main
-
+## Main
 function main()
     println()
     println("╔═══════════════════════════════════════════╗")
@@ -439,13 +438,16 @@ function main()
     # R packages
     println()
     println("  ─── R packages ─────────────────────────────────────────────")
-    r_packages = ["dada2", "openxlsx", "tidyverse", "yaml"]
-    if prompt_yn("  Install/check R packages (dada2, openxlsx, tidyverse, yaml)?")
+    r_packages = ["dada2", "tidyverse"]
+    if prompt_yn("  Install/check R packages (dada2, tidyverse)?")
         install_r_packages(r_packages)
     end
 
     # Write config
     write_tools_config(resolved)
+
+    # Create a data directory
+    mkpath("data")
 
     println()
     println("Installation complete.")

@@ -164,6 +164,7 @@ export merge_taxonomy_counts, filter_table
         # Left join instead of outerjoin to keep all taxonomy rows
         merged_df = leftjoin(df_taxonomy, df_counts_prepared, on="SeqName")
         sort!(merged_df, "SeqName", by=seqnum)
+        @info "Merge complete. $(nrow(merged_df)) rows."
 
         return merged_df
     end
