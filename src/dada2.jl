@@ -69,12 +69,12 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     - `checkpoint.RData`   - final R environment snapshot
     """
     function dada2(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing)
-        #prefilter_qc(config_path; progress, input_dir, workspace_root)
-        #filter_trim(config_path; progress, input_dir, workspace_root); R"gc()"
-        #learn_errors(config_path; progress, input_dir, workspace_root); R"gc()"
-        #denoise(config_path; progress, input_dir, workspace_root); R"gc()"
-        #filter_length(config_path; progress, input_dir, workspace_root); R"gc()"
-        #chimera_removal(config_path; progress, input_dir, workspace_root); R"gc()"
+        prefilter_qc(config_path; progress, input_dir, workspace_root)
+        filter_trim(config_path; progress, input_dir, workspace_root); R"gc()"
+        learn_errors(config_path; progress, input_dir, workspace_root); R"gc()"
+        denoise(config_path; progress, input_dir, workspace_root); R"gc()"
+        filter_length(config_path; progress, input_dir, workspace_root); R"gc()"
+        chimera_removal(config_path; progress, input_dir, workspace_root); R"gc()"
         assign_taxonomy(config_path; progress, input_dir, workspace_root, taxonomy_db)
     end
 

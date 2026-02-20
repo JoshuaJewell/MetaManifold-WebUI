@@ -92,7 +92,7 @@
         run(scp("$host:$remote_ckpt",                                 checkpoint))
 
         # Safety check before cleanup: staging_dir must be at least 3 components
-        # deep to guard against dangerous paths resolving to / or home root.
+        # deep to guard against dangerous paths.
         parts = filter(!isempty, split(staging_dir, '/'))
         if length(parts) >= 3
             emit("  Cleaning up $host:$staging_dir")
