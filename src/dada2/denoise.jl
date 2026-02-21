@@ -19,9 +19,9 @@
 
         errors_ckpt = ctx.ckpts["errors"]
         filter_ckpt = ctx.ckpts["filter"]
-        hash_file   = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        hash_file   = joinpath(ctx.dirs["Checkpoints"], "learn_errors.hash")
         if isfile(errors_ckpt) && isfile(filter_ckpt) &&
-           !_section_stale(config_path, "dada2", hash_file) &&
+           !_section_stale(config_path, "dada2.dada", hash_file) &&
            mtime(errors_ckpt) > mtime(filter_ckpt)
             @info "Skipping learn_errors: checkpoint up to date"
             return nothing
@@ -59,7 +59,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
-        _write_section_hash(config_path, "dada2", hash_file)
+        _write_section_hash(config_path, "dada2.dada", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "error_rates.pdf"))")
         emit("Checkpoint: $(ctx.ckpts["errors"])")
         emit("Log: $log_path")
@@ -92,9 +92,9 @@
         errors_ckpt = ctx.ckpts["errors"]
 
         denoise_ckpt = ctx.ckpts["denoise"]
-        hash_file    = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        hash_file    = joinpath(ctx.dirs["Checkpoints"], "denoise.hash")
         if isfile(denoise_ckpt) &&
-           !_section_stale(config_path, "dada2", hash_file) &&
+           !_section_stale(config_path, "dada2.dada,dada2.merge", hash_file) &&
            mtime(denoise_ckpt) > mtime(errors_ckpt)
             @info "Skipping denoise: checkpoint up to date"
             return nothing
@@ -156,7 +156,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
-        _write_section_hash(config_path, "dada2", hash_file)
+        _write_section_hash(config_path, "dada2.dada,dada2.merge", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "length_distribution.pdf"))")
         emit("Checkpoint: $(ctx.ckpts["denoise"])")
         emit("Log: $log_path")
@@ -186,9 +186,9 @@
         denoise_ckpt = ctx.ckpts["denoise"]
 
         length_ckpt = ctx.ckpts["length"]
-        hash_file   = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        hash_file   = joinpath(ctx.dirs["Checkpoints"], "filter_length.hash")
         if isfile(length_ckpt) &&
-           !_section_stale(config_path, "dada2", hash_file) &&
+           !_section_stale(config_path, "dada2.asv", hash_file) &&
            mtime(length_ckpt) > mtime(denoise_ckpt)
             @info "Skipping filter_length: checkpoint up to date"
             return nothing
@@ -225,7 +225,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
-        _write_section_hash(config_path, "dada2", hash_file)
+        _write_section_hash(config_path, "dada2.asv", hash_file)
         emit("Checkpoint: $(ctx.ckpts["length"])")
         emit("Log: $log_path")
         nothing

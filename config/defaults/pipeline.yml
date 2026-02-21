@@ -43,6 +43,7 @@ dada2:
     # The authors accept no liability for data loss or misuse arising from this feature.
     remote:                     # omit or set host to null to run locally
       host: ~                   # user@hostname
+      identity_file: ~          # path to SSH private key; null to use password auth
       rscript: "Rscript"        # path to Rscript on the server
       staging_dir: "/absolute/path/on/server"
       db_path: ~                # path to pre-installed database on server; null to transfer local copy

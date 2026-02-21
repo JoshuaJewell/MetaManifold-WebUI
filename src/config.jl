@@ -132,11 +132,27 @@ export _section_stale, _write_section_hash,
         end
     end
 
+    # Walk a dotted key path ("dada2.filter_trim") into a nested Dict.
+    # Returns nothing if any key is missing or a non-Dict is encountered mid-path.
+    function _get_nested(cfg, path::AbstractString)
+        val = cfg
+        for k in split(path, ".")
+            val isa Dict || return nothing
+            val = get(val, k, nothing)
+            isnothing(val) && return nothing
+        end
+        return val
+    end
+
+    # Section can be a dotted path ("dada2.filter_trim") or a comma-separated
+    # list of dotted paths ("dada2.dada,dada2.merge") whose canonical strings
+    # are joined before hashing.
     function _section_hash(config_path::String, section::String)::String
         cfg = YAML.load_file(config_path)
         cfg isa Dict || return bytes2hex(sha256(""))
-        sec = get(cfg, section, Dict())
-        bytes2hex(sha256(_canonical(sec)))
+        combined = join([_canonical(_get_nested(cfg, strip(s)))
+                         for s in split(section, ",")], "|")
+        bytes2hex(sha256(combined))
     end
 
     """

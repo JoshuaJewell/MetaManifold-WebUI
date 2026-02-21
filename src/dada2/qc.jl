@@ -15,10 +15,9 @@
         ctx  = _pipeline_context(config_path; input_dir, workspace_root)
 
         unfiltered_pdf = joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf")
-        hash_file      = joinpath(ctx.dirs["Checkpoints"], "config.hash")
-        if isfile(unfiltered_pdf) && !_section_stale(config_path, "dada2", hash_file)
+        if isfile(unfiltered_pdf)
             all_inputs = vcat(ctx.fwd_files, ctx.rev_files)
-            if isempty(all_inputs) || all(f -> mtime(unfiltered_pdf) > mtime(f) for f in all_inputs)
+            if isempty(all_inputs) || all(mtime(unfiltered_pdf) > mtime(f) for f in all_inputs)
                 @info "Skipping prefilter_qc: quality_unfiltered.pdf up to date"
                 return nothing
             end
@@ -39,7 +38,6 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
-        _write_section_hash(config_path, "dada2", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf"))")
         emit("Log: $log_path")
         nothing
@@ -62,10 +60,10 @@
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
 
         filter_ckpt = ctx.ckpts["filter"]
-        hash_file   = joinpath(ctx.dirs["Checkpoints"], "config.hash")
-        if isfile(filter_ckpt) && !_section_stale(config_path, "dada2", hash_file)
+        hash_file   = joinpath(ctx.dirs["Checkpoints"], "filter_trim.hash")
+        if isfile(filter_ckpt) && !_section_stale(config_path, "dada2.filter_trim", hash_file)
             all_inputs = vcat(ctx.fwd_files, ctx.rev_files)
-            if isempty(all_inputs) || all(f -> mtime(filter_ckpt) > mtime(f) for f in all_inputs)
+            if isempty(all_inputs) || all(mtime(filter_ckpt) > mtime(f) for f in all_inputs)
                 @info "Skipping filter_trim: checkpoint up to date"
                 return nothing
             end
@@ -130,7 +128,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
-        _write_section_hash(config_path, "dada2", hash_file)
+        _write_section_hash(config_path, "dada2.filter_trim", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_filtered.pdf"))")
         emit("Checkpoint: $(ctx.ckpts["filter"])")
         emit("Log: $log_path")

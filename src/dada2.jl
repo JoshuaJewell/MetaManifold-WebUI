@@ -96,14 +96,13 @@ export dada2, dada2_denoise, dada2_classify,
         config_path    = write_run_config(project)
         workspace_root = joinpath(project.dir, "dada2")
         chimera_ckpt   = joinpath(workspace_root, "Checkpoints", "ckpt_chimera.RData")
-        hash_file      = joinpath(workspace_root, "Checkpoints", "config.hash")
 
         trimmed_files = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(trimmed.dir))
         trimmed_mtime = isempty(trimmed_files) ? 0.0 :
                         maximum(mtime(joinpath(trimmed.dir, f)) for f in trimmed_files)
 
         if isfile(chimera_ckpt) &&
-           !_section_stale(config_path, "dada2", hash_file) &&
+           mtime(chimera_ckpt) > mtime(config_path) &&
            mtime(chimera_ckpt) > trimmed_mtime
             @info "Skipping dada2_denoise: ckpt_chimera.RData up to date"
         else
@@ -157,12 +156,11 @@ export dada2, dada2_denoise, dada2_classify,
             joinpath(tables_dir, get(out_cfg, "seq_table_prefix", "seqtab_nochim") * ".csv"),
             joinpath(tables_dir, get(out_cfg, "taxa_prefix",      "taxonomy")      * ".csv")
         )
-        hash_file     = joinpath(workspace_root, "Checkpoints", "config.hash")
         trimmed_files = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(trimmed.dir))
         trimmed_mtime = isempty(trimmed_files) ? 0.0 :
                         maximum(mtime(joinpath(trimmed.dir, f)) for f in trimmed_files)
         if all(isfile, (result.fasta, result.count_table, result.taxonomy)) &&
-           !_section_stale(config_path, "dada2", hash_file) &&
+           all(f -> mtime(f) > mtime(config_path), (result.fasta, result.count_table, result.taxonomy)) &&
            all(f -> mtime(f) > trimmed_mtime, (result.fasta, result.count_table, result.taxonomy))
             @info "Skipping dada2: outputs up to date in $tables_dir"
             return result

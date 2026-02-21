@@ -200,6 +200,7 @@ dada2:
     # to use the configured host. See config/defaults/pipeline.yml for the full disclaimer.
     remote:
       host: ~                    # user@hostname
+      identity_file: ~           # path to SSH private key; null to use password auth
       rscript: "Rscript"         # path to Rscript on the server
       staging_dir: "/absolute/path/on/server"
       db_path: ~                 # absolute path to database on server (null = transfer local copy)

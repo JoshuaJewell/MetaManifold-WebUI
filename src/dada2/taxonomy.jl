@@ -21,10 +21,11 @@
                                       checkpoint, taxa_prefix, multithread,
                                       min_boot, tax_levels, verbose, remote_cfg,
                                       log_path)
-        host      = remote_cfg["host"]
-        rscript   = get(remote_cfg, "rscript", "Rscript")
-        base_dir  = get(remote_cfg, "staging_dir", nothing)
-        remote_db = get(remote_cfg, "db_path", nothing)
+        host          = remote_cfg["host"]
+        rscript       = get(remote_cfg, "rscript", "Rscript")
+        base_dir      = get(remote_cfg, "staging_dir", nothing)
+        remote_db     = get(remote_cfg, "db_path", nothing)
+        identity_file = get(remote_cfg, "identity_file", nothing)
 
         isnothing(base_dir) &&
             error("taxonomy.remote.staging_dir must be set explicitly in config")
@@ -42,17 +43,22 @@
         remote_tables = "$staging_dir/Tables"
         remote_ckpt   = "$staging_dir/checkpoint.RData"
 
-        # Use a ControlMaster socket so the password is entered once and all
-        # subsequent ssh/scp calls reuse the existing connection silently.
+        # Use a ControlMaster socket so the connection is established once and
+        # all subsequent ssh/scp calls reuse it silently.
         # ConnectTimeout: fail fast instead of hanging on unreachable hosts.
         # NumberOfPasswordPrompts=1: fail immediately on wrong password.
         # ServerAlive*: detect stale connections during long Rscript runs.
-        ctl      = "/tmp/ssh_mux_$run_id"
-        ssh_opts = `-o ControlMaster=auto -o ControlPath=$ctl -o ControlPersist=yes -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=3`
+        ctl     = "/tmp/ssh_mux_$run_id"
+        id_opt  = isnothing(identity_file) ? `` : `-i $identity_file`
+        ssh_opts = `$id_opt -o ControlMaster=auto -o ControlPath=$ctl -o ControlPersist=yes -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=3`
         ssh = (args...) -> `ssh $ssh_opts $args`
         scp = (args...) -> `scp $ssh_opts $args`
 
-        emit("  Connecting to $host (enter SSH password if prompted)...")
+        if isnothing(identity_file)
+            emit("  Connecting to $host (enter SSH password if prompted)...")
+        else
+            emit("  Connecting to $host (key: $identity_file)...")
+        end
         emit("  Setting up staging directory on $host")
         run(ssh(host, "mkdir -p $remote_tables"))
 
@@ -121,9 +127,9 @@
 
         chimera_ckpt = ctx.ckpts["chimera"]
         checkpoint   = joinpath(ctx.dirs["Checkpoints"], "checkpoint.RData")
-        hash_file    = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        hash_file    = joinpath(ctx.dirs["Checkpoints"], "assign_taxonomy.hash")
         if isfile(checkpoint) &&
-           !_section_stale(config_path, "dada2", hash_file) &&
+           !_section_stale(config_path, "dada2.taxonomy,dada2.output", hash_file) &&
            mtime(checkpoint) > mtime(chimera_ckpt)
             @info "Skipping assign_taxonomy: checkpoint up to date"
             return nothing
@@ -205,7 +211,7 @@
             emit("Log: $log_path")
         end
 
-        _write_section_hash(config_path, "dada2", hash_file)
+        _write_section_hash(config_path, "dada2.taxonomy,dada2.output", hash_file)
         emit("Checkpoint: $checkpoint")
 
         emit("Pipeline complete. Outputs:")
