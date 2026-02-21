@@ -14,12 +14,32 @@
         emit = _emitter(progress)
         ctx  = _pipeline_context(config_path; input_dir, workspace_root)
 
-        emit("Plotting unfiltered quality profiles")
-        fwd_for_plot   = isempty(ctx.fwd_files) ? nothing : ctx.fwd_files
-        rev_for_plot   = isempty(ctx.rev_files) ? nothing : ctx.rev_files
         unfiltered_pdf = joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf")
-        R"plot_quality_profiles($fwd_for_plot, $rev_for_plot, $unfiltered_pdf)"
-        emit("Written: $unfiltered_pdf")
+        if isfile(unfiltered_pdf)
+            all_inputs  = vcat(ctx.fwd_files, ctx.rev_files)
+            input_mtime = isempty(all_inputs) ? mtime(config_path) :
+                          max(mtime(config_path), maximum(mtime(f) for f in all_inputs))
+            if mtime(unfiltered_pdf) > input_mtime
+                @info "Skipping prefilter_qc: quality_unfiltered.pdf up to date"
+                return nothing
+            end
+        end
+
+        log_path = joinpath(ctx.dirs["Logs"], "prefilter_qc.log")
+        open(log_path, "w") do io; println(io, "=== prefilter_qc ===\nconfig: $config_path") end
+        R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
+        try
+            emit("Plotting unfiltered quality profiles")
+            fwd_for_plot   = isempty(ctx.fwd_files) ? nothing : ctx.fwd_files
+            rev_for_plot   = isempty(ctx.rev_files) ? nothing : ctx.rev_files
+            unfiltered_pdf = joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf")
+            R"plot_quality_profiles($fwd_for_plot, $rev_for_plot, $unfiltered_pdf)"
+
+        finally
+            R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
+        end
+        emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf"))")
+        emit("Log: $log_path")
         nothing
     end
 
@@ -38,6 +58,18 @@
     function filter_trim(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
         emit    = _emitter(progress)
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
+
+        filter_ckpt = ctx.ckpts["filter"]
+        if isfile(filter_ckpt)
+            all_inputs  = vcat(ctx.fwd_files, ctx.rev_files)
+            input_mtime = isempty(all_inputs) ? mtime(config_path) :
+                          max(mtime(config_path), maximum(mtime(f) for f in all_inputs))
+            if mtime(filter_ckpt) > input_mtime
+                @info "Skipping filter_trim: checkpoint up to date"
+                return nothing
+            end
+        end
+
         ft      = ctx.cfg["filter_trim"]
         trunc_len = ft["trunc_len"]
         max_ee    = ft["max_ee"]
@@ -49,46 +81,54 @@
         fwd_out   = ctx.fwd_out
         rev_out   = ctx.rev_out
 
-        emit("Filtering and trimming reads")
-        if ctx.mode == "paired"
-            R"""
-            filter_stats <- filterAndTrim(
-                $in_fwd,  $out_fwd,
-                $in_rev,  $out_rev,
-                truncQ   = $(ft["trunc_q"]),
-                truncLen = $trunc_len,
-                maxEE    = $max_ee,
-                minLen   = $(ft["min_len"]),
-                maxN     = $(ft["max_n"]),
-                matchIDs = $(ft["match_ids"]),
-                rm.phix  = $(ft["rm_phix"]),
-                verbose  = $verbose
-            )
-            """
-        else
-            R"""
-            filter_stats <- filterAndTrim(
-                $in_fwd, $out_fwd,
-                truncQ   = $(ft["trunc_q"]),
-                truncLen = $(trunc_len[1]),
-                maxEE    = $(max_ee[1]),
-                minLen   = $(ft["min_len"]),
-                maxN     = $(ft["max_n"]),
-                rm.phix  = $(ft["rm_phix"]),
-                verbose  = $verbose
-            )
-            """
+        log_path = joinpath(ctx.dirs["Logs"], "filter_trim.log")
+        open(log_path, "w") do io; println(io, "=== filter_trim ===\nconfig: $config_path") end
+        R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
+        try
+            emit("Filtering and trimming reads")
+            if ctx.mode == "paired"
+                R"""
+                filter_stats <- filterAndTrim(
+                    $in_fwd,  $out_fwd,
+                    $in_rev,  $out_rev,
+                    truncQ   = $(ft["trunc_q"]),
+                    truncLen = $trunc_len,
+                    maxEE    = $max_ee,
+                    minLen   = $(ft["min_len"]),
+                    maxN     = $(ft["max_n"]),
+                    matchIDs = $(ft["match_ids"]),
+                    rm.phix  = $(ft["rm_phix"]),
+                    verbose  = $verbose
+                )
+                """
+            else
+                R"""
+                filter_stats <- filterAndTrim(
+                    $in_fwd, $out_fwd,
+                    truncQ   = $(ft["trunc_q"]),
+                    truncLen = $(trunc_len[1]),
+                    maxEE    = $(max_ee[1]),
+                    minLen   = $(ft["min_len"]),
+                    maxN     = $(ft["max_n"]),
+                    rm.phix  = $(ft["rm_phix"]),
+                    verbose  = $verbose
+                )
+                """
+            end
+
+            emit("Plotting filtered quality profiles")
+            fwd_filt = isempty(fwd_out) ? nothing : fwd_out
+            rev_filt = isempty(rev_out) ? nothing : rev_out
+            filtered_pdf = joinpath(ctx.dirs["Figures"], "quality_filtered.pdf")
+            R"plot_quality_profiles($fwd_filt, $rev_filt, $filtered_pdf)"
+
+            ckpt = ctx.ckpts["filter"]
+            R"save(filter_stats, file=$ckpt)"
+        finally
+            R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
-
-        emit("Plotting filtered quality profiles")
-        fwd_filt = isempty(fwd_out) ? nothing : fwd_out
-        rev_filt = isempty(rev_out) ? nothing : rev_out
-        filtered_pdf = joinpath(ctx.dirs["Figures"], "quality_filtered.pdf")
-        R"plot_quality_profiles($fwd_filt, $rev_filt, $filtered_pdf)"
-
-        ckpt = ctx.ckpts["filter"]
-        R"save(filter_stats, file=$ckpt)"
-        emit("Written: $filtered_pdf")
-        emit("Checkpoint: $ckpt")
+        emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_filtered.pdf"))")
+        emit("Checkpoint: $(ctx.ckpts["filter"])")
+        emit("Log: $log_path")
         nothing
     end

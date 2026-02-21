@@ -30,6 +30,7 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
 
     import Downloads
     using Logging, RCall, YAML
+    using ..PipelineTypes
 
     include("dada2/context.jl")   # shared helpers and _pipeline_context
     include("dada2/qc.jl")        # prefilter_qc, filter_trim
@@ -69,6 +70,7 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
     - `checkpoint.RData`   - final R environment snapshot
     """
     function dada2(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing)
+        R"rm(list=ls())"
         prefilter_qc(config_path; progress, input_dir, workspace_root)
         filter_trim(config_path; progress, input_dir, workspace_root); R"gc()"
         learn_errors(config_path; progress, input_dir, workspace_root); R"gc()"
@@ -76,6 +78,35 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
         filter_length(config_path; progress, input_dir, workspace_root); R"gc()"
         chimera_removal(config_path; progress, input_dir, workspace_root); R"gc()"
         assign_taxonomy(config_path; progress, input_dir, workspace_root, taxonomy_db)
+    end
+
+    function dada2(project::ProjectCtx, trimmed::TrimmedReads;
+                   taxonomy_db=nothing, progress=nothing)
+        config_path    = joinpath(project.dir, "dada2.yml")
+        workspace_root = joinpath(project.dir, "dada2")
+        cfg        = YAML.load_file(config_path)
+        out_cfg    = get(cfg, "output", Dict())
+        tables_dir = joinpath(workspace_root, "Tables")
+        result = ASVResult(
+            joinpath(tables_dir, get(out_cfg, "fasta_prefix",     "asvs")          * ".fasta"),
+            joinpath(tables_dir, get(out_cfg, "seq_table_prefix", "seqtab_nochim") * ".csv"),
+            joinpath(tables_dir, get(out_cfg, "taxa_prefix",      "taxonomy")      * ".csv")
+        )
+        trimmed_files = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(trimmed.dir))
+        trimmed_mtime = isempty(trimmed_files) ? 0.0 :
+                        maximum(mtime(joinpath(trimmed.dir, f)) for f in trimmed_files)
+        input_mtime = max(mtime(config_path), trimmed_mtime)
+        if all(isfile, (result.fasta, result.count_table, result.taxonomy)) &&
+           all(f -> mtime(f) > input_mtime, (result.fasta, result.count_table, result.taxonomy))
+            @info "Skipping dada2: outputs up to date in $tables_dir"
+            return result
+        end
+        dada2(config_path;
+              input_dir = trimmed.dir,
+              workspace_root,
+              taxonomy_db,
+              progress)
+        return result
     end
 
 end

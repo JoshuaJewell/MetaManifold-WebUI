@@ -16,6 +16,17 @@
     function learn_errors(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
         emit    = _emitter(progress)
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
+
+        errors_ckpt = ctx.ckpts["errors"]
+        filter_ckpt = ctx.ckpts["filter"]
+        if isfile(errors_ckpt) && isfile(filter_ckpt)
+            input_mtime = max(mtime(config_path), mtime(filter_ckpt))
+            if mtime(errors_ckpt) > input_mtime
+                @info "Skipping learn_errors: checkpoint up to date"
+                return nothing
+            end
+        end
+
         seed    = get(ctx.cfg["dada"], "seed", 123)
         nbases  = ctx.cfg["dada"]["nbases"]
         max_con = ctx.cfg["dada"]["max_consist"]
@@ -23,24 +34,32 @@
         fwd_out = ctx.fwd_out
         rev_out = ctx.rev_out
 
-        emit("Learning error rates")
-        R"set.seed($seed)"
+        log_path = joinpath(ctx.dirs["Logs"], "learn_errors.log")
+        open(log_path, "w") do io; println(io, "=== learn_errors ===\nconfig: $config_path") end
+        R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
+        try
+            emit("Learning error rates")
+            R"set.seed($seed)"
 
-        ctx.mode != "reverse" ?
-            R"fwd_errors <- learnErrors($fwd_out, nbases=$nbases, MAX_CONSIST=$max_con, verbose=$verbose)" :
-            R"fwd_errors <- NULL"
+            ctx.mode != "reverse" ?
+                R"fwd_errors <- learnErrors($fwd_out, nbases=$nbases, MAX_CONSIST=$max_con, verbose=$verbose)" :
+                R"fwd_errors <- NULL"
 
-        ctx.mode != "forward" ?
-            R"rev_errors <- learnErrors($rev_out, nbases=$nbases, MAX_CONSIST=$max_con, verbose=$verbose)" :
-            R"rev_errors <- NULL"
+            ctx.mode != "forward" ?
+                R"rev_errors <- learnErrors($rev_out, nbases=$nbases, MAX_CONSIST=$max_con, verbose=$verbose)" :
+                R"rev_errors <- NULL"
 
-        error_pdf = joinpath(ctx.dirs["Figures"], "error_rates.pdf")
-        R"plot_error_rates(fwd_errors, rev_errors, $error_pdf)"
+            error_pdf = joinpath(ctx.dirs["Figures"], "error_rates.pdf")
+            R"plot_error_rates(fwd_errors, rev_errors, $error_pdf)"
 
-        ckpt = ctx.ckpts["errors"]
-        R"save(fwd_errors, rev_errors, file=$ckpt)"
-        emit("Written: $error_pdf")
-        emit("Checkpoint: $ckpt")
+            ckpt = ctx.ckpts["errors"]
+            R"save(fwd_errors, rev_errors, file=$ckpt)"
+        finally
+            R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
+        end
+        emit("Written: $(joinpath(ctx.dirs["Figures"], "error_rates.pdf"))")
+        emit("Checkpoint: $(ctx.ckpts["errors"])")
+        emit("Log: $log_path")
         nothing
     end
 
@@ -68,49 +87,73 @@
         isfile(ctx.ckpts["errors"]) ||
             error("Error model checkpoint not found. Run learn_errors() first.")
         errors_ckpt = ctx.ckpts["errors"]
-        R"load($errors_ckpt)"
 
-        emit("Denoising reads")
-        pool_method = ctx.cfg["dada"]["pool_method"]
-
-        ctx.mode != "reverse" ?
-            R"dada_fwd <- dada($fwd_out, err=fwd_errors, pool=$pool_method, verbose=$verbose)" :
-            R"dada_fwd <- NULL"
-
-        ctx.mode != "forward" ?
-            R"dada_rev <- dada($rev_out, err=rev_errors, pool=$pool_method, verbose=$verbose)" :
-            R"dada_rev <- NULL"
-
-        emit("Building sequence table")
-        if ctx.mode == "paired"
-            min_overlap   = ctx.cfg["merge"]["min_overlap"]
-            max_mismatch  = ctx.cfg["merge"]["max_mismatch"]
-            trim_overhang = ctx.cfg["merge"]["trim_overhang"]
-            R"""
-            merged <- mergePairs(
-                dada_fwd, $fwd_out,
-                dada_rev, $rev_out,
-                minOverlap   = $min_overlap,
-                maxMismatch  = $max_mismatch,
-                trimOverhang = $trim_overhang,
-                verbose      = $verbose
-            )
-            seq_table <- makeSequenceTable(merged)
-            """
-        else
-            R"""
-            merged    <- NULL
-            seq_table <- makeSequenceTable(if (!is.null(dada_fwd)) dada_fwd else dada_rev)
-            """
+        denoise_ckpt = ctx.ckpts["denoise"]
+        if isfile(denoise_ckpt)
+            input_mtime = max(mtime(config_path), mtime(errors_ckpt))
+            if mtime(denoise_ckpt) > input_mtime
+                @info "Skipping denoise: checkpoint up to date"
+                return nothing
+            end
         end
 
-        len_dist_pdf = joinpath(ctx.dirs["Figures"], "length_distribution.pdf")
-        R"plot_length_distribution(seq_table, $len_dist_pdf)"
+        log_path = joinpath(ctx.dirs["Logs"], "denoise.log")
+        open(log_path, "w") do io; println(io, "=== denoise ===\nconfig: $config_path") end
+        R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
+        try
+            R"load($errors_ckpt)"
 
-        ckpt = ctx.ckpts["denoise"]
-        R"save(dada_fwd, dada_rev, merged, seq_table, file=$ckpt)"
-        emit("Written: $len_dist_pdf")
-        emit("Checkpoint: $ckpt")
+            emit("Denoising reads")
+            pool_method = ctx.cfg["dada"]["pool_method"]
+
+            ctx.mode != "reverse" ?
+                R"dada_fwd <- dada($fwd_out, err=fwd_errors, pool=$pool_method, verbose=$verbose)" :
+                R"dada_fwd <- NULL"
+
+            ctx.mode != "forward" ?
+                R"dada_rev <- dada($rev_out, err=rev_errors, pool=$pool_method, verbose=$verbose)" :
+                R"dada_rev <- NULL"
+
+            emit("Building sequence table")
+            if ctx.mode == "paired"
+                min_overlap   = ctx.cfg["merge"]["min_overlap"]
+                max_mismatch  = ctx.cfg["merge"]["max_mismatch"]
+                trim_overhang = ctx.cfg["merge"]["trim_overhang"]
+                R"""
+                merged <- mergePairs(
+                    dada_fwd, $fwd_out,
+                    dada_rev, $rev_out,
+                    minOverlap   = $min_overlap,
+                    maxMismatch  = $max_mismatch,
+                    trimOverhang = $trim_overhang,
+                    verbose      = $verbose
+                )
+                seq_table <- makeSequenceTable(merged)
+                """
+            else
+                R"""
+                merged    <- NULL
+                seq_table <- makeSequenceTable(if (!is.null(dada_fwd)) dada_fwd else dada_rev)
+                """
+            end
+
+            len_dist_pdf = joinpath(ctx.dirs["Figures"], "length_distribution.pdf")
+            R"""
+            if (sum(seq_table) > 0) {
+                plot_length_distribution(seq_table, $len_dist_pdf)
+            } else {
+                message("Skipping length distribution plot: seq_table is empty after merging")
+            }
+            """
+
+            ckpt = ctx.ckpts["denoise"]
+            R"save(dada_fwd, dada_rev, merged, seq_table, file=$ckpt)"
+        finally
+            R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
+        end
+        emit("Written: $(joinpath(ctx.dirs["Figures"], "length_distribution.pdf"))")
+        emit("Checkpoint: $(ctx.ckpts["denoise"])")
+        emit("Log: $log_path")
         nothing
     end
 
@@ -135,22 +178,46 @@
         isfile(ctx.ckpts["denoise"]) ||
             error("Denoise checkpoint not found. Run denoise() first.")
         denoise_ckpt = ctx.ckpts["denoise"]
-        R"load($denoise_ckpt)"
 
-        band_min = get(ctx.cfg["asv"], "band_size_min", nothing)
-        band_max = get(ctx.cfg["asv"], "band_size_max", nothing)
-        if !isnothing(band_min) && !isnothing(band_max)
-            emit("Filtering by length: $band_min-$band_max bp")
-            R"seq_table <- filter_by_length(seq_table, $band_min, $band_max)"
-            len_filt_pdf = joinpath(ctx.dirs["Figures"], "length_distribution_filtered.pdf")
-            R"plot_length_distribution(seq_table, $len_filt_pdf)"
-            emit("Written: $len_filt_pdf")
-        else
-            emit("No length filter configured (band_size_min/max not set) - passing through")
+        length_ckpt = ctx.ckpts["length"]
+        if isfile(length_ckpt)
+            input_mtime = max(mtime(config_path), mtime(denoise_ckpt))
+            if mtime(length_ckpt) > input_mtime
+                @info "Skipping filter_length: checkpoint up to date"
+                return nothing
+            end
         end
 
-        ckpt = ctx.ckpts["length"]
-        R"save(dada_fwd, dada_rev, merged, seq_table, file=$ckpt)"
-        emit("Checkpoint: $ckpt")
+        log_path = joinpath(ctx.dirs["Logs"], "filter_length.log")
+        open(log_path, "w") do io; println(io, "=== filter_length ===\nconfig: $config_path") end
+        R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
+        try
+            R"load($denoise_ckpt)"
+
+            band_min = get(ctx.cfg["asv"], "band_size_min", nothing)
+            band_max = get(ctx.cfg["asv"], "band_size_max", nothing)
+            if !isnothing(band_min) && !isnothing(band_max)
+                emit("Filtering by length: $band_min-$band_max bp")
+                R"seq_table <- filter_by_length(seq_table, $band_min, $band_max)"
+                len_filt_pdf = joinpath(ctx.dirs["Figures"], "length_distribution_filtered.pdf")
+                R"""
+                if (sum(seq_table) > 0) {
+                    plot_length_distribution(seq_table, $len_filt_pdf)
+                } else {
+                    message("Skipping filtered length distribution plot: seq_table is empty after length filter")
+                }
+                """
+                emit("Written: $len_filt_pdf")
+            else
+                emit("No length filter configured (band_size_min/max not set) - passing through")
+            end
+
+            ckpt = ctx.ckpts["length"]
+            R"save(dada_fwd, dada_rev, merged, seq_table, file=$ckpt)"
+        finally
+            R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
+        end
+        emit("Checkpoint: $(ctx.ckpts["length"])")
+        emit("Log: $log_path")
         nothing
     end

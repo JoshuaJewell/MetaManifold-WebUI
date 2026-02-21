@@ -33,35 +33,36 @@
         return cached
     end
 
-    # Resolve the DADA2 taxonomy database from config when no external path is
-    # provided. Reads taxonomy.database key and looks it up in the databases: section.
+    # Resolve the DADA2 taxonomy database.
+    # Reads from global config/databases.yml; falls back to pipeline config's
+    # databases: section for backward compatibility with old per-project configs.
     function _resolve_taxonomy_db(cfg, emit)
-        tax_cfg = cfg["taxonomy"]
-        db_key  = string(tax_cfg["database"])
-        db_cfg  = get(cfg, "databases", Dict())
-        haskey(db_cfg, db_key) ||
-            error("taxonomy.database = \"$db_key\" not found in databases: section")
-        fmt_cfg = get(db_cfg[db_key], "dada2", nothing)
+        db_key     = string(cfg["taxonomy"]["database"])
+        global_dbs = joinpath(@__DIR__, "..", "..", "config", "databases.yml")
+
+        db_source = if isfile(global_dbs)
+            get(YAML.load_file(global_dbs), "databases", Dict())
+        else
+            get(cfg, "databases", Dict())   # backward compat
+        end
+
+        haskey(db_source, db_key) ||
+            error("taxonomy.database = \"$db_key\" not found in databases config")
+        fmt_cfg = get(db_source[db_key], "dada2", nothing)
         isnothing(fmt_cfg) &&
-            error("databases.$db_key.dada2 is not configured")
-        db_dir = abspath(get(db_cfg, "dir", "./databases"))
+            error("databases.$db_key.dada2 is not configured in config/databases.yml")
+        db_dir = abspath(get(db_source, "dir", "./databases"))
         mkpath(db_dir)
         return _download_db_if_needed("$(db_key)_dada2", fmt_cfg, db_dir, emit)
     end
 
     # Config
     function validate_config(cfg)
-        required = ["workspace", "file_patterns", "filter_trim", "dada",
+        required = ["file_patterns", "filter_trim", "dada",
                     "merge", "asv", "taxonomy", "output"]
         missing_secs = filter(k -> !haskey(cfg, k), required)
         isempty(missing_secs) ||
             error("Missing required config sections: $(join(missing_secs, ", "))")
-
-        ws = cfg["workspace"]
-        haskey(ws, "root")      || error("workspace.root is required")
-        haskey(ws, "input_dir") || error("workspace.input_dir is required")
-        isdir(ws["input_dir"])  ||
-            error("workspace.input_dir does not exist: $(ws["input_dir"])")
 
         mode = get(cfg["file_patterns"], "mode", "paired")
         mode in ("paired", "forward", "reverse") ||
@@ -115,6 +116,7 @@
             "Checkpoints" => joinpath(root, "Checkpoints"),
             "Figures"     => joinpath(root, "Figures"),
             "Filtered"    => joinpath(root, "Filtered"),
+            "Logs"        => joinpath(root, "Logs"),
         )
         for d in values(dirs)
             mkpath(d)
@@ -137,21 +139,18 @@
 
         cfg = YAML.load_file(config_path)
 
-        if !isnothing(input_dir)
-            cfg["workspace"]["input_dir"] = input_dir
-        end
-        if !isnothing(workspace_root)
-            cfg["workspace"]["root"] = workspace_root
-        end
+        isnothing(input_dir)      && error("input_dir must be provided")
+        isnothing(workspace_root) && error("workspace_root must be provided")
+        isdir(input_dir)          || error("input_dir does not exist: $input_dir")
 
         validate_config(cfg)
         verbose = get(cfg, "verbose", true)
         mode    = get(cfg["file_patterns"], "mode", "paired")
-        root    = cfg["workspace"]["root"]
+        root    = workspace_root
         dirs    = setup_workspace(root)
 
         fwd_files, rev_files = find_fastq_files(
-            cfg["workspace"]["input_dir"],
+            input_dir,
             cfg["file_patterns"]["forward"],
             cfg["file_patterns"]["reverse"],
             mode)

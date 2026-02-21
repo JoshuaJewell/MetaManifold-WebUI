@@ -27,50 +27,82 @@
             error("Length filter checkpoint not found. Run filter_length() first.")
         filter_ckpt = ctx.ckpts["filter"]
         length_ckpt = ctx.ckpts["length"]
-        R"load($filter_ckpt)"
-        R"load($length_ckpt)"
 
-        emit("Removing chimeras")
-        denovo_method = ctx.cfg["asv"]["denovo_method"]
-        R"""
-        seq_table_nochim <- removeBimeraDenovo(seq_table, method=$denovo_method, verbose=$verbose)
-        nochim_pct <- sum(seq_table_nochim) / sum(seq_table) * 100
-        message("  Chimeric reads removed: ", round(100 - nochim_pct, 2),
-                "% | Retained: ", round(nochim_pct, 2), "%")
-        """
-
-        # Drop duplicate sample row (single-sample fallback)
-        final_names = ctx.sample_names
-        if ctx.single_sample
-            R"filter_stats     <- filter_stats[1, , drop=FALSE]"
-            mode != "reverse" && R"dada_fwd <- dada_fwd[1]"
-            mode != "forward" && R"dada_rev <- dada_rev[1]"
-            mode == "paired"  && R"merged   <- merged[1]"
-            R"seq_table_nochim <- seq_table_nochim[1, , drop=FALSE]"
-            final_names = [ctx.sample_names[1]]
+        chimera_ckpt = ctx.ckpts["chimera"]
+        if isfile(chimera_ckpt)
+            input_mtime = max(mtime(config_path), mtime(filter_ckpt), mtime(length_ckpt))
+            if mtime(chimera_ckpt) > input_mtime
+                @info "Skipping chimera_removal: checkpoint up to date"
+                return nothing
+            end
         end
 
-        emit("Computing pipeline stats")
-        stats_csv = joinpath(ctx.dirs["Tables"], "pipeline_stats.csv")
-        R"""
-        stats <- compute_pipeline_stats(filter_stats, dada_fwd, dada_rev, merged,
-                                        seq_table_nochim, $final_names, $mode)
-        write.csv(stats, $stats_csv, quote=FALSE)
-        if ($verbose) print(stats)
-        """
-
-        emit("Writing core output tables")
         seq_prefix   = get(ctx.cfg["output"], "seq_table_prefix", "seqtab_nochim")
         fasta_prefix = get(ctx.cfg["output"], "fasta_prefix", "asvs")
         tables_dir   = ctx.dirs["Tables"]
-        R"write_seq_table(seq_table_nochim, $tables_dir, $seq_prefix)"
-        R"index <- write_fasta(seq_table_nochim, $tables_dir, $fasta_prefix)"
 
-        ckpt = ctx.ckpts["chimera"]
-        R"save(seq_table_nochim, index, file=$ckpt)"
-        emit("Written: $stats_csv")
+        log_path = joinpath(ctx.dirs["Logs"], "chimera_removal.log")
+        open(log_path, "w") do io; println(io, "=== chimera_removal ===\nconfig: $config_path") end
+        R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
+        try
+            R"load($filter_ckpt)"
+            R"load($length_ckpt)"
+
+            has_data = rcopy(R"isTRUE(sum(seq_table, na.rm=TRUE) > 0)")
+            emit("Removing chimeras")
+            if has_data
+                denovo_method = ctx.cfg["asv"]["denovo_method"]
+                R"""
+                seq_table_nochim <- removeBimeraDenovo(seq_table, method=$denovo_method, verbose=$verbose)
+                nochim_pct <- sum(seq_table_nochim) / sum(seq_table) * 100
+                message("  Chimeric reads removed: ", round(100 - nochim_pct, 2),
+                        "% | Retained: ", round(nochim_pct, 2), "%")
+                """
+            else
+                R"seq_table_nochim <- seq_table"
+                @info "Chimera removal skipped: seq_table is empty"
+            end
+
+            # Drop duplicate sample row (single-sample fallback)
+            final_names = ctx.sample_names
+            if ctx.single_sample
+                R"filter_stats     <- filter_stats[1, , drop=FALSE]"
+                mode != "reverse" && R"dada_fwd <- dada_fwd[1]"
+                mode != "forward" && R"dada_rev <- dada_rev[1]"
+                mode == "paired"  && R"merged   <- merged[1]"
+                R"seq_table_nochim <- seq_table_nochim[1, , drop=FALSE]"
+                final_names = [ctx.sample_names[1]]
+            end
+
+            emit("Computing pipeline stats")
+            stats_csv = joinpath(ctx.dirs["Tables"], "pipeline_stats.csv")
+            R"""
+            stats <- compute_pipeline_stats(filter_stats, dada_fwd, dada_rev, merged,
+                                            seq_table_nochim, $final_names, $mode)
+            write.csv(stats, $stats_csv, quote=FALSE)
+            if ($verbose) print(stats)
+            """
+
+            emit("Writing core output tables")
+            if has_data
+                R"write_seq_table(seq_table_nochim, $tables_dir, $seq_prefix)"
+                R"index <- write_fasta(seq_table_nochim, $tables_dir, $fasta_prefix)"
+            else
+                R"index <- data.frame(SeqName=character(0), sequence=character(0))"
+                touch(joinpath(tables_dir, seq_prefix   * ".csv"))
+                touch(joinpath(tables_dir, fasta_prefix * ".fasta"))
+                touch(joinpath(tables_dir, fasta_prefix * ".csv"))
+            end
+
+            ckpt = ctx.ckpts["chimera"]
+            R"save(seq_table_nochim, index, file=$ckpt)"
+        finally
+            R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
+        end
+        emit("Written: $(joinpath(tables_dir, "pipeline_stats.csv"))")
         emit("Written: $(joinpath(tables_dir, seq_prefix * ".csv"))")
         emit("Written: $(joinpath(tables_dir, fasta_prefix * ".fasta"))")
-        emit("Checkpoint: $ckpt")
+        emit("Checkpoint: $(ctx.ckpts["chimera"])")
+        emit("Log: $log_path")
         nothing
     end

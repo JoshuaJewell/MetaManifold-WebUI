@@ -184,6 +184,7 @@ function download_vsearch()::String
     dest
 end
 
+
 function download_fastqc()::String
     # Pin to a known-good version; update periodically.
     version = "0.12.1"
@@ -335,7 +336,7 @@ function resolve_tool(
     install_fn::Union{Function,Nothing} = nothing
 )::Union{String,Nothing}
     println()
-    println("  ─── $display_name ─────────────────────────────────────────")
+    println("  --- $display_name -------------------------------------------------")
 
     bin = bin_name(key)
 
@@ -401,9 +402,9 @@ end
 ## Main
 function main()
     println()
-    println("╔═══════════════════════════════════════════╗")
-    println("║  MetabarcodingPipeline — Install Script   ║")
-    println("╚═══════════════════════════════════════════╝")
+    println("+-------------------------------------------+")
+    println("|  MetabarcodingPipeline - Install Script   |")
+    println("+-------------------------------------------+")
     UPDATE_MODE && println("  Mode: UPDATE")
     println()
 
@@ -437,7 +438,7 @@ function main()
 
     # R packages
     println()
-    println("  ─── R packages ─────────────────────────────────────────────")
+    println("  --- R packages -----------------------------------------------------")
     r_packages = ["dada2", "tidyverse"]
     if prompt_yn("  Install/check R packages (dada2, tidyverse)?")
         install_r_packages(r_packages)

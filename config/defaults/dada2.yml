@@ -1,7 +1,3 @@
-workspace:
-  root: "./output/dada2/"
-  input_dir: "./output/cutadapt/"   # path to trimmed FASTQ directory
-
 file_patterns:
   forward: "_R1_trimmed.fastq.gz"
   reverse: "_R2_trimmed.fastq.gz"
@@ -34,18 +30,8 @@ asv:
   band_size_max: 430
   denovo_method: "consensus"
 
-databases:
-  dir: "./databases"          # shared cache directory; absolute or relative to working directory
-  pr2:
-    dada2:
-      uri: "https://github.com/pr2database/pr2database/releases/download/v5.0.0/pr2_version_5.0.0_SSU_dada2.fasta.gz"
-      local: ~                # set to a local path to skip download
-    vsearch:
-      uri: "https://github.com/pr2database/pr2database/releases/download/v5.1.0.0/pr2_version_5.1.0_SSU_taxo_long.fasta.gz"
-      local: ~                # set to a local path to skip download
-
 taxonomy:
-  database: pr2               # key into databases: section above
+  database: pr2               # key into config/databases.yml
   multithread: 4              # higher values increase memory use significantly (mclapply forks one process per thread)
   # DISCLAIMER: Configuring a remote host causes this pipeline to connect via SSH,
   # transfer files, execute Rscript, and delete the staging directory on the remote

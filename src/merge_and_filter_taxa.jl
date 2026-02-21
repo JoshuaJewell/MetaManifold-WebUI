@@ -5,8 +5,9 @@ module TaxonomyTableTools
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 using CSV, DataFrames, Logging, YAML
+using ..PipelineTypes
 
-export merge_taxonomy_counts, filter_table
+export merge_taxonomy_counts, filter_table, merge_taxa
 
     # Import vsearch taxonomy
     function import_vsearch(file::AbstractString)
@@ -66,7 +67,7 @@ export merge_taxonomy_counts, filter_table
         return header, out_rows
     end
 
-    # Sorting helper
+    # Sorting helper for DADA2 seq IDs (seq1, seq2, ...).
     function seqnum(x)
         if ismissing(x)
             return typemax(Int)
@@ -124,6 +125,10 @@ export merge_taxonomy_counts, filter_table
             end
         end
 
+        # Fallback: if no data rows, detect seq-ID column by name
+        if isnothing(seq_id_col)
+            "SeqName" in names(df_counts) && (seq_id_col = "SeqName")
+        end
         if isnothing(seq_id_col)
             error("Cannot find a column with seq IDs (seq1, seq2, ...) in counts file!")
         end
@@ -266,6 +271,57 @@ export merge_taxonomy_counts, filter_table
         @info "Filtering complete. $(nrow(df))/$(nrow(merged_df)) rows retained."
 
         return df
+    end
+
+    function merge_taxa(project::ProjectCtx, source::ASVResult, tax::TaxonomyHits)
+        config_path = joinpath(project.dir, "merge_taxa.yml")
+        cfg         = YAML.load_file(config_path)
+        filter_list = get(cfg, "filters", [nothing])
+        merge_dir   = joinpath(project.dir, "merged")
+
+        data_mtime = max(mtime(tax.tsv), mtime(source.taxonomy), mtime(config_path))
+        merged_csv = joinpath(merge_dir, "merged.csv")
+
+        # Determine what needs to be (re-)computed.
+        need_base     = !isfile(merged_csv) || mtime(merged_csv) <= data_mtime
+        stale_filters = Pair{String,String}[]  # stem => filter_path
+        tables        = Dict{String,String}("merged" => merged_csv)
+
+        for entry in filter_list
+            isnothing(entry) && continue
+            filter_name  = string(entry)
+            filter_path  = joinpath(project.config_dir, "filters", filter_name)
+            stem         = splitext(filter_name)[1]
+            output_csv   = joinpath(merge_dir, stem * ".csv")
+            tables[stem] = output_csv
+            if !isfile(output_csv) || mtime(output_csv) <= max(data_mtime, mtime(filter_path))
+                push!(stale_filters, stem => filter_path)
+            else
+                @info "Skipping merge_taxa filter '$stem': $output_csv up to date"
+            end
+        end
+
+        if !need_base && isempty(stale_filters)
+            @info "Skipping merge_taxa: all outputs up to date in $merge_dir"
+            return MergedTables(tables)
+        end
+
+        mkpath(merge_dir)
+        df = need_base ? merge_taxonomy_counts(tax.tsv, source.taxonomy) :
+                         CSV.read(merged_csv, DataFrame)
+
+        if need_base
+            CSV.write(merged_csv, df)
+            @info "Written: $merged_csv"
+        end
+
+        for (stem, filter_path) in stale_filters
+            output_csv = tables[stem]
+            CSV.write(output_csv, filter_table(df, filter_path))
+            @info "Written: $output_csv"
+        end
+
+        return MergedTables(tables)
     end
 
 end

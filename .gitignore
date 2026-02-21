@@ -254,7 +254,6 @@ rsconnect/
 # Things with ambiguous intellectual property
 internal
 data/
-cutadapt/output_*
 
 ### Lock files
 .~lock.*
@@ -265,8 +264,10 @@ bin/
 databases/
 config/tools.yml
 config/dada2.yml
+config/databases.yml
 
 ### Bits I don't want to share yet
 hide.*
-output/
+projects/
 pipelinesteps.txt
+archive/

@@ -7,9 +7,6 @@
 
     **Stage 7** - Assign taxonomy to ASVs and write the combined output table.
 
-    This is typically the longest step. Set `taxonomy.skip = true` in config to
-    skip assignment and output sequence/count data only.
-
     Requires: `Checkpoints/ckpt_chimera.RData`
     Saves: `Checkpoints/checkpoint.RData`
     """
@@ -22,7 +19,8 @@
     # or any other consequences arising from misconfiguration or misuse of this feature.
     function _assign_taxonomy_remote(emit, chimera_ckpt, db_path, tables_dir,
                                       checkpoint, taxa_prefix, multithread,
-                                      min_boot, tax_levels, verbose, remote_cfg)
+                                      min_boot, tax_levels, verbose, remote_cfg,
+                                      log_path)
         host      = remote_cfg["host"]
         rscript   = get(remote_cfg, "rscript", "Rscript")
         base_dir  = get(remote_cfg, "staging_dir", nothing)
@@ -83,7 +81,9 @@
                       "verbose=$verbose_str"
 
         emit("  Running Rscript on $host:$staging_dir")
-        run(ssh(host, remote_cmd))
+        open(log_path, "a") do io
+            run(pipeline(ssh(host, remote_cmd); stdout=io, stderr=io))
+        end
 
         emit("  Retrieving results from $host")
         run(scp("$host:$remote_tables/$taxa_prefix.csv",              "$tables_dir/"))
@@ -112,6 +112,16 @@
         isfile(ctx.ckpts["chimera"]) ||
             error("Chimera checkpoint not found. Run chimera_removal() first.")
 
+        chimera_ckpt = ctx.ckpts["chimera"]
+        checkpoint   = joinpath(ctx.dirs["Checkpoints"], "checkpoint.RData")
+        if isfile(checkpoint)
+            input_mtime = max(mtime(config_path), mtime(chimera_ckpt))
+            if mtime(checkpoint) > input_mtime
+                @info "Skipping assign_taxonomy: checkpoint up to date"
+                return nothing
+            end
+        end
+
         # Drop all data objects accumulated from prior stages before the
         # memory-intensive taxonomy assignment runs. Named globals in R's
         # environment are reachable and gc() won't collect them; rm() them
@@ -124,14 +134,12 @@
         gc()
         """
 
-        chimera_ckpt  = ctx.ckpts["chimera"]
         seq_prefix    = get(ctx.cfg["output"], "seq_table_prefix", "seqtab_nochim")
         fasta_prefix  = get(ctx.cfg["output"], "fasta_prefix", "asvs")
         taxa_prefix   = get(ctx.cfg["output"], "taxa_prefix", "taxonomy")
         combined_file = get(ctx.cfg["output"], "combined_filename", "tax_counts.csv")
         asv_file      = get(ctx.cfg["output"], "asv_filename", "asv_counts.csv")
         tables_dir    = ctx.dirs["Tables"]
-        checkpoint    = joinpath(ctx.dirs["Checkpoints"], "checkpoint.RData")
         multithread   = get(ctx.cfg["taxonomy"], "multithread", 4)
         min_boot      = get(ctx.cfg["taxonomy"], "min_boot", 0)
         tax_levels    = ctx.cfg["taxonomy"]["levels"]
@@ -145,29 +153,51 @@
         db_path = skip_local_db ? nothing :
                   isnothing(taxonomy_db) ? _resolve_taxonomy_db(ctx.cfg, emit) : taxonomy_db
 
-        if use_remote
+        R"load($chimera_ckpt)"
+        has_data = rcopy(R"isTRUE(sum(seq_table_nochim, na.rm=TRUE) > 0)")
+
+        log_path = joinpath(ctx.dirs["Logs"], "assign_taxonomy.log")
+        open(log_path, "w") do io; println(io, "=== assign_taxonomy ===\nconfig: $config_path") end
+
+        if !has_data
+            @info "Taxonomy assignment skipped: no ASVs in seq_table_nochim"
+            R"taxa_df <- data.frame()"
+            R"save(seq_table_nochim, index, taxa_df, file=$checkpoint)"
+            for suffix in (taxa_prefix * ".csv", taxa_prefix * "_bootstraps.csv",
+                           taxa_prefix * "_combined.csv", combined_file, asv_file)
+                touch(joinpath(tables_dir, suffix))
+            end
+        elseif use_remote
             emit("Assigning taxonomy (remote: $(remote_cfg["host"]))")
             _assign_taxonomy_remote(emit, chimera_ckpt, db_path, tables_dir,
                                     checkpoint, taxa_prefix, multithread,
-                                    min_boot, tax_levels, verbose, remote_cfg)
+                                    min_boot, tax_levels, verbose, remote_cfg,
+                                    log_path)
             R"load($checkpoint)"
+            R"write_combined_table(taxa_df, index, seq_table_nochim, $tables_dir, $combined_file, $asv_file)"
+            emit("Log: $log_path")
         else
-            emit("Assigning taxonomy")
-            R"load($chimera_ckpt)"
-            R"""
-            taxa_result <- run_assign_taxonomy(
-                seq_table_nochim, $db_path,
-                list(multithread=$multithread, min_boot=$min_boot, levels=$tax_levels),
-                $verbose)
-            taxa_df <- write_taxa_table(taxa_result$tax, taxa_result$boot, index,
-                                        $tables_dir, $taxa_prefix)
-            """
-            R"gc()"
-            R"save(seq_table_nochim, index, taxa_df, file=$checkpoint)"
+            R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
+            try
+                emit("Assigning taxonomy")
+                R"""
+                taxa_result <- run_assign_taxonomy(
+                    seq_table_nochim, $db_path,
+                    list(multithread=$multithread, min_boot=$min_boot, levels=$tax_levels),
+                    $verbose)
+                taxa_df <- write_taxa_table(taxa_result$tax, taxa_result$boot, index,
+                                            $tables_dir, $taxa_prefix)
+                """
+                R"gc()"
+                R"save(seq_table_nochim, index, taxa_df, file=$checkpoint)"
+            finally
+                R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
+            end
+            R"write_combined_table(taxa_df, index, seq_table_nochim, $tables_dir, $combined_file, $asv_file)"
+            emit("Log: $log_path")
         end
 
         emit("Checkpoint: $checkpoint")
-        R"write_combined_table(taxa_df, index, seq_table_nochim, $tables_dir, $combined_file, $asv_file)"
 
         emit("Pipeline complete. Outputs:")
         emit("  $(joinpath(tables_dir, seq_prefix * ".csv"))")
