@@ -44,10 +44,15 @@
 
         # Use a ControlMaster socket so the password is entered once and all
         # subsequent ssh/scp calls reuse the existing connection silently.
-        ctl = "/tmp/ssh_mux_$run_id"
-        ssh = (args...) -> `ssh -o ControlMaster=auto -o ControlPath=$ctl -o ControlPersist=yes $args`
-        scp = (args...) -> `scp -o ControlMaster=auto -o ControlPath=$ctl -q $args`
+        # ConnectTimeout: fail fast instead of hanging on unreachable hosts.
+        # NumberOfPasswordPrompts=1: fail immediately on wrong password.
+        # ServerAlive*: detect stale connections during long Rscript runs.
+        ctl      = "/tmp/ssh_mux_$run_id"
+        ssh_opts = `-o ControlMaster=auto -o ControlPath=$ctl -o ControlPersist=yes -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=3`
+        ssh = (args...) -> `ssh $ssh_opts $args`
+        scp = (args...) -> `scp $ssh_opts $args`
 
+        emit("  Connecting to $host (enter SSH password if prompted)...")
         emit("  Setting up staging directory on $host")
         run(ssh(host, "mkdir -p $remote_tables"))
 
@@ -68,6 +73,8 @@
 
         levels_str  = join(tax_levels, ",")
         verbose_str = verbose ? "true" : "false"
+        # Julia Bool true/false -> R TRUE/FALSE; integers pass through as-is.
+        mt_str      = multithread isa Bool ? (multithread ? "TRUE" : "FALSE") : string(multithread)
         remote_cmd  = "$rscript $staging_dir/taxonomy_remote.r " *
                       "functions=$staging_dir/dada2_functions.r " *
                       "ckpt=$staging_dir/ckpt_chimera.RData " *
@@ -75,7 +82,7 @@
                       "tables=$remote_tables " *
                       "save=$remote_ckpt " *
                       "prefix=$taxa_prefix " *
-                      "multithread=$multithread " *
+                      "multithread=$mt_str " *
                       "min_boot=$min_boot " *
                       "levels=$levels_str " *
                       "verbose=$verbose_str"
@@ -114,12 +121,12 @@
 
         chimera_ckpt = ctx.ckpts["chimera"]
         checkpoint   = joinpath(ctx.dirs["Checkpoints"], "checkpoint.RData")
-        if isfile(checkpoint)
-            input_mtime = max(mtime(config_path), mtime(chimera_ckpt))
-            if mtime(checkpoint) > input_mtime
-                @info "Skipping assign_taxonomy: checkpoint up to date"
-                return nothing
-            end
+        hash_file    = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        if isfile(checkpoint) &&
+           !_section_stale(config_path, "dada2", hash_file) &&
+           mtime(checkpoint) > mtime(chimera_ckpt)
+            @info "Skipping assign_taxonomy: checkpoint up to date"
+            return nothing
         end
 
         # Drop all data objects accumulated from prior stages before the
@@ -133,12 +140,13 @@
         rm(.data_objs)
         gc()
         """
+        _source_r_functions()
 
         seq_prefix    = get(ctx.cfg["output"], "seq_table_prefix", "seqtab_nochim")
         fasta_prefix  = get(ctx.cfg["output"], "fasta_prefix", "asvs")
         taxa_prefix   = get(ctx.cfg["output"], "taxa_prefix", "taxonomy")
-        combined_file = get(ctx.cfg["output"], "combined_filename", "tax_counts.csv")
-        asv_file      = get(ctx.cfg["output"], "asv_filename", "asv_counts.csv")
+        combined_file = "tax_counts.csv"
+        asv_file      = "asv_counts.csv"
         tables_dir    = ctx.dirs["Tables"]
         multithread   = get(ctx.cfg["taxonomy"], "multithread", 4)
         min_boot      = get(ctx.cfg["taxonomy"], "min_boot", 0)
@@ -197,6 +205,7 @@
             emit("Log: $log_path")
         end
 
+        _write_section_hash(config_path, "dada2", hash_file)
         emit("Checkpoint: $checkpoint")
 
         emit("Pipeline complete. Outputs:")

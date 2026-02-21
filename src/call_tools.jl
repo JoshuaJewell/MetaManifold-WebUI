@@ -9,6 +9,7 @@ export cutadapt, vsearch, multiqc, fastqc, cdhit
     using YAML
     using Logging
     using ..PipelineTypes
+    using ..Config
 
     # Run cmd_str via bash, capturing stdout+stderr to log_path.
     # On failure, prints the log to stderr before rethrowing so the error is visible.
@@ -371,54 +372,64 @@ export cutadapt, vsearch, multiqc, fastqc, cdhit
 
     function cutadapt(project::ProjectCtx;
                       cutadapt_bin = tool_bin("cutadapt"))
-        config_path   = joinpath(project.dir, "cutadapt.yml")
+        config_path   = write_run_config(project)
         primers_path  = joinpath(project.config_dir, "primers.yml")
-        cfg           = YAML.load_file(config_path)
+        cfg           = get(YAML.load_file(config_path), "cutadapt", Dict())
         primer_pairs  = cfg["primer_pairs"]
         optional_args = get(cfg, "optional_args", "-m 200 --discard-untrimmed")
         cutadapt_dir  = joinpath(project.dir, "cutadapt")
+        hash_file     = joinpath(cutadapt_dir, "config.hash")
         if isdir(cutadapt_dir)
-            trimmed   = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(cutadapt_dir))
-            cfg_mtime = max(mtime(config_path), mtime(primers_path))
-            if !isempty(trimmed) && all(f -> mtime(joinpath(cutadapt_dir, f)) > cfg_mtime, trimmed)
+            trimmed = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(cutadapt_dir))
+            if !isempty(trimmed) &&
+               !_section_stale(config_path, "cutadapt", hash_file) &&
+               all(f -> mtime(joinpath(cutadapt_dir, f)) > mtime(primers_path), trimmed)
                 @info "Skipping cutadapt: trimmed reads up to date in $cutadapt_dir"
                 return TrimmedReads(cutadapt_dir)
             end
         end
+        mkpath(cutadapt_dir)
         run_cutadapt(get_primer_args(primer_pairs, primers_path), optional_args,
                      project.data_dir, cutadapt_dir, cutadapt_bin)
+        _write_section_hash(config_path, "cutadapt", hash_file)
         return TrimmedReads(cutadapt_dir)
     end
 
     function vsearch(project::ProjectCtx, input::HasFasta, reference_database::String;
                      vsearch_bin = tool_bin("vsearch"))
-        config_path  = joinpath(project.dir, "vsearch.yml")
-        cfg          = YAML.load_file(config_path)
+        config_path   = write_run_config(project)
+        cfg           = get(YAML.load_file(config_path), "vsearch", Dict())
         optional_args = get(cfg, "optional_args", "--id 0.75 --query_cov 0.8")
-        vsearch_dir  = joinpath(project.dir, "vsearch")
-        tsv          = joinpath(vsearch_dir, "taxonomy.tsv")
-        cfg_mtime    = max(mtime(config_path), mtime(input.fasta))
-        if isfile(tsv) && mtime(tsv) > cfg_mtime
+        vsearch_dir   = joinpath(project.dir, "vsearch")
+        tsv           = joinpath(vsearch_dir, "taxonomy.tsv")
+        hash_file     = joinpath(vsearch_dir, "config.hash")
+        if isfile(tsv) &&
+           !_section_stale(config_path, "vsearch", hash_file) &&
+           mtime(tsv) > mtime(input.fasta)
             @info "Skipping vsearch: $tsv up to date"
             return TaxonomyHits(tsv)
         end
         vsearch(input.fasta, reference_database, vsearch_dir; optional_args, vsearch_bin)
+        _write_section_hash(config_path, "vsearch", hash_file)
         return TaxonomyHits(tsv)
     end
 
     function cdhit(project::ProjectCtx, input::ASVResult;
                    cdhit_bin = tool_bin("cd_hit_est"))
-        config_path  = joinpath(project.dir, "cdhit.yml")
-        cfg          = YAML.load_file(config_path)
+        config_path   = write_run_config(project)
+        cfg           = get(YAML.load_file(config_path), "cdhit", Dict())
         optional_args = get(cfg, "optional_args", "-c 0.9")
-        cdhit_dir    = joinpath(project.dir, "cdhit")
-        new_fasta    = joinpath(cdhit_dir, basename(input.fasta))
-        cfg_mtime    = max(mtime(config_path), mtime(input.fasta))
-        if isfile(new_fasta) && mtime(new_fasta) > cfg_mtime
+        cdhit_dir     = joinpath(project.dir, "cdhit")
+        new_fasta     = joinpath(cdhit_dir, basename(input.fasta))
+        hash_file     = joinpath(cdhit_dir, "config.hash")
+        if isfile(new_fasta) &&
+           !_section_stale(config_path, "cdhit", hash_file) &&
+           mtime(new_fasta) > mtime(input.fasta)
             @info "Skipping cdhit: $new_fasta up to date"
             return ASVResult(new_fasta, input.count_table, input.taxonomy)
         end
         new_fasta = cdhit(input.fasta, cdhit_dir; optional_args, cdhit_bin)
+        _write_section_hash(config_path, "cdhit", hash_file)
         return ASVResult(new_fasta, input.count_table, input.taxonomy)
     end
 end

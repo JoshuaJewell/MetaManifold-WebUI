@@ -59,36 +59,31 @@ When a remote SSH path is set, the pipeline routes that tool's invocations throu
 
 ```julia
 projects = new_project("MyProject")
-# Bootstraps projects/MyProject/ mirroring data/MyProject/ subdirectory structure - ensure "MyProject" name matches folder in data/.
-# Creates dada2.yml, cutadapt.yml, vsearch.yml, cdhit.yml, merge_taxa.yml at each level.
+# Bootstraps projects/MyProject/ mirroring data/MyProject/ subdirectory structure.
+# Ensure "MyProject" matches the folder name under data/.
+# Creates an empty pipeline.yml override stub at each level (study, group, run).
 ```
 
-Re-running `new_project` never overwrites existing configs. To reset a level to its parent's
-settings, delete that config file and re-run.
-
-Or manually:
-```bash
-mkdir -p projects/MyProject
-cp config/defaults/dada2.yml projects/MyProject/dada2.yml
-cp config/defaults/cutadapt.yml projects/MyProject/cutadapt.yml
-# etc.
-```
+Re-running `new_project` never overwrites existing files. To reset a level to its parent's settings, delete that level's `pipeline.yml` and re-run.
 
 ## Configuration
 
-Global configuration lives in `config/`; per-project pipeline configs live in `projects/{name}/`. When per-run configs are missing, they are automatically populated with per-project configs, which are populated by global config if missing:
+Pipeline settings use a cascade: each level overrides the one above it, and any key you omit is inherited from the nearest ancestor. The fully merged result is written to `run_config.yml` at runtime - that is the single place to see exactly what was used for a run.
 
 | File | Purpose |
 |------|---------|
-| `config/databases.yml` | Database URIs and optional local paths |
-| `config/primers.yml` | Primer sequences and pair definitions |
+| `config/defaults/` | Canonical defaults for every setting - do not edit |
 | `config/filters/` | Directory of taxonomic filter configs |
+| `config/databases.yml` | Database URI's and optional local paths |
+| `config/primers.yml` | Primer sequences and pair definitions |
 | `config/tools.yml` | Tool binary paths (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est) |
-| `projects/{name}/cutadapt.yml` | Primer pair selection and cutadapt optional args |
-| `projects/{name}/dada2.yml` | DADA2 pipeline parameters |
-| `projects/{name}/vsearch.yml` | vsearch alignment thresholds |
-| `projects/{name}/cdhit.yml` | cd-hit-est clustering threshold (optional stage) |
-| `projects/{name}/merge_taxa.yml` | Which filter configs to apply in the merge step |
+| `config/pipeline.yml` | Machine-level overrides (lowest user-editable precedence) |
+| `projects/{name}/pipeline.yml` | Study-level overrides |
+| `projects/{name}/{group}/pipeline.yml` | Group-level overrides (intermediate directories) |
+| `projects/{name}/{run}/pipeline.yml` | Run-level overrides (highest precedence) |
+| `projects/{name}/{run}/run_config.yml` | Generated merged config (provenance) - do not edit |
+
+Each `pipeline.yml` stub is created with a comment block explaining that level's role. Write only the keys you want to change; omit the rest.
 
 ### Configuring databases (`config/databases.yml`)
 
@@ -129,95 +124,91 @@ Pairs:
 
 Store all primer pairs in here and reference whichever combinations you need per project. Shared primers across pairs (same forward primer in two pairs) are automatically deduplicated in the `cutadapt` invocation since otherwise it complains a bit. If you need duplicates, you must create the same sequence under a different name.
 
-### Configuring cutadapt (`projects/{name}/cutadapt.yml`)
+### Configuring cutadapt (`cutadapt:` in `pipeline.yml`)
 
-Selects which primer pairs to apply and passes additional arguments to cutadapt. Inherits from `config/cutadapt.yml` if no per-project file exists.
+Selects which primer pairs to apply and passes additional arguments to cutadapt.
 
 ```yaml
-# Names must match keys in the Pairs section of config/primers.yml.
-primer_pairs:
-  - PrimerPair1
-  - PrimerPair2
+cutadapt:
+  # Names must match keys in the Pairs section of config/primers.yml.
+  primer_pairs:
+    - PrimerPair1
+    - PrimerPair2
 
-optional_args: "-m 200 --discard-untrimmed"
+  optional_args: "-m 200 --discard-untrimmed"
 ```
 
 `optional_args` is passed verbatim to cutadapt after the primer arguments. Here, the `-m` flag sets the minimum read length after trimming; `--discard-untrimmed` drops reads with no primer match.
 
-### Configuring DADA2 (`projects/{name}/dada2.yml`)
+### Configuring DADA2 (`dada2:` in `pipeline.yml`)
 
 > **Performance tip:** For large datasets and reference databases, consider installing my [optimised DADA2 fork](https://github.com/JoshuaJewell/dada2) in place of the standard Bioconductor package. It provides CPU and Nvidia CUDA GPU acceleration for taxonomy assignment with no API or config changes required. This fork is experimental - if you encounter unexpected results, the standard Bioconductor release should be considered the reference implementation. Ultimately, I had to offload `assignTaxonomy()` to a remote server (`taxonomy.remote` setting).
 
 ```yaml
-file_patterns:
-  forward: "_R1_trimmed.fastq.gz"
-  reverse: "_R2_trimmed.fastq.gz"
-  sample_name_split: "_"       # character to split filenames on
-  sample_name_index: 1         # which element is the sample name (1-based)
-  mode: "paired"               # paired | forward | reverse
+dada2:
+  file_patterns:
+    mode: "paired"               # paired | forward | reverse
 
-# Filter and trim - DADA2's filterAndTrim():
-filter_trim:
-  trunc_q: 2
-  trunc_len: [220, 220]        # [forward, reverse]; first value used for single-end mode
-  max_ee: [3, 3]               # maximum expected errors in F and R reads
-  min_len: 175
-  max_n: 0
-  match_ids: true
-  rm_phix: true
+  # Filter and trim - DADA2's filterAndTrim():
+  filter_trim:
+    trunc_q: 2
+    trunc_len: [220, 220]        # [forward, reverse]; first value used for single-end mode
+    max_ee: [3, 3]               # maximum expected errors in F and R reads
+    min_len: 175
+    max_n: 0
+    match_ids: true
+    rm_phix: true
 
-# Denoising - learnErrors() and dada():
-dada:
-  seed: 123
-  nbases: 200000000
-  max_consist: 15
-  pool_method: "pseudo"        # none | pseudo | true
+  # Denoising - learnErrors() and dada():
+  dada:
+    seed: 123
+    nbases: 200000000
+    max_consist: 15
+    pool_method: "pseudo"        # none | pseudo | true
 
-# Merging - mergePairs(), paired mode only:
-merge:
-  min_overlap: 20
-  max_mismatch: 0
-  trim_overhang: true
+  # Merging - mergePairs(), paired mode only:
+  merge:
+    min_overlap: 20
+    max_mismatch: 0
+    trim_overhang: true
 
-# ASV length filtering and chimera removal:
-asv:
-  band_size_min: 200           # null to skip length filtering
-  band_size_max: 430
-  denovo_method: "consensus"   # consensus | pooled | per-sample
+  # ASV length filtering and chimera removal:
+  asv:
+    band_size_min: 200           # null to skip length filtering
+    band_size_max: 430
+    denovo_method: "consensus"   # consensus | pooled | per-sample
 
-# Taxonomy - assignTaxonomy() against the configured database:
-taxonomy:
-  database: pr2                # key into config/databases.yml
-  multithread: true            # threads for assignTaxonomy()
-  min_boot: 0                  # minimum bootstrap confidence to retain (0-100)
-  levels:
-    - "Domain"
-    - "Supergroup"
-    - "Division"
-    - "Subdivision"
-    - "Class"
-    - "Order"
-    - "Family"
-    - "Genus"
-    - "Species"
+  # Taxonomy - assignTaxonomy() against the configured database:
+  taxonomy:
+    database: pr2                # key into config/databases.yml
+    multithread: 4               # threads for assignTaxonomy(); higher values increase memory use
+    min_boot: 0                  # minimum bootstrap confidence to retain (0-100)
+    levels:
+      - "Domain"
+      - "Supergroup"
+      - "Division"
+      - "Subdivision"
+      - "Class"
+      - "Order"
+      - "Family"
+      - "Genus"
+      - "Species"
 
-  # Optional: offload the memory-intensive assignTaxonomy() step to a remote
-  # server via SSH. Omit or set host to null to run locally.
-  # DISCLAIMER: You are solely responsible for ensuring you have authorisation
-  # to use the configured host. See config/defaults/dada2.yml for the full disclaimer.
-  remote:
-    host: ~                    # user@hostname
-    rscript: "Rscript"         # path to Rscript on the server
-    staging_dir: "/absolute/path/on/server"
-    db_path: ~                 # absolute path to database on server (null = transfer local copy)
+    # Optional: offload the memory-intensive assignTaxonomy() step to a remote
+    # server via SSH. Omit or set host to null to run locally.
+    # DISCLAIMER: You are solely responsible for ensuring you have authorisation
+    # to use the configured host. See config/defaults/pipeline.yml for the full disclaimer.
+    remote:
+      host: ~                    # user@hostname
+      rscript: "Rscript"         # path to Rscript on the server
+      staging_dir: "/absolute/path/on/server"
+      db_path: ~                 # absolute path to database on server (null = transfer local copy)
 
-# Output filenames (all written to workspace_root/Tables/):
-output:
-  seq_table_prefix: "seqtab_nochim"
-  fasta_prefix: "asvs"
-  taxa_prefix: "taxonomy"
-  combined_filename: "tax_counts.csv"
-  asv_filename: "asv_counts.csv"
+  # Output filename prefixes (all written to dada2/Tables/):
+  output:
+    seq_table_prefix: "seqtab_nochim"
+    fasta_prefix: "asvs"
+    taxa_prefix: "taxonomy"
 ```
 
 **Outputs written to `projects/{name}/{run}/dada2/Tables/`:**
@@ -233,35 +224,38 @@ output:
 | `asv_counts.csv` | ASV sequences + per-sample counts (no taxonomy) |
 | `pipeline_stats.csv` | Read counts retained at each pipeline stage |
 
-### Configuring vsearch (`projects/{name}/vsearch.yml`)
+### Configuring vsearch (`vsearch:` in `pipeline.yml`)
 
 Controls the alignment thresholds used when assigning taxonomy against the reference database.
 
 ```yaml
-optional_args: "--id 0.75 --query_cov 0.8"
+vsearch:
+  optional_args: "--id 0.75 --query_cov 0.8"
 ```
 
 `optional_args` is passed verbatim to `vsearch --usearch_global`. Key thresholds:
 - `--id` - minimum sequence identity (0-1); lower values recover more hits at the cost of specificity
 - `--query_cov` - minimum fraction of the query that must be aligned; filters partial matches
 
-### Configuring cd-hit-est (`projects/{name}/cdhit.yml`)
+### Configuring cd-hit-est (`cdhit:` in `pipeline.yml`)
 
 Clustering step that collapses near-identical ASVs before taxonomy assignment.
 
 ```yaml
-optional_args: "-c 0.9"
+cdhit:
+  optional_args: "-c 0.9"
 ```
 
 `optional_args` is passed verbatim to `cd-hit-est`. `-c` sets the sequence identity threshold for clustering (default 0.9 = 90%).
 
-### Configuring merge_taxa (`projects/{name}/merge_taxa.yml`)
+### Configuring merge_taxa (`merge_taxa:` in `pipeline.yml`)
 
 Controls which filter configs are applied when merging taxonomy and count tables. `merged.csv` (unfiltered) is always written; each entry in `filters` produces an additional filtered CSV.
 
 ```yaml
-filters:
-  - "protist_filter.yml"   # -> merged/protist_filter.csv
+merge_taxa:
+  filters:
+    - "protist_filter.yml"   # -> merged/protist_filter.csv
 ```
 
 Each entry is a filename relative to `config/filters/`. Remove all entries (or set `filters: []`) to produce only the unfiltered `merged.csv`.

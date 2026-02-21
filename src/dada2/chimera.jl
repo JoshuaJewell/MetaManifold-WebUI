@@ -29,14 +29,17 @@
         length_ckpt = ctx.ckpts["length"]
 
         chimera_ckpt = ctx.ckpts["chimera"]
-        if isfile(chimera_ckpt)
-            input_mtime = max(mtime(config_path), mtime(filter_ckpt), mtime(length_ckpt))
-            if mtime(chimera_ckpt) > input_mtime
-                @info "Skipping chimera_removal: checkpoint up to date"
-                return nothing
-            end
+        hash_file    = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        if isfile(chimera_ckpt) &&
+           !_section_stale(config_path, "dada2", hash_file) &&
+           mtime(chimera_ckpt) > mtime(filter_ckpt) &&
+           mtime(chimera_ckpt) > mtime(length_ckpt)
+            @info "Skipping chimera_removal: checkpoint up to date"
+            return nothing
         end
 
+        R"rm(list=ls())"
+        _source_r_functions()
         seq_prefix   = get(ctx.cfg["output"], "seq_table_prefix", "seqtab_nochim")
         fasta_prefix = get(ctx.cfg["output"], "fasta_prefix", "asvs")
         tables_dir   = ctx.dirs["Tables"]
@@ -99,6 +102,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
+        _write_section_hash(config_path, "dada2", hash_file)
         emit("Written: $(joinpath(tables_dir, "pipeline_stats.csv"))")
         emit("Written: $(joinpath(tables_dir, seq_prefix * ".csv"))")
         emit("Written: $(joinpath(tables_dir, fasta_prefix * ".fasta"))")

@@ -25,12 +25,15 @@ module DADA2
 # Commons Attribution 4.0 International License (CC BY 4.0):
 # https://creativecommons.org/licenses/by/4.0/.
 
-export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
+export dada2, dada2_denoise, dada2_classify,
+       prefilter_qc, filter_trim, learn_errors, denoise,
        filter_length, chimera_removal, assign_taxonomy
 
     import Downloads
     using Logging, RCall, YAML
     using ..PipelineTypes
+    using ..Databases
+    using ..Config
 
     include("dada2/context.jl")   # shared helpers and _pipeline_context
     include("dada2/qc.jl")        # prefilter_qc, filter_trim
@@ -80,11 +83,53 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
         assign_taxonomy(config_path; progress, input_dir, workspace_root, taxonomy_db)
     end
 
-    function dada2(project::ProjectCtx, trimmed::TrimmedReads;
-                   taxonomy_db=nothing, progress=nothing)
-        config_path    = joinpath(project.dir, "dada2.yml")
+    """
+        dada2_denoise(project, trimmed; progress) -> DenoisedASVs
+
+    Run all DADA2 stages up to and including chimera removal. Returns a
+    `DenoisedASVs` wire type that can be passed to `dada2_classify()`.
+
+    Skips automatically if `ckpt_chimera.RData` is newer than both `dada2.yml`
+    and the trimmed reads. Individual stage skip guards apply for partial runs.
+    """
+    function dada2_denoise(project::ProjectCtx, trimmed::TrimmedReads; progress=nothing)
+        config_path    = write_run_config(project)
         workspace_root = joinpath(project.dir, "dada2")
-        cfg        = YAML.load_file(config_path)
+        chimera_ckpt   = joinpath(workspace_root, "Checkpoints", "ckpt_chimera.RData")
+        hash_file      = joinpath(workspace_root, "Checkpoints", "config.hash")
+
+        trimmed_files = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(trimmed.dir))
+        trimmed_mtime = isempty(trimmed_files) ? 0.0 :
+                        maximum(mtime(joinpath(trimmed.dir, f)) for f in trimmed_files)
+
+        if isfile(chimera_ckpt) &&
+           !_section_stale(config_path, "dada2", hash_file) &&
+           mtime(chimera_ckpt) > trimmed_mtime
+            @info "Skipping dada2_denoise: ckpt_chimera.RData up to date"
+        else
+            R"rm(list=ls())"
+            prefilter_qc(config_path;    progress, input_dir=trimmed.dir, workspace_root)
+            filter_trim(config_path;     progress, input_dir=trimmed.dir, workspace_root); R"gc()"
+            learn_errors(config_path;    progress, input_dir=trimmed.dir, workspace_root); R"gc()"
+            denoise(config_path;         progress, input_dir=trimmed.dir, workspace_root); R"gc()"
+            filter_length(config_path;   progress, input_dir=trimmed.dir, workspace_root); R"gc()"
+            chimera_removal(config_path; progress, input_dir=trimmed.dir, workspace_root); R"gc()"
+        end
+
+        return DenoisedASVs(chimera_ckpt, config_path, workspace_root, trimmed.dir)
+    end
+
+    """
+        dada2_classify(project, denoised; taxonomy_db, progress) -> ASVResult
+
+    Run taxonomy assignment on a `DenoisedASVs` result and return an `ASVResult`.
+    Respects the mtime skip guard inside `assign_taxonomy()`.
+    """
+    function dada2_classify(project::ProjectCtx, denoised::DenoisedASVs;
+                            taxonomy_db=nothing, progress=nothing)
+        config_path    = denoised.config_path
+        workspace_root = denoised.workspace_root
+        cfg        = get(YAML.load_file(config_path), "dada2", Dict())
         out_cfg    = get(cfg, "output", Dict())
         tables_dir = joinpath(workspace_root, "Tables")
         result = ASVResult(
@@ -92,21 +137,38 @@ export dada2, prefilter_qc, filter_trim, learn_errors, denoise,
             joinpath(tables_dir, get(out_cfg, "seq_table_prefix", "seqtab_nochim") * ".csv"),
             joinpath(tables_dir, get(out_cfg, "taxa_prefix",      "taxonomy")      * ".csv")
         )
+        assign_taxonomy(config_path;
+                        progress,
+                        input_dir      = denoised.input_dir,
+                        workspace_root,
+                        taxonomy_db)
+        return result
+    end
+
+    function dada2(project::ProjectCtx, trimmed::TrimmedReads;
+                   taxonomy_db=nothing, progress=nothing)
+        config_path    = write_run_config(project)
+        workspace_root = joinpath(project.dir, "dada2")
+        cfg        = get(YAML.load_file(config_path), "dada2", Dict())
+        out_cfg    = get(cfg, "output", Dict())
+        tables_dir = joinpath(workspace_root, "Tables")
+        result = ASVResult(
+            joinpath(tables_dir, get(out_cfg, "fasta_prefix",     "asvs")          * ".fasta"),
+            joinpath(tables_dir, get(out_cfg, "seq_table_prefix", "seqtab_nochim") * ".csv"),
+            joinpath(tables_dir, get(out_cfg, "taxa_prefix",      "taxonomy")      * ".csv")
+        )
+        hash_file     = joinpath(workspace_root, "Checkpoints", "config.hash")
         trimmed_files = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(trimmed.dir))
         trimmed_mtime = isempty(trimmed_files) ? 0.0 :
                         maximum(mtime(joinpath(trimmed.dir, f)) for f in trimmed_files)
-        input_mtime = max(mtime(config_path), trimmed_mtime)
         if all(isfile, (result.fasta, result.count_table, result.taxonomy)) &&
-           all(f -> mtime(f) > input_mtime, (result.fasta, result.count_table, result.taxonomy))
+           !_section_stale(config_path, "dada2", hash_file) &&
+           all(f -> mtime(f) > trimmed_mtime, (result.fasta, result.count_table, result.taxonomy))
             @info "Skipping dada2: outputs up to date in $tables_dir"
             return result
         end
-        dada2(config_path;
-              input_dir = trimmed.dir,
-              workspace_root,
-              taxonomy_db,
-              progress)
-        return result
+        denoised = dada2_denoise(project, trimmed; progress)
+        return dada2_classify(project, denoised; taxonomy_db, progress)
     end
 
 end

@@ -1,5 +1,0 @@
-# Primer pair names to apply. Must match keys in the Pairs section of config/primers.yml.
-primer_pairs:
-  - PrimerPair1
-
-optional_args: "-m 200 --discard-untrimmed"

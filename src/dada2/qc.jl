@@ -15,16 +15,17 @@
         ctx  = _pipeline_context(config_path; input_dir, workspace_root)
 
         unfiltered_pdf = joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf")
-        if isfile(unfiltered_pdf)
-            all_inputs  = vcat(ctx.fwd_files, ctx.rev_files)
-            input_mtime = isempty(all_inputs) ? mtime(config_path) :
-                          max(mtime(config_path), maximum(mtime(f) for f in all_inputs))
-            if mtime(unfiltered_pdf) > input_mtime
+        hash_file      = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        if isfile(unfiltered_pdf) && !_section_stale(config_path, "dada2", hash_file)
+            all_inputs = vcat(ctx.fwd_files, ctx.rev_files)
+            if isempty(all_inputs) || all(f -> mtime(unfiltered_pdf) > mtime(f) for f in all_inputs)
                 @info "Skipping prefilter_qc: quality_unfiltered.pdf up to date"
                 return nothing
             end
         end
 
+        R"rm(list=ls())"
+        _source_r_functions()
         log_path = joinpath(ctx.dirs["Logs"], "prefilter_qc.log")
         open(log_path, "w") do io; println(io, "=== prefilter_qc ===\nconfig: $config_path") end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
@@ -38,6 +39,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
+        _write_section_hash(config_path, "dada2", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf"))")
         emit("Log: $log_path")
         nothing
@@ -60,16 +62,17 @@
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
 
         filter_ckpt = ctx.ckpts["filter"]
-        if isfile(filter_ckpt)
-            all_inputs  = vcat(ctx.fwd_files, ctx.rev_files)
-            input_mtime = isempty(all_inputs) ? mtime(config_path) :
-                          max(mtime(config_path), maximum(mtime(f) for f in all_inputs))
-            if mtime(filter_ckpt) > input_mtime
+        hash_file   = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        if isfile(filter_ckpt) && !_section_stale(config_path, "dada2", hash_file)
+            all_inputs = vcat(ctx.fwd_files, ctx.rev_files)
+            if isempty(all_inputs) || all(f -> mtime(filter_ckpt) > mtime(f) for f in all_inputs)
                 @info "Skipping filter_trim: checkpoint up to date"
                 return nothing
             end
         end
 
+        R"rm(list=ls())"
+        _source_r_functions()
         ft      = ctx.cfg["filter_trim"]
         trunc_len = ft["trunc_len"]
         max_ee    = ft["max_ee"]
@@ -127,6 +130,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
+        _write_section_hash(config_path, "dada2", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_filtered.pdf"))")
         emit("Checkpoint: $(ctx.ckpts["filter"])")
         emit("Log: $log_path")

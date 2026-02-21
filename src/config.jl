@@ -1,0 +1,165 @@
+module Config
+
+# Hierarchical config cascade and per-section content-hash helpers.
+#
+# Config cascade (global -> project -> run):
+#   config/defaults/pipeline.yml        <- full defaults (source of truth)
+#   config/pipeline.yml                 <- machine-level overrides
+#   projects/{study}/pipeline.yml       <- study-level overrides
+#   ...intermediate dirs...
+#   projects/{study}/{run}/pipeline.yml <- run-level overrides
+#
+# Each override file contains only intentional changes; omitted keys are
+# inherited from the nearest ancestor. At the start of each run, all levels
+# are deep-merged into a single Dict and written to:
+#   projects/{study}/{run}/run_config.yml
+#
+# Stage skip guards hash the relevant YAML section from run_config.yml so
+# that any change at any level -- global, study, or run -- correctly
+# invalidates downstream checkpoints.
+#
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+#
+# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
+export _section_stale, _write_section_hash,
+       load_merged_config, write_run_config
+
+    using SHA, YAML
+    using ..PipelineTypes
+
+    # Deep merge
+    # Recursively merge `patch` into `base`. Dict values are merged recursively;
+    # all other types (including Arrays) are replaced by the patch value.
+    function _deep_merge(base::Dict, patch::Dict)
+        result = copy(base)
+        for (k, v) in patch
+            result[k] = (haskey(result, k) && result[k] isa Dict && v isa Dict) ?
+                        _deep_merge(result[k], v) : v
+        end
+        return result
+    end
+
+    # Cascade path discovery
+    # Return the ordered list of pipeline.yml paths participating in the cascade,
+    # from least specific (defaults) to most specific (leaf project dir).
+    function _cascade_paths(config_dir::String, study_dir::String, project_dir::String)
+        paths = String[
+            joinpath(config_dir, "defaults", "pipeline.yml"),
+            joinpath(config_dir, "pipeline.yml"),
+        ]
+
+        study_norm   = normpath(abspath(study_dir))
+        project_norm = normpath(abspath(project_dir))
+
+        if study_norm == project_norm
+            push!(paths, joinpath(project_norm, "pipeline.yml"))
+        else
+            rel   = relpath(project_norm, study_norm)
+            parts = splitpath(rel)
+            current = study_norm
+            push!(paths, joinpath(current, "pipeline.yml"))
+            for part in parts
+                current = joinpath(current, part)
+                push!(paths, joinpath(current, "pipeline.yml"))
+            end
+        end
+
+        return paths
+    end
+
+    # Config loading
+    # Merge all config levels in `paths` (ordered global -> specific).
+    # paths[1] must exist (the defaults file). Subsequent files are optional;
+    # missing files and files that parse as nothing/empty are skipped.
+    function load_merged_config(paths::Vector{String})
+        isfile(paths[1]) || error("Default config not found: $(paths[1])")
+        base = something(YAML.load_file(paths[1]), Dict())
+        base isa Dict || (base = Dict())
+        for path in paths[2:end]
+            isfile(path) || continue
+            patch = YAML.load_file(path)
+            isnothing(patch) && continue
+            patch isa Dict  || continue
+            isempty(patch)  && continue
+            base = _deep_merge(base, patch)
+        end
+        return base
+    end
+
+    load_merged_config(config_dir::String, study_dir::String, project_dir::String) =
+        load_merged_config(_cascade_paths(config_dir, study_dir, project_dir))
+
+    load_merged_config(project::ProjectCtx) =
+        load_merged_config(project.config_dir, project.study_dir, project.dir)
+
+    # run_config.yml
+    # Merge all cascade levels and write the result to {project.dir}/run_config.yml.
+    # Regenerates only when a source file is newer than the existing run_config.yml.
+    # Returns the path to run_config.yml.
+    function write_run_config(project::ProjectCtx)
+        run_config_path = joinpath(project.dir, "run_config.yml")
+        primers_path    = joinpath(project.config_dir, "primers.yml")
+        paths = _cascade_paths(project.config_dir, project.study_dir, project.dir)
+        source_paths = isfile(primers_path) ? vcat(paths, primers_path) : paths
+        if !isfile(run_config_path) ||
+           any(p -> isfile(p) && mtime(p) > mtime(run_config_path), source_paths)
+            merged = load_merged_config(paths)
+            if isfile(primers_path)
+                primers = YAML.load_file(primers_path)
+                isnothing(primers) || (merged["primers"] = primers)
+            end
+            open(run_config_path, "w") do io
+                print(io, YAML.write(merged))
+            end
+        end
+        return run_config_path
+    end
+
+    # Section content hashes
+    # Produce a stable, canonical string from a YAML-loaded value.
+    # Dicts are sorted by key so insertion-order differences do not affect the hash.
+    function _canonical(x)::String
+        if x isa AbstractDict
+            pairs_sorted = sort([(string(k), _canonical(v)) for (k, v) in x]; by = p -> p[1])
+            return "{" * join(["$(p[1]):$(p[2])" for p in pairs_sorted], ",") * "}"
+        elseif x isa AbstractVector
+            return "[" * join(map(_canonical, x), ",") * "]"
+        elseif isnothing(x)
+            return "null"
+        else
+            return string(x)
+        end
+    end
+
+    function _section_hash(config_path::String, section::String)::String
+        cfg = YAML.load_file(config_path)
+        cfg isa Dict || return bytes2hex(sha256(""))
+        sec = get(cfg, section, Dict())
+        bytes2hex(sha256(_canonical(sec)))
+    end
+
+    """
+        _section_stale(config_path, section, hash_file) -> Bool
+
+    Return `true` if the named section of `config_path` has changed since
+    `hash_file` was last written, or if `hash_file` does not yet exist.
+    Pass `run_config.yml` as `config_path` to hash the fully-merged section.
+    """
+    function _section_stale(config_path::String, section::String, hash_file::String)::Bool
+        !isfile(hash_file) && return true
+        stored = strip(read(hash_file, String))
+        return _section_hash(config_path, section) != stored
+    end
+
+    """
+        _write_section_hash(config_path, section, hash_file)
+
+    Write the current SHA-256 hash of the named section to `hash_file`.
+    Call this after a stage completes successfully.
+    """
+    function _write_section_hash(config_path::String, section::String, hash_file::String)
+        write(hash_file, _section_hash(config_path, section))
+    end
+
+end

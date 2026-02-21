@@ -6,6 +6,7 @@ module TaxonomyTableTools
 
 using CSV, DataFrames, Logging, YAML
 using ..PipelineTypes
+using ..Config
 
 export merge_taxonomy_counts, filter_table, merge_taxa
 
@@ -274,16 +275,18 @@ export merge_taxonomy_counts, filter_table, merge_taxa
     end
 
     function merge_taxa(project::ProjectCtx, source::ASVResult, tax::TaxonomyHits)
-        config_path = joinpath(project.dir, "merge_taxa.yml")
-        cfg         = YAML.load_file(config_path)
+        config_path = write_run_config(project)
+        cfg         = get(YAML.load_file(config_path), "merge_taxa", Dict())
         filter_list = get(cfg, "filters", [nothing])
         merge_dir   = joinpath(project.dir, "merged")
+        hash_file   = joinpath(merge_dir, "config.hash")
 
-        data_mtime = max(mtime(tax.tsv), mtime(source.taxonomy), mtime(config_path))
-        merged_csv = joinpath(merge_dir, "merged.csv")
+        data_mtime     = max(mtime(tax.tsv), mtime(source.taxonomy))
+        config_changed = _section_stale(config_path, "merge_taxa", hash_file)
+        merged_csv     = joinpath(merge_dir, "merged.csv")
 
         # Determine what needs to be (re-)computed.
-        need_base     = !isfile(merged_csv) || mtime(merged_csv) <= data_mtime
+        need_base     = config_changed || !isfile(merged_csv) || mtime(merged_csv) <= data_mtime
         stale_filters = Pair{String,String}[]  # stem => filter_path
         tables        = Dict{String,String}("merged" => merged_csv)
 
@@ -294,7 +297,8 @@ export merge_taxonomy_counts, filter_table, merge_taxa
             stem         = splitext(filter_name)[1]
             output_csv   = joinpath(merge_dir, stem * ".csv")
             tables[stem] = output_csv
-            if !isfile(output_csv) || mtime(output_csv) <= max(data_mtime, mtime(filter_path))
+            if config_changed || !isfile(output_csv) ||
+               mtime(output_csv) <= max(data_mtime, mtime(filter_path))
                 push!(stale_filters, stem => filter_path)
             else
                 @info "Skipping merge_taxa filter '$stem': $output_csv up to date"
@@ -321,6 +325,7 @@ export merge_taxonomy_counts, filter_table, merge_taxa
             @info "Written: $output_csv"
         end
 
+        _write_section_hash(config_path, "merge_taxa", hash_file)
         return MergedTables(tables)
     end
 

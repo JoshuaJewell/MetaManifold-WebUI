@@ -263,8 +263,9 @@ data/
 bin/
 databases/
 config/tools.yml
-config/dada2.yml
+config/pipeline.yml
 config/databases.yml
+config/primers.yml
 
 ### Bits I don't want to share yet
 hide.*

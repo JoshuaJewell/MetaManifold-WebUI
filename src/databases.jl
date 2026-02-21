@@ -19,7 +19,7 @@ module Databases
 import Downloads
 using YAML, Logging
 
-export ensure_databases
+export ensure_databases, resolve_db
 
     """
         ensure_databases(config_path) -> Dict{String,String}
@@ -64,13 +64,41 @@ export ensure_databases
         return resolved
     end
 
-    function _resolve_entry(key, fmt_info, db_dir)
+    """
+        resolve_db(config_path, db_name, fmt; emit=nothing) -> String
+
+    Resolve a single database entry from a databases.yml file.
+
+    `config_path` is the path to a databases.yml-style config, `db_name` is the
+    key under `databases:` (e.g., `"pr2"`), and `fmt` is the format sub-key
+    (e.g., `"dada2"` or `"vsearch"`). Returns the resolved absolute local path.
+
+    Pass an `emit` function (e.g., from `_emitter`) to route log messages through
+    the pipeline's progress channel instead of the default `@info` logger.
+    """
+    function resolve_db(config_path::String, db_name::String, fmt::String; emit=nothing)
+        cfg    = YAML.load_file(config_path)
+        db_cfg = get(cfg, "databases", Dict())
+        db_dir = abspath(get(db_cfg, "dir", "./databases"))
+        mkpath(db_dir)
+
+        haskey(db_cfg, db_name) ||
+            error("Database '$db_name' not found in $config_path")
+        fmt_cfg = get(db_cfg[db_name], fmt, nothing)
+        isnothing(fmt_cfg) &&
+            error("databases.$db_name.$fmt is not configured in $config_path")
+
+        _resolve_entry("$(db_name)_$(fmt)", fmt_cfg, db_dir; emit)
+    end
+
+    function _resolve_entry(key, fmt_info, db_dir; emit=nothing)
+        log = isnothing(emit) ? msg -> @info(msg) : emit
         local_p = get(fmt_info, "local", nothing)
         if !isnothing(local_p)
             local_p = string(local_p)
             if !isempty(local_p)
                 if isfile(local_p)
-                    @info "[$key] Using local file: $local_p"
+                    log("[$key] Using local file: $local_p")
                     return local_p
                 end
                 @warn "[$key] Configured local path not found: $local_p - falling back to uri"
@@ -83,11 +111,11 @@ export ensure_databases
 
         cached = joinpath(db_dir, basename(uri))
         if isfile(cached)
-            @info "[$key] Using cached: $cached"
+            log("[$key] Using cached: $cached")
         else
-            @info "[$key] Downloading: $uri"
+            log("[$key] Downloading: $uri")
             Downloads.download(uri, cached)
-            @info "[$key] Saved to: $cached"
+            log("[$key] Saved to: $cached")
         end
         return cached
     end

@@ -34,7 +34,11 @@ load(p[["ckpt"]])
 dir.create(p[["tables"]], recursive = TRUE, showWarnings = FALSE)
 
 verbose     <- tolower(p[["verbose"]]) == "true"
-multithread <- as.integer(p[["multithread"]])
+multithread <- if (tolower(p[["multithread"]]) %in% c("true", "false")) {
+    tolower(p[["multithread"]]) == "true"
+} else {
+    as.integer(p[["multithread"]])
+}
 min_boot    <- as.integer(p[["min_boot"]])
 levels      <- strsplit(p[["levels"]], ",", fixed = TRUE)[[1]]
 

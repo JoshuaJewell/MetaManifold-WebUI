@@ -19,14 +19,16 @@
 
         errors_ckpt = ctx.ckpts["errors"]
         filter_ckpt = ctx.ckpts["filter"]
-        if isfile(errors_ckpt) && isfile(filter_ckpt)
-            input_mtime = max(mtime(config_path), mtime(filter_ckpt))
-            if mtime(errors_ckpt) > input_mtime
-                @info "Skipping learn_errors: checkpoint up to date"
-                return nothing
-            end
+        hash_file   = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        if isfile(errors_ckpt) && isfile(filter_ckpt) &&
+           !_section_stale(config_path, "dada2", hash_file) &&
+           mtime(errors_ckpt) > mtime(filter_ckpt)
+            @info "Skipping learn_errors: checkpoint up to date"
+            return nothing
         end
 
+        R"rm(list=ls())"
+        _source_r_functions()
         seed    = get(ctx.cfg["dada"], "seed", 123)
         nbases  = ctx.cfg["dada"]["nbases"]
         max_con = ctx.cfg["dada"]["max_consist"]
@@ -57,6 +59,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
+        _write_section_hash(config_path, "dada2", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "error_rates.pdf"))")
         emit("Checkpoint: $(ctx.ckpts["errors"])")
         emit("Log: $log_path")
@@ -89,14 +92,16 @@
         errors_ckpt = ctx.ckpts["errors"]
 
         denoise_ckpt = ctx.ckpts["denoise"]
-        if isfile(denoise_ckpt)
-            input_mtime = max(mtime(config_path), mtime(errors_ckpt))
-            if mtime(denoise_ckpt) > input_mtime
-                @info "Skipping denoise: checkpoint up to date"
-                return nothing
-            end
+        hash_file    = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        if isfile(denoise_ckpt) &&
+           !_section_stale(config_path, "dada2", hash_file) &&
+           mtime(denoise_ckpt) > mtime(errors_ckpt)
+            @info "Skipping denoise: checkpoint up to date"
+            return nothing
         end
 
+        R"rm(list=ls())"
+        _source_r_functions()
         log_path = joinpath(ctx.dirs["Logs"], "denoise.log")
         open(log_path, "w") do io; println(io, "=== denoise ===\nconfig: $config_path") end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
@@ -151,6 +156,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
+        _write_section_hash(config_path, "dada2", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "length_distribution.pdf"))")
         emit("Checkpoint: $(ctx.ckpts["denoise"])")
         emit("Log: $log_path")
@@ -180,14 +186,16 @@
         denoise_ckpt = ctx.ckpts["denoise"]
 
         length_ckpt = ctx.ckpts["length"]
-        if isfile(length_ckpt)
-            input_mtime = max(mtime(config_path), mtime(denoise_ckpt))
-            if mtime(length_ckpt) > input_mtime
-                @info "Skipping filter_length: checkpoint up to date"
-                return nothing
-            end
+        hash_file   = joinpath(ctx.dirs["Checkpoints"], "config.hash")
+        if isfile(length_ckpt) &&
+           !_section_stale(config_path, "dada2", hash_file) &&
+           mtime(length_ckpt) > mtime(denoise_ckpt)
+            @info "Skipping filter_length: checkpoint up to date"
+            return nothing
         end
 
+        R"rm(list=ls())"
+        _source_r_functions()
         log_path = joinpath(ctx.dirs["Logs"], "filter_length.log")
         open(log_path, "w") do io; println(io, "=== filter_length ===\nconfig: $config_path") end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
@@ -217,6 +225,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
+        _write_section_hash(config_path, "dada2", hash_file)
         emit("Checkpoint: $(ctx.ckpts["length"])")
         emit("Log: $log_path")
         nothing

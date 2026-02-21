@@ -1,0 +1,80 @@
+cutadapt:
+  # Primer pair names to apply. Must match keys in the Pairs section of config/primers.yml.
+  primer_pairs:
+    - PrimerPair1
+  optional_args: "-m 200 --discard-untrimmed"
+
+dada2:
+  file_patterns:
+    mode: "paired"              # paired | forward | reverse
+
+  filter_trim:
+    trunc_q: 2
+    trunc_len: [220, 220]       # [forward, reverse]; first value used for single-end
+    max_ee: [3, 3]
+    min_len: 175
+    max_n: 0
+    match_ids: true
+    rm_phix: true
+
+  dada:
+    seed: 123
+    nbases: 200000000
+    max_consist: 15
+    pool_method: "pseudo"       # none | pseudo | true
+
+  merge:
+    min_overlap: 20
+    max_mismatch: 0
+    trim_overhang: true
+
+  asv:
+    band_size_min: 200          # null to skip length filtering
+    band_size_max: 430
+    denovo_method: "consensus"
+
+  taxonomy:
+    database: pr2               # key into config/databases.yml
+    multithread: 4              # higher values increase memory use significantly
+    # DISCLAIMER: Configuring a remote host causes this pipeline to connect via SSH,
+    # transfer files, execute Rscript, and delete the staging directory on the remote
+    # server. You are solely responsible for ensuring you have authorisation to use
+    # the configured host and that staging_dir is a safe path to write to and delete.
+    # The authors accept no liability for data loss or misuse arising from this feature.
+    remote:                     # omit or set host to null to run locally
+      host: ~                   # user@hostname
+      rscript: "Rscript"        # path to Rscript on the server
+      staging_dir: "/absolute/path/on/server"
+      db_path: ~                # path to pre-installed database on server; null to transfer local copy
+    min_boot: 0
+    levels:
+      - "Domain"
+      - "Supergroup"
+      - "Division"
+      - "Subdivision"
+      - "Class"
+      - "Order"
+      - "Family"
+      - "Genus"
+      - "Species"
+
+  output:
+    seq_table_prefix: "seqtab_nochim"
+    fasta_prefix: "asvs"
+    taxa_prefix: "taxonomy"
+
+  verbose: true
+
+vsearch:
+  optional_args: "--id 0.75 --query_cov 0.8"
+
+cdhit:
+  optional_args: "-c 0.9"
+
+merge_taxa:
+  # List of filter configs to apply, each relative to config/filters/.
+  # Each entry produces a separate filtered CSV in the project's merged/ directory.
+  # The unfiltered merged.csv is always written regardless of this list.
+  # Set to [] or omit entries to produce merged.csv only.
+  filters:
+    - "protist_filter.yml"

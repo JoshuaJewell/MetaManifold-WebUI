@@ -10,50 +10,13 @@
 
     # Database helpers
 
-    # Download uri to db_dir/basename(uri) if not already cached.
-    # Respects the optional local: override in fmt_info.
-    function _download_db_if_needed(key, fmt_info, db_dir, emit)
-        local_p = get(fmt_info, "local", nothing)
-        if !isnothing(local_p)
-            local_p = string(local_p)
-            if !isempty(local_p)
-                isfile(local_p) && (emit("[$key] Using local file: $local_p"); return local_p)
-                @warn "[$key] Configured local path not found: $local_p - falling back to uri"
-            end
-        end
-        uri    = fmt_info["uri"]
-        cached = joinpath(db_dir, basename(uri))
-        if isfile(cached)
-            emit("[$key] Using cached: $cached")
-        else
-            emit("[$key] Downloading: $uri")
-            Downloads.download(uri, cached)
-            emit("[$key] Saved to: $cached")
-        end
-        return cached
-    end
-
-    # Resolve the DADA2 taxonomy database.
-    # Reads from global config/databases.yml; falls back to pipeline config's
-    # databases: section for backward compatibility with old per-project configs.
+    # Resolve the DADA2 taxonomy database from config/databases.yml.
     function _resolve_taxonomy_db(cfg, emit)
-        db_key     = string(cfg["taxonomy"]["database"])
-        global_dbs = joinpath(@__DIR__, "..", "..", "config", "databases.yml")
-
-        db_source = if isfile(global_dbs)
-            get(YAML.load_file(global_dbs), "databases", Dict())
-        else
-            get(cfg, "databases", Dict())   # backward compat
-        end
-
-        haskey(db_source, db_key) ||
-            error("taxonomy.database = \"$db_key\" not found in databases config")
-        fmt_cfg = get(db_source[db_key], "dada2", nothing)
-        isnothing(fmt_cfg) &&
-            error("databases.$db_key.dada2 is not configured in config/databases.yml")
-        db_dir = abspath(get(db_source, "dir", "./databases"))
-        mkpath(db_dir)
-        return _download_db_if_needed("$(db_key)_dada2", fmt_cfg, db_dir, emit)
+        db_key   = string(cfg["taxonomy"]["database"])
+        dbs_path = joinpath(@__DIR__, "..", "..", "config", "databases.yml")
+        isfile(dbs_path) ||
+            error("config/databases.yml not found. Run new_project() first.")
+        return resolve_db(dbs_path, db_key, "dada2"; emit)
     end
 
     # Config
@@ -124,9 +87,17 @@
         dirs
     end
 
+    # R function loader
+    # Source the R helper functions into the current R session. Called by each
+    # stage after its mtime skip check, so R is not loaded for skipped stages.
+    function _source_r_functions()
+        functions_r = joinpath(@__DIR__, "dada2_functions.r")
+        R"source($functions_r)"
+    end
+
     # Pipeline context
-    # Shared setup called at the start of every stage: sources R functions, loads
-    # and validates config, discovers files, handles the single-sample fallback, and
+    # Shared pure-Julia setup called at the start of every stage: loads and
+    # validates config, discovers files, handles the single-sample fallback, and
     # computes all path variables. Returns a NamedTuple so stage functions can
     # extract what they need without repeating boilerplate.
     #
@@ -134,10 +105,7 @@
     #   input_dir      - overrides cfg["workspace"]["input_dir"]
     #   workspace_root - overrides cfg["workspace"]["root"]
     function _pipeline_context(config_path::String; input_dir=nothing, workspace_root=nothing)
-        functions_r = joinpath(@__DIR__, "dada2_functions.r")
-        R"source($functions_r)"
-
-        cfg = YAML.load_file(config_path)
+        cfg = get(YAML.load_file(config_path), "dada2", Dict{String,Any}())
 
         isnothing(input_dir)      && error("input_dir must be provided")
         isnothing(workspace_root) && error("workspace_root must be provided")
@@ -151,16 +119,13 @@
 
         fwd_files, rev_files = find_fastq_files(
             input_dir,
-            cfg["file_patterns"]["forward"],
-            cfg["file_patterns"]["reverse"],
+            "_R1_trimmed.fastq.gz",
+            "_R2_trimmed.fastq.gz",
             mode)
         validate_sample_files(fwd_files, rev_files, mode)
 
         primary_files = isempty(fwd_files) ? rev_files : fwd_files
-        sample_names  = extract_sample_names(
-            primary_files,
-            cfg["file_patterns"]["sample_name_split"],
-            cfg["file_patterns"]["sample_name_index"])
+        sample_names  = extract_sample_names(primary_files, "_", 1)
 
         # Single-sample fallback: dada() returns a bare object (not a list) for a
         # single input file, breaking makeSequenceTable() and sapply() downstream.

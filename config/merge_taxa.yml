@@ -1,3 +1,0 @@
-# Filename of filter config relative to config/filters/.
-# Leave empty or omit to produce merged.csv only (no filtering).
-filter: "protist_filter.yml"

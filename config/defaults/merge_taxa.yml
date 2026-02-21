@@ -1,6 +1,0 @@
-# List of filter configs to apply, each relative to config/filters/.
-# Each entry produces a separate filtered CSV in the project's merged/ directory.
-# The unfiltered merged.csv is always written regardless of this list.
-# Set to [] or omit entries to produce merged.csv only.
-filters:
-  - "protist_filter.yml"

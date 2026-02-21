@@ -1,6 +1,7 @@
 #!/usr/bin/env julia
 
 include("types.jl")
+include("config.jl")
 include("databases.jl")
 include("call_tools.jl")
 include("dada2.jl")
@@ -9,7 +10,7 @@ include("project.jl")
 
 using CSV
 using YAML
-using .PipelineTypes, .Databases, .Tools, .TaxonomyTableTools, .DADA2, .ProjectSetup
+using .PipelineTypes, .Config, .Databases, .Tools, .TaxonomyTableTools, .DADA2, .ProjectSetup
 
 ## Instantiate parameters
 config_dir       = "./config"
