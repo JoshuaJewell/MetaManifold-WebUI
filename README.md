@@ -183,16 +183,8 @@ dada2:
     database: pr2                # key into config/databases.yml
     multithread: 4               # threads for assignTaxonomy(); higher values increase memory use
     min_boot: 0                  # minimum bootstrap confidence to retain (0-100)
-    levels:
-      - "Domain"
-      - "Supergroup"
-      - "Division"
-      - "Subdivision"
-      - "Class"
-      - "Order"
-      - "Family"
-      - "Genus"
-      - "Species"
+    # Taxonomy rank names are read from databases.yml (the `levels:` key under
+    # each database entry). Do not set them here.
 
     # Optional: offload the memory-intensive assignTaxonomy() step to a remote
     # server via SSH. Omit or set host to null to run locally.
@@ -261,51 +253,80 @@ merge_taxa:
 
 Each entry is a filename relative to `config/filters/`. Remove all entries (or set `filters: []`) to produce only the unfiltered `merged.csv`.
 
-### Configuring taxonomic filtering (`config/filters/protist_filter.yml`)
+### Configuring taxonomic filtering (`config/filters/`)
 
-The filter file controls the `filter_table()` step, which removes non-target taxa and remaps Supergroup labels for consistency with PR2 division names.
+Each file in `config/filters/` defines one biological group to extract from the merged table. Filters are applied after the taxonomy/count merge and produce one additional CSV per entry in `merge_taxa.filters`.
 
-Place filter configs in `config/filters/` and reference them by filename in `merge_taxa.yml`. The default `protist_filter.yml` targets eukaryotic protists from PR2-annotated data:
+#### Database-specific filters
+
+Filter files are named `{category}.{database}.yml` and carry a `databases:` key so that each filter is only applied when the active database matches:
 
 ```yaml
-# Division -> Supergroup remapping.
-# This block overrides Supergroup with the Division value where they should be equivalent.
-mappings:
-  Rhizaria: Rhizaria
-  Alveolata: Alveolata
-  Stramenopiles: Stramenopiles
-  Hemimastigophora: Hemimastigophora
-  Discoba: Discoba
-  Metamonada: Metamonada
-  Telonemia: Telonemia
-  Ancyromonadida: Ancyromonadida
+# fungi.pr2.yml
+databases: [pr2]
 
-# Exclusion filters: rows where the named column contains the pattern are removed.
 filters:
-  - column: Domain
-    pattern: Bacteria
-  - column: Domain
-    pattern: Archaea
-  - column: Domain
-    pattern: Eukaryota:plas
-  - column: Domain
-    pattern: Eukaryota:mito
-  - column: Supergroup
-    pattern: TSAR:chro
-  - column: Subdivision
-    pattern: Metazoa
   - column: Subdivision
     pattern: Fungi
-  - column: Division
-    pattern: Rhodophyta
-  - column: Class
-    pattern: Embryophyceae
+    action: keep        # keep rows matching the pattern (default action is exclude)
 
-# Remove rows with an empty or unassigned Domain field.
-remove_empty_domain: true
+remove_empty:
+  - Subdivision
 ```
 
-> **Database compatibility:** Column names and patterns above are tuned for [PR2](https://pr2-database.org/). If you use a different reference database, update the column names to match that database's rank structure and adjust the `levels` list in `dada2.yml` accordingly.
+```yaml
+# fungi.silva.yml
+databases: [silva]
+
+filters:
+  - column: Family
+    pattern: Nucletmycea
+    action: keep
+
+remove_empty:
+  - Family
+```
+
+Both files can be listed in `merge_taxa.filters` simultaneously; the pipeline silently skips whichever does not apply to the active database.
+
+The following filter pairs ship in `config/filters/`:
+
+| Category | PR2 match | SILVA match |
+|----------|-----------|-------------|
+| `bacteria_archaea` | `Domain` = Bacteria\|Archaea | `Kingdom` = Bacteria\|Archaea |
+| `environmental_protozoa` | `Subdivision` = Cercozoa\|Gyrista\|Ciliophora\|Chrompodellids | `Order` = Cercozoa\|Ciliophora\|Ochrophyta |
+| `fungi` | `Subdivision` = Fungi | `Family` = Nucletmycea |
+| `helminths` | `Class` = Nematoda (excl. *Miculenchus*) | `Family` = Holozoa ¹ |
+| `parasitic_protozoa` | `Subdivision` = Apicomplexa\|Parabasalia\|Fornicata\|Bigyra | `Family` = Conoidasida\|Trichomonadea\|Blastocystis\|Proteromonadea |
+| `plants_invertebrates` | Exclusion-based (PR2 ranks) | Exclusion-based (SILVA ranks) ¹ |
+| `protist` | Exclusion-based (PR2 ranks) | Exclusion-based (SILVA ranks) |
+| `vertebrates` | `Class` = Craniata | `Family` = Holozoa ¹ |
+
+> ¹ **SILVA metazoan resolution limit.** SILVA's 18S taxonomy uses only six ranks (Kingdom → Genus). The entire Metazoa lineage compresses into these ranks such that all animals — vertebrates, nematodes, annelids — resolve to `Family = Holozoa`, `Genus = Choanozoa`. There is no rank at which helminths and vertebrates can be distinguished. As a result:
+> - `helminths.silva.yml` and `vertebrates.silva.yml` are functionally equivalent: both capture all metazoa.
+> - `plants_invertebrates.silva.yml` retains metazoa alongside plants but cannot exclude vertebrates.
+>
+> Use PR2 (`database: pr2`) when helminth- or vertebrate-specific filtering is required.
+
+#### Filter file format
+
+```yaml
+databases: [pr2]          # omit to apply regardless of active database
+
+mappings:                 # optional column remapping applied before filters
+  - source_column: Division
+    target_column: Supergroup
+    values: { Rhizaria: Rhizaria, Alveolata: Alveolata }
+
+filters:
+  - column: Domain
+    pattern: "Bacteria|Archaea"
+    regex: true           # false (default) = substring match
+    action: exclude       # exclude (default) | keep
+
+remove_empty:             # remove rows where this column is blank or "NA"
+  - Domain
+```
 
 ## Usage
 

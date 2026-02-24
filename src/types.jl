@@ -1,6 +1,6 @@
 module PipelineTypes
 
-    export HasFasta, ProjectCtx, TrimmedReads, ASVResult, DenoisedASVs, TaxonomyHits, MergedTables
+    export HasFasta, ProjectCtx, TrimmedReads, ASVResult, DenoisedASVs, TaxonomyHits, MergedTables, DatabaseMeta
 
     abstract type HasFasta end
 
@@ -32,8 +32,18 @@ module PipelineTypes
         tsv::String          # .../vsearch/taxonomy.tsv
     end
 
+    struct DatabaseMeta
+        name::String
+        levels::Vector{String}
+        vsearch_format::String
+        corrections::Vector{Dict{String,Any}}
+        noncounts::Set{String}
+    end
+
     struct MergedTables
         tables::Dict{String,String}  # name => CSV path; always includes "merged" (unfiltered)
+        filter_order::Vector{String}  # filter stems in pipeline.yml order (for priority)
+        filter_colours::Dict{String,String}  # filter stem => hex colour override (from YAML "colour" key)
     end
 
 end

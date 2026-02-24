@@ -90,7 +90,15 @@
     # R function loader
     # Source the R helper functions into the current R session. Called by each
     # stage after its mtime skip check, so R is not loaded for skipped stages.
-    function _source_r_functions()
+    # When `ctx` is provided, emits the single-sample warning (once per run).
+    const _single_sample_warned = Ref(false)
+    function _source_r_functions(ctx=nothing)
+        if !isnothing(ctx) && ctx.single_sample && !_single_sample_warned[]
+            _single_sample_warned[] = true
+            @warn "Only 1 sample found. Duplicating it to work around dada() " *
+                  "returning a bare object for single-file input. The duplicate " *
+                  "will be dropped from all outputs."
+        end
         functions_r = joinpath(@__DIR__, "dada2_functions.r")
         R"source($functions_r)"
     end
@@ -133,9 +141,6 @@
         # dropped in chimera_removal(). ASV calls are unaffected.
         single_sample = length(sample_names) == 1
         if single_sample
-            @warn "Only 1 sample found. Duplicating it to work around dada() " *
-                "returning a bare object for single-file input. The duplicate " *
-                "will be dropped from all outputs."
             fwd_files    = isempty(fwd_files) ? fwd_files : repeat(fwd_files, 2)
             rev_files    = isempty(rev_files) ? rev_files : repeat(rev_files, 2)
             sample_names = [sample_names[1], sample_names[1] * "_dup"]
@@ -164,3 +169,4 @@
         fwd_files, rev_files, fwd_out, rev_out,
         in_fwd, out_fwd, in_rev_arg, out_rev_arg, ckpts)
     end
+

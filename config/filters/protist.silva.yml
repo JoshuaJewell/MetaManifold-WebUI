@@ -1,0 +1,19 @@
+# Protist filter — retains free-living and parasitic protists.
+# Only applied when the active database is SILVA.
+#
+# Excludes: Bacteria, Archaea, plants (Chloroplastida), fungi
+# (Nucletmycea), and metazoa (Holozoa).
+databases: [silva]
+
+filters:
+  - column: Kingdom
+    pattern: "Bacteria|Archaea"
+    regex: true
+  - column: Class
+    pattern: Chloroplastida
+  - column: Family
+    pattern: "Nucletmycea|Holozoa"
+    regex: true
+
+remove_empty:
+  - Kingdom

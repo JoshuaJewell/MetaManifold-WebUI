@@ -28,7 +28,7 @@
         end
 
         R"rm(list=ls())"
-        _source_r_functions()
+        _source_r_functions(ctx)
         seed    = get(ctx.cfg["dada"], "seed", 123)
         nbases  = ctx.cfg["dada"]["nbases"]
         max_con = ctx.cfg["dada"]["max_consist"]
@@ -101,7 +101,7 @@
         end
 
         R"rm(list=ls())"
-        _source_r_functions()
+        _source_r_functions(ctx)
         log_path = joinpath(ctx.dirs["Logs"], "denoise.log")
         open(log_path, "w") do io; println(io, "=== denoise ===\nconfig: $config_path") end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
@@ -195,7 +195,7 @@
         end
 
         R"rm(list=ls())"
-        _source_r_functions()
+        _source_r_functions(ctx)
         log_path = joinpath(ctx.dirs["Logs"], "filter_length.log")
         open(log_path, "w") do io; println(io, "=== filter_length ===\nconfig: $config_path") end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"

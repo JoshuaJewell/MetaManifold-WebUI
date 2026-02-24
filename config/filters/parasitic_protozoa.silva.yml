@@ -1,0 +1,20 @@
+# Parasitic protozoa — host-associated protists.
+#
+# SILVA equivalents of PR2 groups (matched at Family level):
+#   Apicomplexa  -> Family: Conoidasida (Coccidia, Gregarinasina)
+#   Parabasalia  -> Family: Trichomonadea (Hexamastix, Simplicimonas)
+#   Bigyra       -> Family: Blastocystis + Proteromonadea
+#
+# Note: Fornicata (diplomonads like Iotanema, Hexamita) do not appear in
+# this SILVA dataset at a distinguishable Family. If present, they would
+# be under Class=Metamonada but lack a unique Family-level label here.
+databases: [silva]
+
+filters:
+  - column: Family
+    pattern: "Conoidasida|Trichomonadea|Blastocystis|Proteromonadea"
+    regex: true
+    action: keep
+
+remove_empty:
+  - Family

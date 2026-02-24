@@ -24,7 +24,7 @@
         end
 
         R"rm(list=ls())"
-        _source_r_functions()
+        _source_r_functions(ctx)
         log_path = joinpath(ctx.dirs["Logs"], "prefilter_qc.log")
         open(log_path, "w") do io; println(io, "=== prefilter_qc ===\nconfig: $config_path") end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
@@ -70,7 +70,7 @@
         end
 
         R"rm(list=ls())"
-        _source_r_functions()
+        _source_r_functions(ctx)
         ft      = ctx.cfg["filter_trim"]
         trunc_len = ft["trunc_len"]
         max_ee    = ft["max_ee"]

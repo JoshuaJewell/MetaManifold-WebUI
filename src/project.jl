@@ -3,6 +3,7 @@ module ProjectSetup
 export new_project
 
     using ..PipelineTypes
+    using ..PipelineLog
 
     # Header written to every new pipeline.yml override file.
     const _PIPELINE_YML_HEADER = """
@@ -131,7 +132,7 @@ run-level file for narrower scope.
     falling back to `config/defaults/pipeline.yml`.
 
     `databases.yml` and `tools.yml` are copied from `config/defaults/` on first
-    run (they are not part of the cascade -- edit them in place).
+    run (they are not part of the cascade - edit them in place).
 
     Re-running `new_project` never overwrites existing files.
 
@@ -206,7 +207,9 @@ run-level file for narrower scope.
         for rp in leaf_relpaths
             proj_dir  = rp == "." ? root_project : joinpath(root_project, rp)
             fastq_dir = rp == "." ? root_data    : joinpath(root_data,    rp)
-            push!(projects, ProjectCtx(proj_dir, config_dir, fastq_dir, root_project))
+            ctx = ProjectCtx(proj_dir, config_dir, fastq_dir, root_project)
+            pipeline_log(ctx, "Project initialised")
+            push!(projects, ctx)
         end
         @info "$(length(projects)) project(s) ready under $root_project"
         return projects

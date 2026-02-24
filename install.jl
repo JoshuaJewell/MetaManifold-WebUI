@@ -439,7 +439,7 @@ function main()
     # R packages
     println()
     println("  --- R packages -----------------------------------------------------")
-    r_packages = ["dada2", "tidyverse"]
+    r_packages = ["dada2", "tidyverse", "vegan"]
     if prompt_yn("  Install/check R packages (dada2, tidyverse)?")
         install_r_packages(r_packages)
     end

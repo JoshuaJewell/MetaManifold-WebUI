@@ -46,18 +46,7 @@ dada2:
       identity_file: ~          # path to SSH private key; null to use password auth
       rscript: "Rscript"        # path to Rscript on the server
       staging_dir: "/absolute/path/on/server"
-      db_path: ~                # path to pre-installed database on server; null to transfer local copy
     min_boot: 0
-    levels:
-      - "Domain"
-      - "Supergroup"
-      - "Division"
-      - "Subdivision"
-      - "Class"
-      - "Order"
-      - "Family"
-      - "Genus"
-      - "Species"
 
   output:
     seq_table_prefix: "seqtab_nochim"
@@ -78,4 +67,30 @@ merge_taxa:
   # The unfiltered merged.csv is always written regardless of this list.
   # Set to [] or omit entries to produce merged.csv only.
   filters:
-    - "protist_filter.yml"
+  - "parasitic_protozoa.pr2.yml"
+  - "parasitic_protozoa.silva.yml"
+  - "environmental_protozoa.pr2.yml"
+  - "environmental_protozoa.silva.yml"
+  - "protist.pr2.yml"
+  - "protist.silva.yml"
+  - "helminths.pr2.yml"
+  - "bacteria_archaea.pr2.yml"
+  - "bacteria_archaea.silva.yml"
+  - "fungi.pr2.yml"
+  - "fungi.silva.yml"
+  - "metazoa.silva.yml"
+  - "plants_invertebrates.pr2.yml"
+  - "plants.silva.yml"
+  - "vertebrates.pr2.yml"
+    
+analysis:
+  taxa_bar:
+    top_n: 15                  # collapse below this rank to "Other"
+    rank: ~                    # null = lowest assigned rank; or specify e.g. "Class"
+    ranks: ~                   # null = auto: [asv/lowest, penultimate level, antepenultimate level]
+    report_ranks: ~            # null = auto: last 3 levels
+  alpha:
+    metrics: ["richness", "shannon", "simpson"]
+  nmds:
+    distance: "bray_curtis"    # only option for now
+    max_stress: 0.2            # warn if NMDS stress exceeds this value

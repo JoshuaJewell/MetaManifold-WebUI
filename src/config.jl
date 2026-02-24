@@ -15,7 +15,7 @@ module Config
 #   projects/{study}/{run}/run_config.yml
 #
 # Stage skip guards hash the relevant YAML section from run_config.yml so
-# that any change at any level -- global, study, or run -- correctly
+# that any change at any level - global, study, or run - correctly
 # invalidates downstream checkpoints.
 #
 # © 2026 Joshua Benjamin Jewell. All rights reserved.

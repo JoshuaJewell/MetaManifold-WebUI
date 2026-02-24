@@ -17,21 +17,20 @@
     # and delete from, and that the remote server has sufficient resources. The authors
     # of this software accept no liability for unintended data loss, unauthorised access,
     # or any other consequences arising from misconfiguration or misuse of this feature.
-    function _assign_taxonomy_remote(emit, chimera_ckpt, db_path, tables_dir,
+    function _assign_taxonomy_remote(emit, chimera_ckpt, db_path, db_remote_path, tables_dir,
                                       checkpoint, taxa_prefix, multithread,
                                       min_boot, tax_levels, verbose, remote_cfg,
                                       log_path)
         host          = remote_cfg["host"]
         rscript       = get(remote_cfg, "rscript", "Rscript")
         base_dir      = get(remote_cfg, "staging_dir", nothing)
-        remote_db     = get(remote_cfg, "db_path", nothing)
         identity_file = get(remote_cfg, "identity_file", nothing)
 
         isnothing(base_dir) &&
             error("taxonomy.remote.staging_dir must be set explicitly in config")
-        !isnothing(remote_db) && !startswith(string(remote_db), "/") &&
-            error("taxonomy.remote.db_path must be an absolute path on the server " *
-                  "(got: '$remote_db'). Do not include the hostname.")
+        !isnothing(db_remote_path) && !startswith(string(db_remote_path), "/") &&
+            error("databases.yml dada2.remote_path must be an absolute path on the server " *
+                  "(got: '$db_remote_path'). Do not include the hostname.")
 
         # Append a unique run ID so cleanup only ever touches this specific run's dir.
         run_id      = string(floor(Int, time()))
@@ -67,14 +66,18 @@
         run(scp(functions_r,  "$host:$staging_dir/dada2_functions.r"))
         run(scp(remote_r,     "$host:$staging_dir/taxonomy_remote.r"))
 
-        remote_db_path = if !isnothing(remote_db)
-            emit("  Using remote database: $remote_db")
-            string(remote_db)
-        else
+        # If db_remote_path is set (from databases.yml dada2.remote_path), use it directly.
+        # Otherwise transfer the local db_path to the remote staging directory.
+        remote_db_resolved = if !isnothing(db_remote_path)
+            emit("  Using remote database: $db_remote_path")
+            db_remote_path
+        elseif !isnothing(db_path)
             db_basename = basename(db_path)
             emit("  Transferring database ($db_basename) to $host")
             run(scp(db_path, "$host:$staging_dir/$db_basename"))
             "$staging_dir/$db_basename"
+        else
+            error("No taxonomy database: set databases.yml dada2.remote_path or provide a local database")
         end
 
         levels_str  = join(tax_levels, ",")
@@ -84,7 +87,7 @@
         remote_cmd  = "$rscript $staging_dir/taxonomy_remote.r " *
                       "functions=$staging_dir/dada2_functions.r " *
                       "ckpt=$staging_dir/ckpt_chimera.RData " *
-                      "db=$remote_db_path " *
+                      "db=$remote_db_resolved " *
                       "tables=$remote_tables " *
                       "save=$remote_ckpt " *
                       "prefix=$taxa_prefix " *
@@ -146,7 +149,7 @@
         rm(.data_objs)
         gc()
         """
-        _source_r_functions()
+        _source_r_functions(ctx)
 
         seq_prefix    = get(ctx.cfg["output"], "seq_table_prefix", "seqtab_nochim")
         fasta_prefix  = get(ctx.cfg["output"], "fasta_prefix", "asvs")
@@ -156,16 +159,26 @@
         tables_dir    = ctx.dirs["Tables"]
         multithread   = get(ctx.cfg["taxonomy"], "multithread", 4)
         min_boot      = get(ctx.cfg["taxonomy"], "min_boot", 0)
-        tax_levels    = ctx.cfg["taxonomy"]["levels"]
+        # Read levels from databases.yml (single source of truth).
+        db_key    = string(ctx.cfg["taxonomy"]["database"])
+        dbs_path  = joinpath(@__DIR__, "..", "..", "config", "databases.yml")
+        dbs_cfg   = get(YAML.load_file(dbs_path), "databases", Dict())
+        tax_levels = String[string(l) for l in get(get(dbs_cfg, db_key, Dict()), "levels", String[])]
+        isempty(tax_levels) && error("No levels defined for database '$db_key' in $dbs_path")
 
         remote_cfg = get(get(ctx.cfg, "taxonomy", Dict()), "remote", nothing)
         use_remote = !isnothing(remote_cfg) &&
                      !isnothing(get(remote_cfg, "host", nothing))
 
-        # Skip local DB resolution when remote has its own db_path configured.
-        skip_local_db = use_remote && !isnothing(get(remote_cfg, "db_path", nothing))
-        db_path = skip_local_db ? nothing :
-                  isnothing(taxonomy_db) ? _resolve_taxonomy_db(ctx.cfg, emit) : taxonomy_db
+        # Resolve the database path. Priority:
+        #   1. databases.yml dada2.remote_path - pre-existing file on remote (no transfer needed)
+        #   2. taxonomy_db argument - local file to transfer
+        #   3. _resolve_taxonomy_db - fallback local resolution
+        db_remote_path = get(get(get(dbs_cfg, db_key, Dict()), "dada2", Dict()), "remote_path", nothing)
+        if !isnothing(db_remote_path)
+            db_remote_path = string(db_remote_path)
+        end
+        db_path = isnothing(taxonomy_db) ? _resolve_taxonomy_db(ctx.cfg, emit) : taxonomy_db
 
         R"load($chimera_ckpt)"
         has_data = rcopy(R"isTRUE(sum(seq_table_nochim, na.rm=TRUE) > 0)")
@@ -183,7 +196,7 @@
             end
         elseif use_remote
             emit("Assigning taxonomy (remote: $(remote_cfg["host"]))")
-            _assign_taxonomy_remote(emit, chimera_ckpt, db_path, tables_dir,
+            _assign_taxonomy_remote(emit, chimera_ckpt, db_path, db_remote_path, tables_dir,
                                     checkpoint, taxa_prefix, multithread,
                                     min_boot, tax_levels, verbose, remote_cfg,
                                     log_path)

@@ -17,9 +17,10 @@ module Databases
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 import Downloads
-using YAML, Logging
+using YAML, Logging, CodecZlib
+using ..PipelineTypes
 
-export ensure_databases, resolve_db
+export ensure_databases, resolve_db, make_db_meta
 
     """
         ensure_databases(config_path) -> Dict{String,String}
@@ -57,6 +58,12 @@ export ensure_databases, resolve_db
             !(db_info isa AbstractDict) && continue
             for (fmt, fmt_info) in db_info
                 !(fmt_info isa AbstractDict) && continue
+                # Skip entries where both uri and local are null/missing.
+                uri_val   = get(fmt_info, "uri", nothing)
+                local_val = get(fmt_info, "local", nothing)
+                if isnothing(uri_val) && isnothing(local_val)
+                    continue
+                end
                 key = "$(db_name)_$(fmt)"
                 resolved[key] = _resolve_entry(key, fmt_info, db_dir)
             end
@@ -91,6 +98,47 @@ export ensure_databases, resolve_db
         _resolve_entry("$(db_name)_$(fmt)", fmt_cfg, db_dir; emit)
     end
 
+    # Fixed column names that are never sample counts, regardless of database.
+    const _FIXED_NONCOUNTS = Set([
+        "SeqName", "Pident", "Accession", "rRNA", "Organellum", "specimen",
+        "Sequence", "sequence", "", "Column1",
+    ])
+
+    """
+        make_db_meta(config_path, db_name) -> DatabaseMeta
+
+    Construct a `DatabaseMeta` from the database entry in `config_path`.
+    Pre-computes `noncounts` as the union of taxonomy levels (including
+    `_dada2` suffixed variants) and fixed metadata column names.
+    """
+    function make_db_meta(config_path::String, db_name::String)
+        cfg    = YAML.load_file(config_path)
+        db_cfg = get(cfg, "databases", Dict())
+        haskey(db_cfg, db_name) ||
+            error("Database '$db_name' not found in $config_path")
+        entry = db_cfg[db_name]
+
+        levels     = String[string(l) for l in get(entry, "levels", String[])]
+        vsformat   = string(get(entry, "vsearch_format", "generic"))
+        raw_corr   = get(entry, "corrections", [])
+        corrections = Dict{String,Any}[]
+        if raw_corr isa Vector
+            for c in raw_corr
+                c isa AbstractDict && push!(corrections, Dict{String,Any}(string(k) => v for (k,v) in c))
+            end
+        end
+
+        noncounts = copy(_FIXED_NONCOUNTS)
+        for l in levels
+            push!(noncounts, l)
+            push!(noncounts, l * "_dada2")
+            push!(noncounts, l * "_vsearch")
+            push!(noncounts, l * "_boot")
+        end
+
+        return DatabaseMeta(db_name, levels, vsformat, corrections, noncounts)
+    end
+
     function _resolve_entry(key, fmt_info, db_dir; emit=nothing)
         log = isnothing(emit) ? msg -> @info(msg) : emit
         local_p = get(fmt_info, "local", nothing)
@@ -117,7 +165,102 @@ export ensure_databases, resolve_db
             Downloads.download(uri, cached)
             log("[$key] Saved to: $cached")
         end
+
+        # Post-processing: reformat database if requested.
+        reformat = get(fmt_info, "reformat", nothing)
+        if !isnothing(reformat) && !isempty(string(reformat))
+            cached = _apply_reformat(key, string(reformat), cached, db_dir; log)
+        end
+
         return cached
+    end
+
+    """
+    Apply a named reformat step to a downloaded database file.
+    Returns the path to the (possibly new) reformatted file.
+    """
+    function _apply_reformat(key, reformat, src_path, db_dir; log=msg->@info(msg))
+        if reformat == "silva_vsearch"
+            return _reformat_silva_vsearch(key, src_path, db_dir; log)
+        else
+            @warn "[$key] Unknown reformat '$reformat' - skipping"
+            return src_path
+        end
+    end
+
+    """
+    Reformat a SILVA vsearch FASTA so taxonomy is embedded in the sequence ID.
+
+    SILVA headers are `>Accession Kingdom;Phylum;...;Genus` (taxonomy after a space).
+    vsearch only captures the sequence ID (before the first space), so taxonomy is lost.
+
+    This function rewrites headers to `>Accession;Kingdom;Phylum;...;Genus` with spaces
+    within taxon names replaced by underscores, so vsearch returns the full taxonomy
+    string in the `target` field.
+
+    The reformatted file is cached alongside the original; the original is kept intact.
+    """
+    function _reformat_silva_vsearch(key, src_path, db_dir; log=msg->@info(msg))
+        # Derive output filename from source
+        src_base = basename(src_path)
+        # Strip .gz if present to insert _reformatted before the extension
+        if endswith(src_base, ".fasta.gz")
+            out_base = src_base[1:end-9] * "_reformatted.fasta.gz"
+        elseif endswith(src_base, ".fa.gz")
+            out_base = src_base[1:end-6] * "_reformatted.fa.gz"
+        elseif endswith(src_base, ".fasta")
+            out_base = src_base[1:end-6] * "_reformatted.fasta"
+        else
+            out_base = src_base * "_reformatted"
+        end
+        out_path = joinpath(db_dir, out_base)
+
+        if isfile(out_path)
+            log("[$key] Using cached reformatted SILVA: $out_path")
+            return out_path
+        end
+
+        log("[$key] Reformatting SILVA FASTA for vsearch compatibility: $src_path -> $out_path")
+
+        # Determine if gzipped
+        is_gz = endswith(src_path, ".gz")
+        is_out_gz = endswith(out_path, ".gz")
+
+        open_in  = is_gz     ? () -> GzipDecompressorStream(open(src_path, "r"))  : () -> open(src_path, "r")
+        open_out = is_out_gz ? () -> GzipCompressorStream(open(out_path, "w"))    : () -> open(out_path, "w")
+
+        in_io  = open_in()
+        out_io = open_out()
+        n_seq = 0
+        try
+            for line in eachline(in_io)
+                if startswith(line, '>')
+                    # Header: ">Accession.start.end Kingdom;Phylum;...;Genus"
+                    rest = line[2:end]
+                    sp = findfirst(' ', rest)
+                    if isnothing(sp)
+                        # No space - already no taxonomy; pass through
+                        write(out_io, line, '\n')
+                    else
+                        acc = rest[1:sp-1]
+                        tax = rest[sp+1:end]
+                        # Replace spaces within taxonomy with underscores,
+                        # then join accession + taxonomy with semicolon.
+                        tax_clean = replace(tax, ' ' => '_')
+                        write(out_io, '>', acc, ';', tax_clean, '\n')
+                    end
+                    n_seq += 1
+                else
+                    write(out_io, line, '\n')
+                end
+            end
+        finally
+            close(out_io)
+            close(in_io)
+        end
+
+        log("[$key] Reformatted $n_seq sequences -> $out_path")
+        return out_path
     end
 
 end

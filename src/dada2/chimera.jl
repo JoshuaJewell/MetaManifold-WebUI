@@ -39,7 +39,7 @@
         end
 
         R"rm(list=ls())"
-        _source_r_functions()
+        _source_r_functions(ctx)
         seq_prefix   = get(ctx.cfg["output"], "seq_table_prefix", "seqtab_nochim")
         fasta_prefix = get(ctx.cfg["output"], "fasta_prefix", "asvs")
         tables_dir   = ctx.dirs["Tables"]

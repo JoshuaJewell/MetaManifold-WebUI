@@ -32,6 +32,7 @@ export dada2, dada2_denoise, dada2_classify,
     import Downloads
     using Logging, RCall, YAML
     using ..PipelineTypes
+    using ..PipelineLog
     using ..Databases
     using ..Config
 
@@ -113,6 +114,7 @@ export dada2, dada2_denoise, dada2_classify,
             denoise(config_path;         progress, input_dir=trimmed.dir, workspace_root); R"gc()"
             filter_length(config_path;   progress, input_dir=trimmed.dir, workspace_root); R"gc()"
             chimera_removal(config_path; progress, input_dir=trimmed.dir, workspace_root); R"gc()"
+            pipeline_log(project, "DADA2 denoising complete")
         end
 
         return DenoisedASVs(chimera_ckpt, config_path, workspace_root, trimmed.dir)
@@ -141,6 +143,10 @@ export dada2, dada2_denoise, dada2_classify,
                         input_dir      = denoised.input_dir,
                         workspace_root,
                         taxonomy_db)
+        pipeline_log(project, "DADA2 taxonomy complete")
+        for f in (result.fasta, result.count_table, result.taxonomy)
+            isfile(f) && log_written(project, f)
+        end
         return result
     end
 
@@ -165,8 +171,11 @@ export dada2, dada2_denoise, dada2_classify,
             @info "Skipping dada2: outputs up to date in $tables_dir"
             return result
         end
+        pipeline_log(project, "DADA2 pipeline started")
         denoised = dada2_denoise(project, trimmed; progress)
-        return dada2_classify(project, denoised; taxonomy_db, progress)
+        result = dada2_classify(project, denoised; taxonomy_db, progress)
+        pipeline_log(project, "DADA2 complete")
+        return result
     end
 
 end
