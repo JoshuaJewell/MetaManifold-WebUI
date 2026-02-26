@@ -1,8 +1,21 @@
+fastqc:
+  threads: 20           # number of parallel FastQC threads
+  optional_args: ""     # additional flags passed verbatim to fastqc
+
+multiqc:
+  optional_args: ""     # additional flags passed verbatim to multiqc
+
 cutadapt:
   # Primer pair names to apply. Must match keys in the Pairs section of config/primers.yml.
   primer_pairs:
     - PrimerPair1
-  optional_args: "-m 200 --discard-untrimmed"
+  min_length: 200           # discard reads shorter than this after trimming (-m)
+  discard_untrimmed: true   # drop reads where no adapter was found (--discard-untrimmed)
+  cores: 0                  # parallel cores; 0 = auto-detect (-j)
+  quality_cutoff: ~         # 3' quality trimming cutoff, null to disable (-q)
+  error_rate: ~             # max adapter mismatch rate, null = cutadapt default (-e)
+  overlap: ~                # min adapter overlap length, null = cutadapt default (-O)
+  optional_args: ""         # additional flags passed verbatim to cutadapt
 
 dada2:
   file_patterns:
@@ -56,10 +69,17 @@ dada2:
   verbose: true
 
 vsearch:
-  optional_args: "--id 0.75 --query_cov 0.8"
+  identity: 0.75        # minimum identity threshold (--id)
+  query_cov: 0.8        # minimum fraction of query covered (--query_cov)
+  maxaccepts: ~         # stop after this many hits per query, null = vsearch default (--maxaccepts)
+  maxrejects: ~         # max rejected candidates per query, null = vsearch default (--maxrejects)
+  strand: ~             # "plus" or "both"; null = vsearch default (--strand)
+  optional_args: ""     # additional flags passed verbatim to vsearch
 
 cdhit:
-  optional_args: "-c 0.9"
+  identity: 0.97        # sequence identity threshold (-c); use 1.0 to deduplicate only
+  threads: 0            # worker threads; 0 = all available (-T)
+  optional_args: ""     # additional flags passed verbatim to cd-hit-est
 
 merge_taxa:
   # List of filter configs to apply, each relative to config/filters/.
@@ -68,19 +88,12 @@ merge_taxa:
   # Set to [] or omit entries to produce merged.csv only.
   filters:
   - "parasitic_protozoa.pr2.yml"
-  - "parasitic_protozoa.silva.yml"
   - "environmental_protozoa.pr2.yml"
-  - "environmental_protozoa.silva.yml"
   - "protist.pr2.yml"
-  - "protist.silva.yml"
   - "helminths.pr2.yml"
   - "bacteria_archaea.pr2.yml"
-  - "bacteria_archaea.silva.yml"
   - "fungi.pr2.yml"
-  - "fungi.silva.yml"
-  - "metazoa.silva.yml"
   - "plants_invertebrates.pr2.yml"
-  - "plants.silva.yml"
   - "vertebrates.pr2.yml"
     
 analysis:

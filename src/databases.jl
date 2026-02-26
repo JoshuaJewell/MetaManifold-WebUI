@@ -17,7 +17,7 @@ module Databases
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 import Downloads
-using YAML, Logging, CodecZlib
+using YAML, Logging
 using ..PipelineTypes
 
 export ensure_databases, resolve_db, make_db_meta
@@ -166,101 +166,7 @@ export ensure_databases, resolve_db, make_db_meta
             log("[$key] Saved to: $cached")
         end
 
-        # Post-processing: reformat database if requested.
-        reformat = get(fmt_info, "reformat", nothing)
-        if !isnothing(reformat) && !isempty(string(reformat))
-            cached = _apply_reformat(key, string(reformat), cached, db_dir; log)
-        end
-
         return cached
-    end
-
-    """
-    Apply a named reformat step to a downloaded database file.
-    Returns the path to the (possibly new) reformatted file.
-    """
-    function _apply_reformat(key, reformat, src_path, db_dir; log=msg->@info(msg))
-        if reformat == "silva_vsearch"
-            return _reformat_silva_vsearch(key, src_path, db_dir; log)
-        else
-            @warn "[$key] Unknown reformat '$reformat' - skipping"
-            return src_path
-        end
-    end
-
-    """
-    Reformat a SILVA vsearch FASTA so taxonomy is embedded in the sequence ID.
-
-    SILVA headers are `>Accession Kingdom;Phylum;...;Genus` (taxonomy after a space).
-    vsearch only captures the sequence ID (before the first space), so taxonomy is lost.
-
-    This function rewrites headers to `>Accession;Kingdom;Phylum;...;Genus` with spaces
-    within taxon names replaced by underscores, so vsearch returns the full taxonomy
-    string in the `target` field.
-
-    The reformatted file is cached alongside the original; the original is kept intact.
-    """
-    function _reformat_silva_vsearch(key, src_path, db_dir; log=msg->@info(msg))
-        # Derive output filename from source
-        src_base = basename(src_path)
-        # Strip .gz if present to insert _reformatted before the extension
-        if endswith(src_base, ".fasta.gz")
-            out_base = src_base[1:end-9] * "_reformatted.fasta.gz"
-        elseif endswith(src_base, ".fa.gz")
-            out_base = src_base[1:end-6] * "_reformatted.fa.gz"
-        elseif endswith(src_base, ".fasta")
-            out_base = src_base[1:end-6] * "_reformatted.fasta"
-        else
-            out_base = src_base * "_reformatted"
-        end
-        out_path = joinpath(db_dir, out_base)
-
-        if isfile(out_path)
-            log("[$key] Using cached reformatted SILVA: $out_path")
-            return out_path
-        end
-
-        log("[$key] Reformatting SILVA FASTA for vsearch compatibility: $src_path -> $out_path")
-
-        # Determine if gzipped
-        is_gz = endswith(src_path, ".gz")
-        is_out_gz = endswith(out_path, ".gz")
-
-        open_in  = is_gz     ? () -> GzipDecompressorStream(open(src_path, "r"))  : () -> open(src_path, "r")
-        open_out = is_out_gz ? () -> GzipCompressorStream(open(out_path, "w"))    : () -> open(out_path, "w")
-
-        in_io  = open_in()
-        out_io = open_out()
-        n_seq = 0
-        try
-            for line in eachline(in_io)
-                if startswith(line, '>')
-                    # Header: ">Accession.start.end Kingdom;Phylum;...;Genus"
-                    rest = line[2:end]
-                    sp = findfirst(' ', rest)
-                    if isnothing(sp)
-                        # No space - already no taxonomy; pass through
-                        write(out_io, line, '\n')
-                    else
-                        acc = rest[1:sp-1]
-                        tax = rest[sp+1:end]
-                        # Replace spaces within taxonomy with underscores,
-                        # then join accession + taxonomy with semicolon.
-                        tax_clean = replace(tax, ' ' => '_')
-                        write(out_io, '>', acc, ';', tax_clean, '\n')
-                    end
-                    n_seq += 1
-                else
-                    write(out_io, line, '\n')
-                end
-            end
-        finally
-            close(out_io)
-            close(in_io)
-        end
-
-        log("[$key] Reformatted $n_seq sequences -> $out_path")
-        return out_path
     end
 
 end

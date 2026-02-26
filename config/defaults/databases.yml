@@ -34,21 +34,3 @@ databases:
           Metamonada: Metamonada
           Telonemia: Telonemia
           Ancyromonadida: Ancyromonadida
-  silva:
-    dada2:
-      uri: "https://zenodo.org/records/4587955/files/silva_nr99_v138.1_train_set.fa.gz"
-      local: ~
-      remote_path: ~          # pre-existing path on remote host (avoids transferring the file)
-    vsearch:
-      uri: "https://www.arb-silva.de/fileadmin/silva_databases/release_138_1/Exports/SILVA_138.1_SSURef_NR99_tax_silva.fasta.gz"
-      local: ~
-      reformat: silva_vsearch    # embed taxonomy in sequence ID so vsearch returns it in target field
-    levels:
-      - Kingdom
-      - Phylum
-      - Class
-      - Order
-      - Family
-      - Genus
-    vsearch_format: silva     # >Acc Kingdom;Phylum;...;Genus
-    corrections: []

@@ -302,18 +302,31 @@ function install_python_tool(name::String)::String
     name
 end
 
-function install_r_packages(packages::Vector{String})
-    pkgs_r = join(["\"$p\"" for p in packages], ", ")
+function install_r_packages(packages::Vector{String}; force_reinstall::Bool=false)
+    pkgs_r      = join(["\"$p\"" for p in packages], ", ")
+    force_r     = force_reinstall ? "TRUE" : "FALSE"
     snippet = """
         if (!requireNamespace("BiocManager", quietly = TRUE))
             install.packages("BiocManager", repos = "https://cloud.r-project.org")
+
         pkgs <- c($pkgs_r)
-        missing <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)]
-        if (length(missing) > 0) {
-            message("Installing: ", paste(missing, collapse = ", "))
-            BiocManager::install(missing, ask = FALSE)
+
+        if ($force_r) {
+            message("Reinstalling all packages from source (--update mode)...")
+            BiocManager::install(pkgs, ask = FALSE, force = TRUE, type = "source")
         } else {
-            message("All R packages already installed.")
+            # requireNamespace only checks presence, not load-time linkage (e.g. Rcpp ABI).
+            # Use tryCatch(library(...)) to detect packages that are present but broken.
+            broken <- pkgs[!sapply(pkgs, function(p) {
+                tryCatch({ library(p, character.only = TRUE); TRUE },
+                         error = function(e) FALSE)
+            })]
+            if (length(broken) > 0) {
+                message("Installing/repairing: ", paste(broken, collapse = ", "))
+                BiocManager::install(broken, ask = FALSE, type = "source")
+            } else {
+                message("All R packages already installed and loadable.")
+            }
         }
     """
     try
@@ -440,8 +453,8 @@ function main()
     println()
     println("  --- R packages -----------------------------------------------------")
     r_packages = ["dada2", "tidyverse", "vegan"]
-    if prompt_yn("  Install/check R packages (dada2, tidyverse)?")
-        install_r_packages(r_packages)
+    if prompt_yn("  Install/check R packages (dada2, tidyverse, vegan)?")
+        install_r_packages(r_packages; force_reinstall=UPDATE_MODE)
     end
 
     # Write config

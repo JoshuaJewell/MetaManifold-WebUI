@@ -1,6 +1,7 @@
 module PipelineTypes
 
-    export HasFasta, ProjectCtx, TrimmedReads, ASVResult, DenoisedASVs, TaxonomyHits, MergedTables, DatabaseMeta
+    export HasFasta, ProjectCtx, TrimmedReads, ASVResult, DenoisedASVs, TaxonomyHits, MergedTables, DatabaseMeta,
+           StageNode
 
     abstract type HasFasta end
 
@@ -44,6 +45,27 @@ module PipelineTypes
         tables::Dict{String,String}  # name => CSV path; always includes "merged" (unfiltered)
         filter_order::Vector{String}  # filter stems in pipeline.yml order (for priority)
         filter_colours::Dict{String,String}  # filter stem => hex colour override (from YAML "colour" key)
+    end
+
+    """
+        StageNode(name, label, inputs, output, config_sections)
+
+    Declarative description of one pipeline stage.
+
+    - `name`:            machine identifier (Symbol), e.g. `:cutadapt`
+    - `label`:           human-readable stage name
+    - `inputs`:          wire types this stage requires (excluding `ProjectCtx`, which every
+                         ProjectCtx-aware stage implicitly receives)
+    - `output`:          wire type produced; `Nothing` for side-effect-only stages
+    - `config_sections`: pipeline.yml section keys whose content controls this stage
+                         (used by skip guards and the WebUI to know what to re-hash)
+    """
+    struct StageNode
+        name::Symbol
+        label::String
+        inputs::Vector{DataType}
+        output::DataType
+        config_sections::Vector{String}
     end
 
 end

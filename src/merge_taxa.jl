@@ -44,9 +44,6 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa
             meta_cols = ["SeqName", "Pident", "Accession", "rRNA", "Organellum", "specimen"]
             header = vcat(meta_cols, levels)
             n_meta = length(meta_cols) - 2  # fields parsed from sseqtax (excl SeqName, Pident)
-        elseif db_meta.vsearch_format == "silva"
-            header = vcat(["SeqName", "Pident"], levels)
-            n_meta = 0
         else
             # Generic: semicolon-separated, mapped positionally to levels
             header = vcat(["SeqName", "Pident"], levels)
@@ -73,17 +70,6 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa
                 tax_start = length(header) - length(levels) + 1
                 for j in 1:min(length(parts), length(levels))
                     data[tax_start + j - 1] = parts[j]
-                end
-            elseif db_meta.vsearch_format == "silva"
-                # SILVA (reformatted): vsearch target field is "Accession;Kingdom;Phylum;...;Genus"
-                # (spaces within taxon names replaced by underscores during DB reformatting).
-                # Split on ';' and skip the first field (accession).
-                all_parts = split(tax_str, ';')
-                # Drop leading accession field
-                parts = filter(!isempty, length(all_parts) > 1 ? all_parts[2:end] : all_parts)
-                tax_start = 3  # after SeqName, Pident
-                for j in 1:min(length(parts), length(levels))
-                    data[tax_start + j - 1] = replace(String(strip(parts[j])), '_' => ' ')
                 end
             else
                 # Generic: semicolon-separated, mapped positionally to levels

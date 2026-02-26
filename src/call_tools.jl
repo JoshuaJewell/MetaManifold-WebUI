@@ -49,6 +49,55 @@ export cutadapt, vsearch, multiqc, cdhit
 
     const _tools = load_tools()
 
+    ## Argument builders
+    # Build the optional-args string for cutadapt from named config keys + any
+    # user-supplied optional_args. Named keys cover the options most commonly tuned
+    # for metabarcoding; optional_args accepts anything else cutadapt supports.
+    function _cutadapt_optional_args(cfg::Dict)::String
+        parts = String[]
+        min_len = get(cfg, "min_length", 200)
+        push!(parts, "-m $min_len")
+        get(cfg, "discard_untrimmed", true) && push!(parts, "--discard-untrimmed")
+        cores = get(cfg, "cores", 0)
+        cores != 1 && push!(parts, "-j $cores")   # -j 1 is default; 0 = auto
+        quality_cutoff = get(cfg, "quality_cutoff", nothing)
+        isnothing(quality_cutoff) || push!(parts, "-q $quality_cutoff")
+        error_rate = get(cfg, "error_rate", nothing)
+        isnothing(error_rate) || push!(parts, "-e $error_rate")
+        overlap = get(cfg, "overlap", nothing)
+        isnothing(overlap) || push!(parts, "-O $overlap")
+        extra = strip(get(cfg, "optional_args", ""))
+        isempty(extra) || push!(parts, extra)
+        join(parts, " ")
+    end
+
+    # Build the --usearch_global args for vsearch from named config keys + optional_args.
+    function _vsearch_args(cfg::Dict)::String
+        parts = String[]
+        push!(parts, "--id $(get(cfg, "identity", 0.75))")
+        push!(parts, "--query_cov $(get(cfg, "query_cov", 0.8))")
+        maxaccepts = get(cfg, "maxaccepts", nothing)
+        isnothing(maxaccepts) || push!(parts, "--maxaccepts $maxaccepts")
+        maxrejects = get(cfg, "maxrejects", nothing)
+        isnothing(maxrejects) || push!(parts, "--maxrejects $maxrejects")
+        strand = get(cfg, "strand", nothing)
+        isnothing(strand) || push!(parts, "--strand $strand")
+        extra = strip(get(cfg, "optional_args", ""))
+        isempty(extra) || push!(parts, extra)
+        join(parts, " ")
+    end
+
+    # Build the cd-hit-est args from named config keys + optional_args.
+    function _cdhit_args(cfg::Dict)::String
+        parts = String[]
+        push!(parts, "-c $(get(cfg, "identity", 0.97))")
+        threads = get(cfg, "threads", 0)
+        push!(parts, "-T $threads")
+        extra = strip(get(cfg, "optional_args", ""))
+        isempty(extra) || push!(parts, extra)
+        join(parts, " ")
+    end
+
     ## cutadapt
     function get_primers(input, primers_path, seen_fwd::Vector{String}, seen_rev::Vector{String})
         data = YAML.load_file(primers_path)
@@ -208,28 +257,33 @@ export cutadapt, vsearch, multiqc, cdhit
     end
 
     function cutadapt(project::ProjectCtx;
-                      optional_args::Union{String,Nothing} = nothing,
                       cutadapt_bin = tool_bin("cutadapt"))
-        config_path   = write_run_config(project)
-        primers_path  = joinpath(project.config_dir, "primers.yml")
-        cfg           = get(YAML.load_file(config_path), "cutadapt", Dict())
-        primer_pairs  = cfg["primer_pairs"]
-        optional_args = isnothing(optional_args) ?
-                        get(cfg, "optional_args", "-m 200 --discard-untrimmed") : optional_args
-        cutadapt_dir  = joinpath(project.dir, "cutadapt")
-        hash_file     = joinpath(cutadapt_dir, "config.hash")
+        config_path  = write_run_config(project)
+        primers_path = joinpath(project.config_dir, "primers.yml")
+        cfg          = get(YAML.load_file(config_path), "cutadapt", Dict())
+        primer_pairs = cfg["primer_pairs"]
+        built_args   = _cutadapt_optional_args(cfg)
+        cutadapt_dir = joinpath(project.dir, "cutadapt")
+        hash_file    = joinpath(cutadapt_dir, "config.hash")
+
+        # Collect mtimes of all inputs: primers config + raw FASTQs.
+        raw_fastqs    = filter(f -> endswith(f, ".fastq.gz"), readdir(project.data_dir))
+        raw_mtimes    = [mtime(joinpath(project.data_dir, f)) for f in raw_fastqs]
+        primers_mtime = mtime(primers_path)
+        input_mtime   = isempty(raw_mtimes) ? primers_mtime : max(primers_mtime, maximum(raw_mtimes))
+
         if isdir(cutadapt_dir)
             trimmed = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(cutadapt_dir))
             if !isempty(trimmed) &&
                !_section_stale(config_path, "cutadapt", hash_file) &&
-               all(f -> mtime(joinpath(cutadapt_dir, f)) > mtime(primers_path), trimmed) &&
-               all(f -> filesize(joinpath(cutadapt_dir, f)) > 20, trimmed)  # skip empty gzips
+               all(f -> mtime(joinpath(cutadapt_dir, f)) > input_mtime, trimmed) &&
+               all(f -> filesize(joinpath(cutadapt_dir, f)) > 20, trimmed)
                 @info "Skipping cutadapt: trimmed reads up to date in $cutadapt_dir"
                 return TrimmedReads(cutadapt_dir)
             end
         end
         mkpath(cutadapt_dir)
-        run_cutadapt(get_primer_args(primer_pairs, primers_path), optional_args,
+        run_cutadapt(get_primer_args(primer_pairs, primers_path), built_args,
                      project.data_dir, cutadapt_dir, cutadapt_bin)
         _write_section_hash(config_path, "cutadapt", hash_file)
         pipeline_log(project, "cutadapt complete")
@@ -287,6 +341,21 @@ export cutadapt, vsearch, multiqc, cdhit
         @info "MultiQC complete. Output: $qc_dir  Log: $multiqc_log"
     end
 
+    function multiqc(project::ProjectCtx;
+                     fastqc_bin  = tool_bin("fastqc"),
+                     multiqc_bin = tool_bin("multiqc"))
+        config_path  = write_run_config(project)
+        fqc_cfg      = get(YAML.load_file(config_path), "fastqc",  Dict())
+        mqc_cfg      = get(YAML.load_file(config_path), "multiqc", Dict())
+        threads      = get(fqc_cfg, "threads", 20)
+        fastqc_args  = "-t $threads --extract --delete"
+        extra_fqc    = strip(get(fqc_cfg, "optional_args", ""))
+        isempty(extra_fqc) || (fastqc_args *= " $extra_fqc")
+        multiqc_args = strip(get(mqc_cfg, "optional_args", ""))
+        multiqc(project.data_dir, joinpath(project.dir, "QC");
+                fastqc_args, multiqc_args, fastqc_bin, multiqc_bin)
+    end
+
     ## vsearch
     """
         vsearch(fasta_in_dir, reference_database; optional_args = "--id 0.75 --query_cov 0.8", vsearch_bin = "vsearch")
@@ -331,22 +400,20 @@ export cutadapt, vsearch, multiqc, cdhit
     end
 
     function vsearch(project::ProjectCtx, input::HasFasta, reference_database::String;
-                     optional_args::Union{String,Nothing} = nothing,
                      vsearch_bin = tool_bin("vsearch"))
-        config_path   = write_run_config(project)
-        cfg           = get(YAML.load_file(config_path), "vsearch", Dict())
-        optional_args = isnothing(optional_args) ?
-                        get(cfg, "optional_args", "--id 0.75 --query_cov 0.8") : optional_args
-        vsearch_dir   = joinpath(project.dir, "vsearch")
-        tsv           = joinpath(vsearch_dir, "taxonomy.tsv")
-        hash_file     = joinpath(vsearch_dir, "config.hash")
+        config_path = write_run_config(project)
+        cfg         = get(YAML.load_file(config_path), "vsearch", Dict())
+        built_args  = _vsearch_args(cfg)
+        vsearch_dir = joinpath(project.dir, "vsearch")
+        tsv         = joinpath(vsearch_dir, "taxonomy.tsv")
+        hash_file   = joinpath(vsearch_dir, "config.hash")
         if isfile(tsv) &&
            !_section_stale(config_path, "vsearch", hash_file) &&
            mtime(tsv) > mtime(input.fasta)
             @info "Skipping vsearch: $tsv up to date"
             return TaxonomyHits(tsv)
         end
-        vsearch(input.fasta, reference_database, vsearch_dir; optional_args, vsearch_bin)
+        vsearch(input.fasta, reference_database, vsearch_dir; optional_args=built_args, vsearch_bin)
         _write_section_hash(config_path, "vsearch", hash_file)
         pipeline_log(project, "VSEARCH: $(input.fasta) against $(basename(reference_database))")
         log_written(project, tsv)
@@ -394,22 +461,20 @@ export cutadapt, vsearch, multiqc, cdhit
     end
 
     function cdhit(project::ProjectCtx, input::ASVResult;
-                   optional_args::Union{String,Nothing} = nothing,
                    cdhit_bin = tool_bin("cd_hit_est"))
-        config_path   = write_run_config(project)
-        cfg           = get(YAML.load_file(config_path), "cdhit", Dict())
-        optional_args = isnothing(optional_args) ?
-                        get(cfg, "optional_args", "-c 0.9") : optional_args
-        cdhit_dir     = joinpath(project.dir, "cdhit")
-        new_fasta     = joinpath(cdhit_dir, basename(input.fasta))
-        hash_file     = joinpath(cdhit_dir, "config.hash")
+        config_path = write_run_config(project)
+        cfg         = get(YAML.load_file(config_path), "cdhit", Dict())
+        built_args  = _cdhit_args(cfg)
+        cdhit_dir   = joinpath(project.dir, "cdhit")
+        new_fasta   = joinpath(cdhit_dir, basename(input.fasta))
+        hash_file   = joinpath(cdhit_dir, "config.hash")
         if isfile(new_fasta) &&
            !_section_stale(config_path, "cdhit", hash_file) &&
            mtime(new_fasta) > mtime(input.fasta)
             @info "Skipping cdhit: $new_fasta up to date"
             return ASVResult(new_fasta, input.count_table, input.taxonomy)
         end
-        new_fasta = cdhit(input.fasta, cdhit_dir; optional_args, cdhit_bin)
+        new_fasta = cdhit(input.fasta, cdhit_dir; optional_args=built_args, cdhit_bin)
         _write_section_hash(config_path, "cdhit", hash_file)
         pipeline_log(project, "cd-hit-est complete")
         log_written(project, new_fasta)
