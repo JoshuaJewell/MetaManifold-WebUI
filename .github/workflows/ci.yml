@@ -63,11 +63,11 @@ jobs:
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
 
       - name: Run tests
-        # Unset R_LIBS_USER so RCall uses the system R library (not an renv cache
-        # that lacks base packages like methods/stats/utils).
-        run: |
-          unset R_LIBS_USER
-          julia --project=. -t 2 --code-coverage=user test/runtests.jl --integration
+        env:
+          # setup-r@v2 strips R's default packages for performance; restore them
+          # so RCall (which embeds an R session) can call utils::getParseData etc.
+          R_DEFAULT_PACKAGES: datasets,utils,grDevices,graphics,stats,methods
+        run: julia --project=. -t 2 --code-coverage=user test/runtests.jl --integration
 
       - name: Process coverage
         uses: julia-actions/julia-processcoverage@v1
