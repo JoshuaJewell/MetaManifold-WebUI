@@ -31,19 +31,33 @@
         taxa_ranks   = _taxa_ranks(db_meta.levels, analysis_cfg)
         report_ranks = _report_ranks(db_meta.levels, analysis_cfg)
 
-        required_outputs = String[summary_path, stages_pdf, alpha_pdf]
+        # CSV cache - initialised here so the skip guard and execution share one set of reads.
+        cache = _CSVCache()
+
+        # Build required_outputs using the same guards as the execution loop so that
+        # filters producing no rows (empty CSVs) don't add paths that will never be written.
+        required_outputs = String[summary_path, alpha_pdf]
         has_filters && push!(required_outputs, filter_pdf)
         for method in _TAX_METHODS
             msrc_keys = _method_source_keys(merged, method)
             for src in msrc_keys
+                src_csv_path = get(merged.tables, src, "")
+                if isempty(src_csv_path) || !isfile(src_csv_path) || filesize(src_csv_path) == 0
+                    src == "merged" || continue
+                    src_csv_path = merged.tables["merged"]
+                    (!isfile(src_csv_path) || filesize(src_csv_path) == 0) && continue
+                end
+                raw_df, src_scols = _cached_read(cache, src_csv_path, db_meta)
+                isempty(src_scols) && continue
+                method == "dada2" && !_has_dada2(raw_df, db_meta.levels) && continue
+                view_df = _method_df(raw_df, method, db_meta.levels)
+                _total_seqs(view_df, src_scols) == 0 && continue
                 sd = _method_source_dirname(src)
                 for (rankdir, _) in taxa_ranks
                     push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "taxa_bar.pdf"))
                     push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "taxa_bar_absolute.pdf"))
                 end
-            end
-            for src in msrc_keys
-                push!(required_outputs, joinpath(analysis_dir, "analysis_report_$(method)_$(_method_source_dirname(src)).txt"))
+                push!(required_outputs, joinpath(analysis_dir, "analysis_report_$(method)_$(sd).txt"))
             end
         end
 

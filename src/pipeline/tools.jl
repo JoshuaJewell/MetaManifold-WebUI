@@ -9,6 +9,7 @@ export cutadapt, vsearch, multiqc, cdhit
     using YAML
     using Logging
     using ..PipelineTypes
+    using ..PipelineGraph
     using ..PipelineLog
     using ..Config
 
@@ -34,7 +35,7 @@ export cutadapt, vsearch, multiqc, cdhit
     Paths with `@` are SSH remote paths (user@host:/path), the calling module is
     responsible for routing those calls via SSH.
     """
-    function load_tools(config_path = joinpath(@__DIR__, "..", "config", "tools.yml"))
+    function load_tools(config_path = joinpath(@__DIR__, "..", "..", "config", "tools.yml"))
         isfile(config_path) || return Dict{String,String}()
         data = YAML.load_file(config_path)
         tools = Dict{String,String}()
@@ -275,7 +276,7 @@ export cutadapt, vsearch, multiqc, cdhit
         if isdir(cutadapt_dir)
             trimmed = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(cutadapt_dir))
             if !isempty(trimmed) &&
-               !_section_stale(config_path, "cutadapt", hash_file) &&
+               !_section_stale(config_path, stage_sections(:cutadapt), hash_file) &&
                all(f -> mtime(joinpath(cutadapt_dir, f)) > input_mtime, trimmed) &&
                all(f -> filesize(joinpath(cutadapt_dir, f)) > 20, trimmed)
                 @info "Skipping cutadapt: trimmed reads up to date in $cutadapt_dir"
@@ -285,7 +286,7 @@ export cutadapt, vsearch, multiqc, cdhit
         mkpath(cutadapt_dir)
         run_cutadapt(get_primer_args(primer_pairs, primers_path), built_args,
                      project.data_dir, cutadapt_dir, cutadapt_bin)
-        _write_section_hash(config_path, "cutadapt", hash_file)
+        _write_section_hash(config_path, stage_sections(:cutadapt), hash_file)
         pipeline_log(project, "cutadapt complete")
         return TrimmedReads(cutadapt_dir)
     end
@@ -380,7 +381,6 @@ export cutadapt, vsearch, multiqc, cdhit
         @info "VSEARCH running: $fasta_in_dir against $(basename(reference_database))"
         # --userout with query+target+id captures the full FASTA header (including
         # description after the space), unlike --blast6out which truncates at the first space.
-        # This is required for databases like SILVA where taxonomy is in the description field.
         cmd = "$vsearch_bin --usearch_global $fasta_in_dir --db $reference_database --userout $outfile --userfields query+target+id $optional_args"
         _run_logged(cmd, log_path)
         @info "VSEARCH complete. Output: $outfile  Log: $log_path"
@@ -408,13 +408,13 @@ export cutadapt, vsearch, multiqc, cdhit
         tsv         = joinpath(vsearch_dir, "taxonomy.tsv")
         hash_file   = joinpath(vsearch_dir, "config.hash")
         if isfile(tsv) &&
-           !_section_stale(config_path, "vsearch", hash_file) &&
+           !_section_stale(config_path, stage_sections(:vsearch), hash_file) &&
            mtime(tsv) > mtime(input.fasta)
             @info "Skipping vsearch: $tsv up to date"
             return TaxonomyHits(tsv)
         end
         vsearch(input.fasta, reference_database, vsearch_dir; optional_args=built_args, vsearch_bin)
-        _write_section_hash(config_path, "vsearch", hash_file)
+        _write_section_hash(config_path, stage_sections(:vsearch), hash_file)
         pipeline_log(project, "VSEARCH: $(input.fasta) against $(basename(reference_database))")
         log_written(project, tsv)
         return TaxonomyHits(tsv)
@@ -469,13 +469,13 @@ export cutadapt, vsearch, multiqc, cdhit
         new_fasta   = joinpath(cdhit_dir, basename(input.fasta))
         hash_file   = joinpath(cdhit_dir, "config.hash")
         if isfile(new_fasta) &&
-           !_section_stale(config_path, "cdhit", hash_file) &&
+           !_section_stale(config_path, stage_sections(:cdhit), hash_file) &&
            mtime(new_fasta) > mtime(input.fasta)
             @info "Skipping cdhit: $new_fasta up to date"
             return ASVResult(new_fasta, input.count_table, input.taxonomy)
         end
         new_fasta = cdhit(input.fasta, cdhit_dir; optional_args=built_args, cdhit_bin)
-        _write_section_hash(config_path, "cdhit", hash_file)
+        _write_section_hash(config_path, stage_sections(:cdhit), hash_file)
         pipeline_log(project, "cd-hit-est complete")
         log_written(project, new_fasta)
         return ASVResult(new_fasta, input.count_table, input.taxonomy)

@@ -17,23 +17,23 @@ function Logging.handle_message(l::_TimestampLogger, level, message, _module, gr
 end
 Logging.global_logger(_TimestampLogger(Logging.global_logger()))
 
-include("types.jl")
-include("log.jl")
-include("config.jl")
-include("databases.jl")
-include("call_tools.jl")
-include("dada2.jl")
-include("merge_taxa.jl")
-include("project.jl")
-include("diversity.jl")
-include("plots.jl")
-include("analysis.jl")
-include("graph.jl")
+include("core/types.jl")
+include("core/graph.jl")
+include("core/log.jl")
+include("core/config.jl")
+include("core/databases.jl")
+include("pipeline/tools.jl")
+include("pipeline/dada2.jl")
+include("pipeline/merge_taxa.jl")
+include("core/project.jl")
+include("analysis/diversity.jl")
+include("analysis/plots.jl")
+include("analysis/analysis.jl")
 
 using CSV
 using YAML
-using .PipelineTypes, .PipelineLog, .Config, .Databases, .Tools, .TaxonomyTableTools, .DADA2, .ProjectSetup
-using .DiversityMetrics, .PipelinePlots, .Analysis, .PipelineGraph
+using .PipelineTypes, .PipelineGraph, .PipelineLog, .Config, .Databases, .Tools, .TaxonomyTableTools, .DADA2, .ProjectSetup
+using .DiversityMetrics, .PipelinePlots, .Analysis
 
 ## Instantiate parameters
 config_dir       = "./config"
@@ -106,4 +106,3 @@ if any(!isnothing, merged_results)
 end
 
 write_combined_log(projects)
-print_pipeline()

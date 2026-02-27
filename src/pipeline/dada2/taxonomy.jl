@@ -132,7 +132,7 @@
         checkpoint   = joinpath(ctx.dirs["Checkpoints"], "checkpoint.RData")
         hash_file    = joinpath(ctx.dirs["Checkpoints"], "assign_taxonomy.hash")
         if isfile(checkpoint) &&
-           !_section_stale(config_path, "dada2.taxonomy,dada2.output", hash_file) &&
+           !_section_stale(config_path, stage_sections(:dada2_assign_taxonomy), hash_file) &&
            mtime(checkpoint) > mtime(chimera_ckpt)
             @info "Skipping assign_taxonomy: checkpoint up to date"
             return nothing
@@ -161,7 +161,7 @@
         min_boot      = get(ctx.cfg["taxonomy"], "min_boot", 0)
         # Read levels from databases.yml (single source of truth).
         db_key    = string(ctx.cfg["taxonomy"]["database"])
-        dbs_path  = joinpath(@__DIR__, "..", "..", "config", "databases.yml")
+        dbs_path  = joinpath(@__DIR__, "..", "..", "..", "config", "databases.yml")
         dbs_cfg   = get(YAML.load_file(dbs_path), "databases", Dict())
         tax_levels = String[string(l) for l in get(get(dbs_cfg, db_key, Dict()), "levels", String[])]
         isempty(tax_levels) && error("No levels defined for database '$db_key' in $dbs_path")
@@ -224,7 +224,7 @@
             emit("Log: $log_path")
         end
 
-        _write_section_hash(config_path, "dada2.taxonomy,dada2.output", hash_file)
+        _write_section_hash(config_path, stage_sections(:dada2_assign_taxonomy), hash_file)
         emit("Checkpoint: $checkpoint")
 
         emit("Pipeline complete. Outputs:")

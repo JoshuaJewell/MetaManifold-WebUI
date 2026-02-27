@@ -259,7 +259,20 @@ Each file in `config/filters/` defines one biological group to extract from the 
 
 #### Database-specific filters
 
-Filter files are named `{category}.{database}.yml` and carry a `databases:` key so that each filter is only applied when the active database matches:
+Filter files carry a `databases:` key so that each filter is only applied when the active database matches. The following filters ship in `config/filters/`:
+
+| Category | PR2 match |
+|----------|-----------|
+| `bacteria_archaea` | `Domain` = Bacteria\|Archaea |
+| `environmental_protozoa` | `Subdivision` = Cercozoa\|Gyrista\|Ciliophora\|Chrompodellids |
+| `fungi` | `Subdivision` = Fungi |
+| `helminths` | `Class` = Nematoda (excl. *Miculenchus*) |
+| `parasitic_protozoa` | `Subdivision` = Apicomplexa\|Parabasalia\|Fornicata\|Bigyra |
+| `plants_invertebrates` | Exclusion-based (PR2 ranks) |
+| `protist` | Exclusion-based (PR2 ranks) |
+| `vertebrates` | `Class` = Craniata |
+
+Example:
 
 ```yaml
 # fungi.pr2.yml
@@ -273,40 +286,6 @@ filters:
 remove_empty:
   - Subdivision
 ```
-
-```yaml
-# fungi.silva.yml
-databases: [silva]
-
-filters:
-  - column: Family
-    pattern: Nucletmycea
-    action: keep
-
-remove_empty:
-  - Family
-```
-
-Both files can be listed in `merge_taxa.filters` simultaneously; the pipeline silently skips whichever does not apply to the active database.
-
-The following filter pairs ship in `config/filters/`:
-
-| Category | PR2 match | SILVA match |
-|----------|-----------|-------------|
-| `bacteria_archaea` | `Domain` = Bacteria\|Archaea | `Kingdom` = Bacteria\|Archaea |
-| `environmental_protozoa` | `Subdivision` = Cercozoa\|Gyrista\|Ciliophora\|Chrompodellids | `Order` = Cercozoa\|Ciliophora\|Ochrophyta |
-| `fungi` | `Subdivision` = Fungi | `Family` = Nucletmycea |
-| `helminths` | `Class` = Nematoda (excl. *Miculenchus*) | `Family` = Holozoa ¹ |
-| `parasitic_protozoa` | `Subdivision` = Apicomplexa\|Parabasalia\|Fornicata\|Bigyra | `Family` = Conoidasida\|Trichomonadea\|Blastocystis\|Proteromonadea |
-| `plants_invertebrates` | Exclusion-based (PR2 ranks) | Exclusion-based (SILVA ranks) ¹ |
-| `protist` | Exclusion-based (PR2 ranks) | Exclusion-based (SILVA ranks) |
-| `vertebrates` | `Class` = Craniata | `Family` = Holozoa ¹ |
-
-> ¹ **SILVA metazoan resolution limit.** SILVA's 18S taxonomy uses only six ranks (Kingdom → Genus). The entire Metazoa lineage compresses into these ranks such that all animals — vertebrates, nematodes, annelids — resolve to `Family = Holozoa`, `Genus = Choanozoa`. There is no rank at which helminths and vertebrates can be distinguished. As a result:
-> - `helminths.silva.yml` and `vertebrates.silva.yml` are functionally equivalent: both capture all metazoa.
-> - `plants_invertebrates.silva.yml` retains metazoa alongside plants but cannot exclude vertebrates.
->
-> Use PR2 (`database: pr2`) when helminth- or vertebrate-specific filtering is required.
 
 #### Filter file format
 

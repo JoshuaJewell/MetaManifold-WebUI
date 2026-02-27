@@ -13,7 +13,7 @@
     # Resolve the DADA2 taxonomy database from config/databases.yml.
     function _resolve_taxonomy_db(cfg, emit)
         db_key   = string(cfg["taxonomy"]["database"])
-        dbs_path = joinpath(@__DIR__, "..", "..", "config", "databases.yml")
+        dbs_path = joinpath(@__DIR__, "..", "..", "..", "config", "databases.yml")
         isfile(dbs_path) ||
             error("config/databases.yml not found. Run new_project() first.")
         return resolve_db(dbs_path, db_key, "dada2"; emit)

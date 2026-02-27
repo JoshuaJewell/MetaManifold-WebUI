@@ -29,10 +29,29 @@
             init=0.0
         )
         all_mergeds = [m for (_, m, _) in valid]
+
+        # Initialise cache here so it is shared between the skip guard and execution.
+        cache = _CSVCache()
+
         required_outputs = [nmds_pdf, alpha_pdf]
         for method in _TAX_METHODS
             msrc_keys = _all_method_source_keys(all_mergeds, method)
             for src in msrc_keys
+                # Mirror the execution loop: only include the report path if at
+                # least one run has a non-empty CSV for this source key.
+                has_data = any(valid) do (proj, merged, dm)
+                    csv = get(merged.tables, src, "")
+                    if isempty(csv) && method == "dada2" && src == "merged"
+                        csv = get(merged.tables, "merged", "")
+                    end
+                    (isempty(csv) || !isfile(csv) || filesize(csv) == 0) && return false
+                    df, sc = _cached_read(cache, csv, dm)
+                    isempty(sc) && return false
+                    method == "dada2" && !_has_dada2(df, default_db_meta.levels) && return false
+                    vdf = _method_df(df, method, default_db_meta.levels)
+                    _total_seqs(vdf, sc) > 0
+                end
+                has_data || continue
                 push!(required_outputs, joinpath(analysis_dir, "analysis_report_$(method)_$(_method_source_dirname(src)).txt"))
             end
         end
@@ -47,8 +66,6 @@
 
         # Helper: serialize CairoMakie calls if plot_lock is provided.
         _plot(f) = isnothing(plot_lock) ? f() : lock(f, plot_lock)
-
-        cache = _CSVCache()
 
         src_label = _source_label(src_key)
         subtitle  = "Source: $src_label"
@@ -138,7 +155,7 @@
             log_written(study_dir, alpha_pdf)
         end
 
-        # PERMANOVA — always runs using group and run as covariates (derived from the
+        # PERMANOVA - always runs using group and run as covariates (derived from the
         # project structure).  Optionally, place a metadata.csv in the study directory
         # with a 'sample' column and extra covariate columns; those columns are merged
         # in when every sample name in all_scols is unique (i.e. no cross-database
@@ -153,9 +170,9 @@
                 sample_col = "sample" in names(user_meta) ? "sample" :
                              "Sample" in names(user_meta) ? "Sample" : nothing
                 if isnothing(sample_col)
-                    @warn "metadata.csv has no 'sample' column — using group/run only for PERMANOVA"
+                    @warn "metadata.csv has no 'sample' column - using group/run only for PERMANOVA"
                 elseif length(unique(all_scols)) < length(all_scols)
-                    @warn "Duplicate sample names across runs — extra metadata.csv columns ignored; using group/run only"
+                    @warn "Duplicate sample names across runs - extra metadata.csv columns ignored; using group/run only"
                 else
                     extra_cols = [c for c in names(user_meta) if c != sample_col]
                     if !isempty(extra_cols)
@@ -166,7 +183,7 @@
                                 base_meta[!, col] = [m[col] for m in matched]
                             end
                         else
-                            @warn "Not all samples found in metadata.csv — extra columns ignored"
+                            @warn "Not all samples found in metadata.csv - extra columns ignored"
                         end
                     end
                 end

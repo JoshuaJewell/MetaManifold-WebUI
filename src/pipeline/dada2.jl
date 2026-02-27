@@ -32,6 +32,7 @@ export dada2, dada2_denoise, dada2_classify,
     import Downloads
     using Logging, RCall, YAML
     using ..PipelineTypes
+    using ..PipelineGraph
     using ..PipelineLog
     using ..Databases
     using ..Config

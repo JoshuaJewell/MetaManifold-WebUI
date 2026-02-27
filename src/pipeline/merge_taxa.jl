@@ -6,6 +6,7 @@ module TaxonomyTableTools
 
 using CSV, DataFrames, Logging, YAML
 using ..PipelineTypes
+using ..PipelineGraph
 using ..PipelineLog
 using ..Config
 
@@ -312,10 +313,10 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa
 
         @info "Filtering table using configuration from $filters_yaml_path"
 
-        # ---- mappings (auto-detect old vs new format) ----
+        # mappings (auto-detect old vs new format)
         _apply_mappings!(df, get(config, "mappings", Dict()))
 
-        # ---- remove_empty (backwards compat with remove_empty_domain) ----
+        # remove_empty (backwards compat with remove_empty_domain)
         remove_cols = if haskey(config, "remove_empty")
             val = config["remove_empty"]
             val isa Vector ? string.(val) : [string(val)]
@@ -337,7 +338,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa
             end
         end
 
-        # ---- filters (with action + regex support) ----
+        # filters (with action + regex support)
         raw_filters = get(config, "filters", [])
         @assert raw_filters isa Vector "filters must be a list in YAML"
 
@@ -437,7 +438,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa
     function merge_taxa(project::ProjectCtx, source::ASVResult, tax::TaxonomyHits,
                         db_meta::DatabaseMeta)
         config_path = write_run_config(project)
-        cfg         = get(YAML.load_file(config_path), "merge_taxa", Dict())
+        cfg         = get(YAML.load_file(config_path), stage_sections(:merge_taxa), Dict())
         filter_list = get(cfg, "filters", [nothing])
         merge_dir   = joinpath(project.dir, "merged")
         hash_file   = joinpath(merge_dir, "config.hash")
@@ -448,7 +449,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa
         data_mtime     = max(mtime(tax.tsv), mtime(source.taxonomy),
                              isfile(tax_counts_path) ? mtime(tax_counts_path) : 0.0,
                              isfile(boot_path_)      ? mtime(boot_path_)      : 0.0)
-        config_changed = _section_stale(config_path, "merge_taxa", hash_file)
+        config_changed = _section_stale(config_path, stage_sections(:merge_taxa), hash_file)
         merged_csv     = joinpath(merge_dir, "merged.csv")
 
         # Determine what needs to be (re-)computed.
@@ -534,7 +535,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa
             log_written(project, output_csv)
         end
 
-        # ---- DADA2 filtered CSVs (same filters, applied to _dada2 columns) ----
+        # DADA2 filtered CSVs (same filters, applied to _dada2 columns)
         # Check whether any _dada2 taxonomy columns exist before attempting.
         has_dada2 = any(endswith(c, "_dada2") for c in names(df)
                         if any(startswith(c, t) for t in db_meta.levels))
@@ -571,7 +572,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa
             end
         end
 
-        _write_section_hash(config_path, "merge_taxa", hash_file)
+        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file)
         return MergedTables(tables, filter_stems, filter_colours)
     end
 

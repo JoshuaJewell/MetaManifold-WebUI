@@ -38,37 +38,12 @@
             for (_, m) in members if isfile(m.tables["merged"]);
             init=0.0
         )
-        required_outputs = String[alpha_pdf, nmds_pdf]
-        has_any_filters && push!(required_outputs, filter_pdf)
-        for method in _TAX_METHODS
-            msrc_keys = _method_source_keys(members[1][2], method)
-            for src in msrc_keys
-                sd = _method_source_dirname(src)
-                for (rankdir, _) in taxa_ranks
-                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "taxa_bar.pdf"))
-                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "taxa_bar_absolute.pdf"))
-                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "group_comparison.pdf"))
-                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "group_comparison_absolute.pdf"))
-                end
-            end
-            for src in msrc_keys
-                push!(required_outputs, joinpath(analysis_dir, "analysis_report_$(method)_$(_method_source_dirname(src)).txt"))
-            end
-        end
 
-        if all(isfile, required_outputs) &&
-           all(f -> mtime(f) > newest_merged, required_outputs)
-            @info "Skipping group analysis: outputs up to date in $group_dir"
-            return
-        end
-
-        reset_log(group_dir)
-        mkpath(figures_dir)
-
+        # Initialise cache here so it can be shared between the skip guard and execution.
         cache = _CSVCache()
 
-        # helper: collect per-run data for a given source key
-        function _collect_source_data(source::String)
+        # Helper used in both the skip guard and the execution loop.
+        function _collect_source_data_sg(source::String)
             dfs    = DataFrame[]
             scols  = Vector{String}[]
             names_ = String[]
@@ -87,20 +62,55 @@
             return dfs, scols, names_, labels, all_s
         end
 
+        required_outputs = String[alpha_pdf, nmds_pdf]
+        has_any_filters && push!(required_outputs, filter_pdf)
+        for method in _TAX_METHODS
+            msrc_keys = _method_source_keys(members[1][2], method)
+            for src in msrc_keys
+                s_dfs, _, _, _, s_all = _collect_source_data_sg(
+                    endswith(src, "_dada2") ? src : src)
+                if isempty(s_dfs) && method == "dada2" && src == "merged"
+                    s_dfs, _, _, _, s_all = _collect_source_data_sg("merged")
+                end
+                isempty(s_dfs) && continue
+                method == "dada2" && !_has_dada2(s_dfs[1], db_meta.levels) && continue
+                view_dfs = [_method_df(df, method, db_meta.levels) for df in s_dfs]
+                combined = reduce((a, b) -> vcat(a, b; cols=:union), view_dfs)
+                _total_seqs(combined, s_all) == 0 && continue
+                sd = _method_source_dirname(src)
+                for (rankdir, _) in taxa_ranks
+                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "taxa_bar.pdf"))
+                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "taxa_bar_absolute.pdf"))
+                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "group_comparison.pdf"))
+                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "group_comparison_absolute.pdf"))
+                end
+                push!(required_outputs, joinpath(analysis_dir, "analysis_report_$(method)_$(sd).txt"))
+            end
+        end
+
+        if all(isfile, required_outputs) &&
+           all(f -> mtime(f) > newest_merged, required_outputs)
+            @info "Skipping group analysis: outputs up to date in $group_dir"
+            return
+        end
+
+        reset_log(group_dir)
+        mkpath(figures_dir)
+
         # Primary source data (for NMDS, alpha, filter composition).
         run_dfs, run_scols, run_names, run_labels, all_scols =
-            _collect_source_data(src_key)
+            _collect_source_data_sg(src_key)
         isempty(run_dfs) && return
 
         # taxa bar & group comparison for ALL sources (dual method)
         for method in _TAX_METHODS
             msrc_keys = _method_source_keys(members[1][2], method)
             for src in msrc_keys
-                s_dfs, s_scols, s_names, _, s_all = _collect_source_data(
+                s_dfs, s_scols, s_names, _, s_all = _collect_source_data_sg(
                     endswith(src, "_dada2") ? src : src)
                 # For "merged" under dada2, use the same "merged" key
                 if isempty(s_dfs) && method == "dada2" && src == "merged"
-                    s_dfs, s_scols, s_names, _, s_all = _collect_source_data("merged")
+                    s_dfs, s_scols, s_names, _, s_all = _collect_source_data_sg("merged")
                 end
                 isempty(s_dfs) && continue
                 # Skip dada2 if no dada2 columns
@@ -256,10 +266,10 @@
         for method in _TAX_METHODS
             msrc_keys = _method_source_keys(members[1][2], method)
             for src in msrc_keys
-                s_dfs, s_scols, _, _, s_all = _collect_source_data(
+                s_dfs, s_scols, _, _, s_all = _collect_source_data_sg(
                     endswith(src, "_dada2") ? src : src)
                 if isempty(s_dfs) && method == "dada2" && src == "merged"
-                    s_dfs, s_scols, _, _, s_all = _collect_source_data("merged")
+                    s_dfs, s_scols, _, _, s_all = _collect_source_data_sg("merged")
                 end
                 isempty(s_dfs) && continue
                 method == "dada2" && !_has_dada2(s_dfs[1], db_meta.levels) && continue

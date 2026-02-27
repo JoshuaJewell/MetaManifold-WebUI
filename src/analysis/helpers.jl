@@ -64,7 +64,7 @@
         any(r -> startswith(c, r), levels), names(df))
 
     # Union source keys across multiple MergedTables (for study/group levels where
-    # different runs may carry different filter sets, e.g. .pr2 vs .silva filters).
+    # different runs may carry different filter sets).
     function _all_method_source_keys(mergeds::Vector{MergedTables}, method::String)
         seen = Set{String}()
         out  = String[]
