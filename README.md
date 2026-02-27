@@ -4,7 +4,7 @@
 [![Julia ≥ 1.0](https://img.shields.io/badge/Julia-%E2%89%A51.0-9558B2?logo=julia)](https://julialang.org)
 [![R ≥ 4.0](https://img.shields.io/badge/R-%E2%89%A54.0-276DC3?logo=r)](https://www.r-project.org)
 [![CI](https://github.com/JoshuaJewell/MetaManifold/actions/workflows/ci.yml/badge.svg)](https://github.com/JoshuaJewell/MetaManifold/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/JoshuaJewell/MetaManifold/graph/badge.svg)](https://codecov.io/gh/JoshuaJewell/MetaManifold)
+[![codecov](https://codecov.io/gh/JoshuaJewell/MetaManifold/graph/badge.svg?token=PH4BHGQOVL)](https://codecov.io/gh/JoshuaJewell/MetaManifold)
 
 A Julia pipeline for amplicon metabarcoding from raw paired-end Illumina reads to filtered, taxonomy-annotated ASV tables.
 
