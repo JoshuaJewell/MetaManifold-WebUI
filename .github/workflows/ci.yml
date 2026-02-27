@@ -68,6 +68,9 @@ jobs:
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
 
+      - name: Rebuild RCall against installed R
+        run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
+
       - name: Run tests
         run: julia --project=. -t 2 --code-coverage=user test/runtests.jl --integration
 
