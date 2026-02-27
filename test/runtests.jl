@@ -39,6 +39,7 @@ using .DiversityMetrics
     include("unit/test_merge_taxa.jl")
     include("unit/test_config.jl")
     include("unit/test_validation.jl")
+    include("unit/test_tools.jl")
 
     ## Integration tests (opt-in)
     if RUN_INTEGRATION

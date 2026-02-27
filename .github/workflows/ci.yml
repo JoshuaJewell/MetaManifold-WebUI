@@ -47,6 +47,9 @@ jobs:
       - name: Install cutadapt
         run: pip install cutadapt
 
+      - name: Install cd-hit
+        run: sudo apt-get install -y cd-hit
+
       - name: Install vsearch
         run: |
           curl -sSL https://github.com/torognes/vsearch/releases/download/v2.30.4/vsearch-2.30.4-linux-x86_64.tar.gz | tar xz
@@ -60,8 +63,8 @@ jobs:
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
 
-      - name: Run unit tests
-        run: julia --project=. --code-coverage=user test/runtests.jl
+      - name: Run tests
+        run: julia --project=. -t 2 --code-coverage=user test/runtests.jl --integration
 
       - name: Process coverage
         uses: julia-actions/julia-processcoverage@v1

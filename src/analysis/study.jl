@@ -160,7 +160,11 @@
         # with a 'sample' column and extra covariate columns; those columns are merged
         # in when every sample name in all_scols is unique (i.e. no cross-database
         # duplication of the same biological sample name).
-        if size(mat, 1) >= 3
+        n_perm_samples = size(mat, 1)
+        if n_perm_samples in 3:5
+            @warn "PERMANOVA: only $n_perm_samples samples — results have very low statistical power and p-values should not be interpreted."
+        end
+        if n_perm_samples >= 3
             # Base metadata: one row per entry in all_scols (may contain duplicates).
             base_meta = DataFrame(sample=all_scols, group=group_labels, run=run_labels)
 

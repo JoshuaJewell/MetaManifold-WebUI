@@ -232,7 +232,8 @@ dada2:
       identity_file: ~           # path to SSH private key; null to use password auth
       rscript: "Rscript"         # path to Rscript on the server
       staging_dir: "/absolute/path/on/server"
-      db_path: ~                 # absolute path to database on server (null = transfer local copy)
+      # To avoid transferring the database each run, set dada2.remote_path under
+      # the relevant database entry in config/databases.yml instead.
 
   # Output filename prefixes (all written to dada2/Tables/):
   output:

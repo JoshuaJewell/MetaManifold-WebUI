@@ -46,7 +46,9 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         tools
     end
 
-    tool_bin(key) = get(_tools, key, key)
+    # Fallback binary names for keys that differ from their PATH name.
+    const _BIN_DEFAULTS = Dict("cd_hit_est" => "cd-hit-est")
+    tool_bin(key) = get(_tools, key, get(_BIN_DEFAULTS, key, key))
 
     const _tools = load_tools()
 
@@ -128,8 +130,11 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         return "Invalid input. Please specify a valid primer pair in '$path'."
     end
 
-    # Formats cutadapt's arguments for the primer sets requested
-    function get_primer_args(primer_pairs, primers_path)
+    # Formats cutadapt's adapter arguments for the primer sets requested.
+    # In paired mode both -g (forward) and -G (reverse) flags are emitted.
+    # In forward-only mode only -g flags are emitted; reverse-only uses -a
+    # (3' adapter on the single read, i.e. the RC of the reverse primer).
+    function get_primer_args(primer_pairs, primers_path; mode="paired")
         seen_fwd = String[]
         seen_rev = String[]
         args = ""
@@ -139,13 +144,24 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
             forward_primer = pair_tuple[1]
             reverse_primer = pair_tuple[2]
 
-            args *= join([flag * primer * " " for (flag, primer) in (("-g ", forward_primer), ("-G ", reverse_primer)) if primer != "x"], "")
+            if mode == "paired"
+                args *= join([flag * primer * " "
+                              for (flag, primer) in (("-g ", forward_primer), ("-G ", reverse_primer))
+                              if primer != "x"], "")
+            elseif mode == "forward"
+                # Trim only the forward primer from the 5' end of R1.
+                forward_primer != "x" && (args *= "-g $forward_primer ")
+            elseif mode == "reverse"
+                # Trim only the reverse primer from the 5' end of the single read.
+                reverse_primer != "x" && (args *= "-g $reverse_primer ")
+            end
         end
 
         return chop(args)
     end
 
-    function run_cutadapt(primer_args, optional_args, fastq_in_dir, cutadapt_dir, cutadapt_bin)
+    function run_cutadapt(primer_args, optional_args, fastq_in_dir, cutadapt_dir,
+                          cutadapt_bin; mode="paired")
         samples = []
 
         log_dir          = joinpath(cutadapt_dir, "logs")
@@ -156,23 +172,38 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
 
         isdir(log_dir) || mkpath(log_dir)
 
-        # Filter .fastq.gz files
-        for f in filter(x->occursin(r"_R1.*fastq\.gz$", x), readdir(fastq_in_dir))
-            push!(samples, split(f, '_')[1])
+        # Discover samples from the appropriate read file(s).
+        if mode == "paired" || mode == "forward"
+            for f in filter(x -> occursin(r"_R1.*fastq\.gz$", x), readdir(fastq_in_dir))
+                push!(samples, split(f, '_')[1])
+            end
+        else  # reverse
+            for f in filter(x -> occursin(r"_R2.*fastq\.gz$", x), readdir(fastq_in_dir))
+                push!(samples, split(f, '_')[1])
+            end
         end
 
-        @info("cutadapt: running with arguments: $primer_args $optional_args.")
+        @info("cutadapt: running in $mode mode with arguments: $primer_args $optional_args.")
 
         nsamples = length(samples)
         for (i, sample) in enumerate(samples)
-            inputR1 = joinpath(fastq_in_dir, sample * "_*_L001_R1_001.fastq.gz")
-            inputR2 = joinpath(fastq_in_dir, sample * "_*_L001_R2_001.fastq.gz")
-
-            outputR1 = joinpath(cutadapt_dir, sample * "_R1_trimmed.fastq.gz")
-            outputR2 = joinpath(cutadapt_dir, sample * "_R2_trimmed.fastq.gz")
-
             @info("cutadapt: sample $i/$nsamples ($sample).")
-            cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR1 -p $outputR2 $inputR1 $inputR2"
+
+            if mode == "paired"
+                inputR1  = joinpath(fastq_in_dir, sample * "_*_L001_R1_001.fastq.gz")
+                inputR2  = joinpath(fastq_in_dir, sample * "_*_L001_R2_001.fastq.gz")
+                outputR1 = joinpath(cutadapt_dir, sample * "_R1_trimmed.fastq.gz")
+                outputR2 = joinpath(cutadapt_dir, sample * "_R2_trimmed.fastq.gz")
+                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR1 -p $outputR2 $inputR1 $inputR2"
+            elseif mode == "forward"
+                inputR1  = joinpath(fastq_in_dir, sample * "_*_L001_R1_001.fastq.gz")
+                outputR1 = joinpath(cutadapt_dir, sample * "_R1_trimmed.fastq.gz")
+                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR1 $inputR1"
+            else  # reverse
+                inputR2  = joinpath(fastq_in_dir, sample * "_*_L001_R2_001.fastq.gz")
+                outputR2 = joinpath(cutadapt_dir, sample * "_R2_trimmed.fastq.gz")
+                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR2 $inputR2"
+            end
 
             open(stats_path, "a") do io
                 run(pipeline(`bash -lc $cutadapt_cmd`; stdout=io, stderr=io))
@@ -283,9 +314,11 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
                 return TrimmedReads(cutadapt_dir)
             end
         end
+        mode = get(get(YAML.load_file(config_path), "dada2", Dict()),
+                   "file_patterns", Dict()) |> d -> get(d, "mode", "paired")
         mkpath(cutadapt_dir)
-        run_cutadapt(get_primer_args(primer_pairs, primers_path), built_args,
-                     project.data_dir, cutadapt_dir, cutadapt_bin)
+        run_cutadapt(get_primer_args(primer_pairs, primers_path; mode), built_args,
+                     project.data_dir, cutadapt_dir, cutadapt_bin; mode)
         _write_section_hash(config_path, stage_sections(:cutadapt), hash_file)
         pipeline_log(project, "cutadapt complete")
         return TrimmedReads(cutadapt_dir)
