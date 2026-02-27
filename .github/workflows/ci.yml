@@ -44,6 +44,19 @@ jobs:
             any::dada2
             any::vegan
 
+      - name: Install cutadapt
+        run: pip install cutadapt
+
+      - name: Install vsearch
+        run: |
+          curl -sSL https://github.com/torognes/vsearch/releases/download/v2.30.4/vsearch-2.30.4-linux-x86_64.tar.gz | tar xz
+          sudo mv vsearch-2.30.4-linux-x86_64/bin/vsearch /usr/local/bin/vsearch
+
+      - name: Install swarm
+        run: |
+          curl -sSL https://github.com/torognes/swarm/releases/download/v3.1.6/swarm-3.1.6-linux-x86_64.tar.gz | tar xz
+          sudo mv swarm-3.1.6-linux-x86_64/bin/swarm /usr/local/bin/swarm
+
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
 

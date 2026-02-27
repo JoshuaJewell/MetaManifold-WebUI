@@ -10,7 +10,7 @@ A Julia pipeline for amplicon metabarcoding from raw paired-end Illumina reads t
 
 ## Overview
 
-This project aims to wrap a standard amplicon sequencing workflow into a single, configurable project. It handles multiplex primer trimming, amplicon denoising, taxonomy assignment, and taxonomic filtering.
+This project aims to wrap standard amplicon sequencing workflows into a single, configurable project. It handles multiplex primer trimming, amplicon denoising, taxonomy assignment, and taxonomic filtering.
 
 **Pipeline**
 
@@ -108,7 +108,7 @@ Pipeline settings use a cascade: each level overrides the one above it, and any 
 |------|---------|
 | `config/defaults/` | Canonical defaults for every setting - do not edit |
 | `config/filters/` | Directory of taxonomic filter configs |
-| `config/databases.yml` | Database URI's and optional local paths |
+| `config/databases.yml` | Database URIs and optional local paths |
 | `config/primers.yml` | Primer sequences and pair definitions |
 | `config/tools.yml` | Tool binary paths (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est) |
 | `config/pipeline.yml` | Machine-level overrides (lowest user-editable precedence) |
@@ -121,7 +121,7 @@ Each `pipeline.yml` stub is created with a comment block explaining that level's
 
 ### Configuring databases (`config/databases.yml`)
 
-This is the single place to manage DB URI's shared across all projects.
+This is the single place to manage DB URIs shared across all projects.
 
 ```yaml
 databases:
