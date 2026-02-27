@@ -1,33 +1,43 @@
 @testset "Tools - get_primer_args mode dispatch" begin
-    # Use the real primers.yml — always present in the repo.
-    # @__DIR__ is test/unit/; repo root is two levels up.
-    primers_path = abspath(@__DIR__, "..", "..", "config", "primers.yml")
+    # Write a self-contained primers fixture — avoids depending on gitignored config/primers.yml
+    primers_path = joinpath(tempdir(), "test_primers_$(getpid()).yml")
+    write(primers_path, """
+Forward:
+  FwdPrimer: "AAAA"
+Reverse:
+  RevPrimer: "TTTT"
+Pairs:
+  - TestPair:
+    - FwdPrimer
+    - RevPrimer
+""")
 
-    @testset "paired mode emits -g and -G" begin
-        args = Tools.get_primer_args(["EMP"], primers_path; mode="paired")
-        @test occursin("-g ", args)
-        @test occursin("-G ", args)
-    end
+    try
+        @testset "paired mode emits -g and -G" begin
+            args = Tools.get_primer_args(["TestPair"], primers_path; mode="paired")
+            @test occursin("-g AAAA", args)
+            @test occursin("-G TTTT", args)
+        end
 
-    @testset "forward mode emits only -g, no -G" begin
-        args = Tools.get_primer_args(["EMP"], primers_path; mode="forward")
-        @test occursin("-g ", args)
-        @test !occursin("-G", args)
-    end
+        @testset "forward mode emits only -g, no -G" begin
+            args = Tools.get_primer_args(["TestPair"], primers_path; mode="forward")
+            @test occursin("-g AAAA", args)
+            @test !occursin("-G", args)
+        end
 
-    @testset "reverse mode emits only -g for reverse primer, not forward" begin
-        data = YAML.load_file(primers_path)
-        rev_seq = data["Reverse"]["EMP806R"]
-        args = Tools.get_primer_args(["EMP"], primers_path; mode="reverse")
-        @test occursin("-g $rev_seq", args)
-        @test !occursin("-G", args)
-        fwd_seq = data["Forward"]["EMP515F"]
-        @test !occursin(fwd_seq, args)
-    end
+        @testset "reverse mode emits -g for reverse primer only" begin
+            args = Tools.get_primer_args(["TestPair"], primers_path; mode="reverse")
+            @test occursin("-g TTTT", args)
+            @test !occursin("-G", args)
+            @test !occursin("AAAA", args)
+        end
 
-    @testset "default mode is paired" begin
-        args_default = Tools.get_primer_args(["EMP"], primers_path)
-        args_paired  = Tools.get_primer_args(["EMP"], primers_path; mode="paired")
-        @test args_default == args_paired
+        @testset "default mode is paired" begin
+            args_default = Tools.get_primer_args(["TestPair"], primers_path)
+            args_paired  = Tools.get_primer_args(["TestPair"], primers_path; mode="paired")
+            @test args_default == args_paired
+        end
+    finally
+        rm(primers_path; force=true)
     end
 end
