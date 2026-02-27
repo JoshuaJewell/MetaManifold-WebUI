@@ -45,9 +45,9 @@ jobs:
 
       - name: Install R packages
         run: |
-          Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
-          Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
-          Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
+          sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
+          sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
+          sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
 
       - name: Install cutadapt
         run: pip install cutadapt
