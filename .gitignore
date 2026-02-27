@@ -258,7 +258,12 @@ data/*
 !data/MiSeq_SOP/
 data/MiSeq_SOP/*
 !data/MiSeq_SOP/pipeline.yml
-!data/MiSeq_SOP/*.fastq.gz
+!data/MiSeq_SOP/run_A/
+data/MiSeq_SOP/run_A/*
+!data/MiSeq_SOP/run_A/*.fastq.gz
+!data/MiSeq_SOP/run_B/
+data/MiSeq_SOP/run_B/*
+!data/MiSeq_SOP/run_B/*.fastq.gz
 
 ### Lock files
 .~lock.*

@@ -12,16 +12,48 @@ A Julia pipeline for amplicon metabarcoding from raw paired-end Illumina reads t
 
 This project aims to wrap a standard amplicon sequencing workflow into a single, configurable project. It handles multiplex primer trimming, amplicon denoising, taxonomy assignment, and taxonomic filtering.
 
-**Pipeline stages**
+**Pipeline**
 
-| Step | Tool | Output |
-|------|------|--------|
-| Primer trimming | cutadapt | Trimmed FASTQ pairs per sample |
-| Quality assessment | FastQC / MultiQC | HTML QC reports |
-| Amplicon denoising | DADA2 (R) | ASV count table, FASTA, taxonomy |
-| Taxonomy assignment | vsearch | Per-ASV taxonomy TSV |
-| Clustering | cd-hit-est | Clustered ASV representatives |
-| Merge + filter | Julia | Combined taxonomy/count table, filtered output |
+```
+Raw FASTQs  (data/{study}/[{run}/]*.fastq.gz)
+      │
+      ├─ FastQC / MultiQC
+      │
+      ▼
+   cutadapt, primer trimming
+      │
+      ├──────────────────────────┐
+      │                          │
+      ▼                          ▼
+   DADA2*, ASV (R);         SWARM*, OTU (vsearch + swarm);
+   filter & trim            merge pairs
+   learn error rates        dereplicate
+   denoise + merge          chimera filter
+   length filter            cluster OTUs
+   chimera removal               │
+   taxonomy assign*              │
+      │                          │
+      ▼                          │
+   cd-hit-est*, demultiplex      │
+      │                          │
+      │                          │
+      ▼                          ▼
+   vsearch*                 vsearch, global alignment
+      │                          │
+      ├──────────────────────────┘
+      ▼
+   merge_taxa;
+   join ASV tables*
+   join counts-taxonomy
+   apply filters
+      │
+      ▼
+   analyse_run
+      │
+      ▼ study-wide (≥2 runs)
+   analyse_study
+```
+*optional
 
 ## Prerequisites
 
@@ -61,9 +93,9 @@ When a remote SSH path is set, the pipeline routes that tool's invocations throu
 
 ```julia
 projects = new_project("MyProject")
-# Bootstraps projects/MyProject/ mirroring data/MyProject/ subdirectory structure.
-# Ensure "MyProject" matches the folder name under data/.
-# Creates an empty pipeline.yml override stub at each level (study, group, run).
+# Finds data/MyProject/ and creates matching output dirs under projects/MyProject/.
+# Creates a pipeline.yml stub at each level of data/MyProject/ (study, group, run)
+# if one does not already exist
 ```
 
 Re-running `new_project` never overwrites existing files. To reset a level to its parent's settings, delete that level's `pipeline.yml` and re-run.
@@ -80,9 +112,9 @@ Pipeline settings use a cascade: each level overrides the one above it, and any 
 | `config/primers.yml` | Primer sequences and pair definitions |
 | `config/tools.yml` | Tool binary paths (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est) |
 | `config/pipeline.yml` | Machine-level overrides (lowest user-editable precedence) |
-| `projects/{name}/pipeline.yml` | Study-level overrides |
-| `projects/{name}/{group}/pipeline.yml` | Group-level overrides (intermediate directories) |
-| `projects/{name}/{run}/pipeline.yml` | Run-level overrides (highest precedence) |
+| `data/{name}/pipeline.yml` | Study-level overrides |
+| `data/{name}/{group}/pipeline.yml` | Group-level overrides (intermediate directories) |
+| `data/{name}/{run}/pipeline.yml` | Run-level overrides (highest precedence) |
 | `projects/{name}/{run}/run_config.yml` | Generated merged config (provenance) - do not edit |
 
 Each `pipeline.yml` stub is created with a comment block explaining that level's role. Write only the keys you want to change; omit the rest.
@@ -128,7 +160,7 @@ Store all primer pairs in here and reference whichever combinations you need per
 
 ### Configuring cutadapt (`cutadapt:` in `pipeline.yml`)
 
-Selects which primer pairs to apply and passes additional arguments to cutadapt.
+Selects which primer pairs to apply and controls trimming behaviour.
 
 ```yaml
 cutadapt:
@@ -136,11 +168,14 @@ cutadapt:
   primer_pairs:
     - PrimerPair1
     - PrimerPair2
-
-  optional_args: "-m 200 --discard-untrimmed"
+  min_length: 200           # discard reads shorter than this after trimming (-m)
+  discard_untrimmed: true   # drop reads where no adapter was found (--discard-untrimmed)
+  cores: 0                  # parallel cores; 0 = auto-detect (-j)
+  quality_cutoff: ~         # 3' quality trimming cutoff, null to disable (-q)
+  error_rate: ~             # max adapter mismatch rate, null = cutadapt default (-e)
+  overlap: ~                # min adapter overlap length, null = cutadapt default (-O)
+  optional_args: ""         # additional flags passed verbatim to cutadapt
 ```
-
-`optional_args` is passed verbatim to cutadapt after the primer arguments. Here, the `-m` flag sets the minimum read length after trimming; `--discard-untrimmed` drops reads with no primer match.
 
 ### Configuring DADA2 (`dada2:` in `pipeline.yml`)
 
@@ -221,27 +256,43 @@ dada2:
 
 ### Configuring vsearch (`vsearch:` in `pipeline.yml`)
 
-Controls the alignment thresholds used when assigning taxonomy against the reference database.
+Controls the alignment thresholds used when assigning taxonomy against the reference database. Per run, this provides the same configuration for both ASV and OTU pipeline if they are running parallel.
 
 ```yaml
 vsearch:
-  optional_args: "--id 0.75 --query_cov 0.8"
+  identity: 0.75        # minimum sequence identity (--id)
+  query_cov: 0.8        # minimum fraction of query covered (--query_cov)
+  maxaccepts: ~         # stop after this many hits per query, null = vsearch default
+  maxrejects: ~         # max rejected candidates, null = vsearch default
+  strand: ~             # "plus" or "both"; null = vsearch default
+  optional_args: ""     # additional flags passed verbatim to vsearch
 ```
-
-`optional_args` is passed verbatim to `vsearch --usearch_global`. Key thresholds:
-- `--id` - minimum sequence identity (0-1); lower values recover more hits at the cost of specificity
-- `--query_cov` - minimum fraction of the query that must be aligned; filters partial matches
 
 ### Configuring cd-hit-est (`cdhit:` in `pipeline.yml`)
 
-Clustering step that collapses near-identical ASVs before taxonomy assignment.
+Optional clustering step that collapses near-identical ASVs before vsearch taxonomy assignment. Used here for when using primers in multiplex, to reduce inflation from same sequences from different primers appearing different.
 
 ```yaml
 cdhit:
-  optional_args: "-c 0.9"
+  identity: 1           # sequence identity threshold (-c)
+  threads: 0            # worker threads; 0 = all available (-T)
+  optional_args: ""     # additional flags passed verbatim to cd-hit-est
 ```
 
-`optional_args` is passed verbatim to `cd-hit-est`. `-c` sets the sequence identity threshold for clustering (default 0.9 = 90%).
+### Configuring swarm (`swarm:` in `pipeline.yml`)
+
+OTU clustering pipeline run in parallel with DADA2. Produces an OTU count table and FASTA which are carried through vsearch taxonomy assignment and `merge_taxa` alongside the ASV outputs.
+
+```yaml
+swarm:
+  differences: 1          # -d: max differences between sequences in the same cluster
+  threads: 0              # -t: worker threads; 0 = all available
+  chimera_check: true     # run vsearch --uchime_denovo before clustering
+  min_abundance: 2        # --minsize: discard singleton dereps before clustering
+  fastq_minovlen: 20      # min overlap for paired-end merging
+  identity: 0.97          # --id: threshold for mapping reads back to OTU seeds
+  optional_args: ""       # additional flags passed verbatim to swarm
+```
 
 ### Configuring merge_taxa (`merge_taxa:` in `pipeline.yml`)
 
@@ -254,6 +305,22 @@ merge_taxa:
 ```
 
 Each entry is a filename relative to `config/filters/`. Remove all entries (or set `filters: []`) to produce only the unfiltered `merged.csv`.
+
+### Configuring analysis (`analysis:` in `pipeline.yml`)
+
+Controls the figures produced by `analyse_run` and `analyse_study`.
+
+```yaml
+analysis:
+  taxa_bar:
+    top_n: 15                  # collapse taxa below this rank to "Other"
+    rank: ~                    # null = lowest assigned rank; or specify e.g. "Class"
+  alpha:
+    metrics: ["richness", "shannon", "simpson"]
+  nmds:
+    distance: "bray_curtis"
+    max_stress: 0.2            # warn if NMDS stress exceeds this value
+```
 
 ### Configuring taxonomic filtering (`config/filters/`)
 
@@ -311,30 +378,56 @@ remove_empty:             # remove rows where this column is blank or "NA"
 
 ## Usage
 
-Place FASTQ files in `data/MyProject`. If you want to run multiple sets of FASTQ files, you can use subdirectories like `data/MyProject/Primer1`, `data/MyProject/Primer2`. `new_project()` will automatically generate a matching project directory structure, nothing in `data/` is ever overwritten. Edit `src/main.jl` to set your project name and run:
+Place FASTQ files in `data/MyProject`. For multi-run projects, use subdirectories like `data/MyProject/run_A`, `data/MyProject/run_B`. `new_project()` walks the data directory, treats every leaf containing `.fastq.gz` files as a run, and creates a matching output tree under `projects/`. Nothing in `data/` is ever overwritten. Edit `src/main.jl` to set your project name and run:
 
 ```julia
+db_name  = "pr2"
 dbs      = ensure_databases(databases_config)
+db_meta  = make_db_meta(databases_config, db_name)
 projects = new_project("MyProject")
 
-const r_lock = ReentrantLock()
+const r_lock    = ReentrantLock()
+const plot_lock = ReentrantLock()
 
-Threads.@threads for project in projects
-    multiqc(project.data_dir, joinpath(project.dir, "QC"))
+merged_results = Vector{Union{MergedTables,Nothing}}(undef, length(projects))
 
+Threads.@threads for (i, project) in collect(enumerate(projects))
     trimmed = cutadapt(project)
 
-    asvs = lock(r_lock) do
-        dada2(project, trimmed, taxonomy_db = dbs["pr2_dada2"])
+    # DADA2 + swarm run in parallel; DADA2 R calls serialised via r_lock
+    dada2_task = Threads.@spawn begin
+        asvs = lock(r_lock) do
+            dada2(project, trimmed, taxonomy_db = dbs["$(db_name)_dada2"])
+        end
+        cdhit(project, asvs)   # optional; remove this line to skip clustering
     end
-    # asvs = lock(r_lock) do; cdhit(project, asvs); end  # optional clustering
+    swarm_task = Threads.@spawn swarm(project, trimmed)
 
-    tax    = vsearch(project, asvs, dbs["pr2_vsearch"])
-    merged = merge_taxa(project, asvs, tax)
+    asvs = fetch(dada2_task)
+    otus = fetch(swarm_task)
+
+    # Taxonomy assignment (ASV + OTU in parallel)
+    asv_tax_task = Threads.@spawn vsearch(project, asvs, dbs["$(db_name)_vsearch"])
+    otu_tax_task = isnothing(otus) ? nothing :
+                   Threads.@spawn vsearch(project, otus, dbs["$(db_name)_vsearch"])
+
+    asv_merged = merge_taxa(project, asvs, fetch(asv_tax_task), db_meta)
+    merged = if !isnothing(otus)
+        otu_merged = merge_taxa_otu(project, otus, fetch(otu_tax_task), db_meta)
+        MergedTables(merge(asv_merged.tables, otu_merged.tables),
+                     asv_merged.filter_order, asv_merged.filter_colours)
+    else
+        asv_merged
+    end
+
+    merged_results[i] = merged
+    analyse_run(project, merged, asvs, db_meta; plot_lock)
 end
+
+analyse_study(projects, merged_results, fill(db_meta, length(projects)); plot_lock)
 ```
 
-Each stage returns a wire type (`TrimmedReads`, `ASVResult`, `TaxonomyHits`, `MergedTables`) and skips automatically if outputs are already up to date relative to their inputs (mtime-based). This means that rerunning pipeline after config change will only perform the minimum necessary steps to output.
+Each stage returns a wire type (`TrimmedReads`, `ASVResult`, `OTUResult`, `TaxonomyHits`, `MergedTables`) and skips automatically if outputs are already up to date relative to their inputs (mtime-based for files, hash-based for configurations). Rerunning after a config change only re-executes the minimum necessary stages.
 
 Run from the project root:
 
@@ -390,12 +483,31 @@ projects/{project_name}/{run}/
 ├── cdhit/
 │   ├── asvs.fasta               # Clustered ASV sequences
 │   └── asvs.fasta.clstr         # Cluster membership file
-├── vsearch/
-│   ├── taxonomy.tsv
+├── swarm/
+│   ├── otus.fasta               # OTU representative sequences
+│   ├── otus.count_table.csv     # OTU count table (samples x OTUs)
 │   └── logs/
-└── merged/
-    ├── merged.csv               # Merged vsearch taxonomy + ASV counts (all taxa)
-    └── protist_filter.csv       # Filtered subset (one file per entry in merge_taxa.yml)
+├── vsearch/
+│   ├── taxonomy.tsv             # Top-hit taxonomy assignments (ASV or OTU)
+│   └── logs/
+├── merged/
+│   ├── merged.csv               # Merged taxonomy + counts (all taxa)
+│   └── protist_filter.csv       # Filtered subset (one file per entry in merge_taxa.filters)
+└── analysis/
+    ├── pipeline_summary.csv     # Read counts retained at each stage
+    └── Figures/
+        ├── taxa_bar.pdf         # Stacked bar chart of top taxa
+        ├── filter_composition.pdf
+        └── alpha_diversity.pdf  # Alpha diversity indices per sample
+```
+
+Study-level outputs are written to `projects/{project_name}/analysis/`:
+
+```
+projects/{project_name}/analysis/
+└── Figures/
+    ├── alpha_comparison.pdf     # Alpha diversity across runs/groups
+    └── nmds.pdf                 # NMDS ordination (if ≥ 2 runs)
 ```
 
 ## Third-party tools
@@ -407,24 +519,25 @@ This project orchestrates the following tools. Each is fetched from its upstream
 | [cutadapt](https://github.com/marcelm/cutadapt) | MIT | PyPI |
 | [FastQC](https://github.com/s-andrews/FastQC) | GPL v3 | Babraham Bioinformatics |
 | [MultiQC](https://github.com/MultiQC/MultiQC) | GPL v3 | PyPI |
+| [DADA2](https://benjjneb.github.io/dada2/) ([optimised fork](https://github.com/JoshuaJewell/dada2)) | LGPL v3 | Bioconductor |
+| [swarm](https://github.com/frederic-mahe/swarm) | GPL v3 | GitHub Releases |
 | [vsearch](https://github.com/torognes/vsearch) | GPL v3 | GitHub Releases |
 | [cd-hit](https://github.com/weizhongli/cdhit) | GPL v2+ | GitHub Releases / apt |
-| [DADA2](https://benjjneb.github.io/dada2/) ([optimised fork](https://github.com/JoshuaJewell/dada2)) | LGPL v3 | Bioconductor |
 
 ## Acknowledgements
 
 This pipeline draws on the following prior work:
 
-- **Frédéric Mahé** - [Fred's metabarcoding pipeline](https://github.com/frederic-mahe/swarm/wiki/Fred's-metabarcoding-pipeline) informed the overall workflow architecture: the sequencing of primer trimming, vsearch-based taxonomy assignment, and final table merge/filter stages. Fred's pipeline uses swarm + OTUs where MetaManifold uses DADA2 + ASVs.
-- **Benjamin J. Callahan _et al._** - [DADA2 tutorial](https://benjjneb.github.io/dada2/tutorial.html), used under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), which the `dada2.r` module is based on.
+- **Frédéric Mahé** - [Fred's metabarcoding pipeline](https://github.com/frederic-mahe/swarm/wiki/Fred's-metabarcoding-pipeline) informed the overall workflow architecture: the sequencing of primer trimming, `swarm.jl`, vsearch-based taxonomy assignment, and final table merge/filter stages.
+- **Benjamin J. Callahan _et al._** - [DADA2 tutorial](https://benjjneb.github.io/dada2/tutorial.html), used under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), which `dada2.jl` and its modules are based on.
 
 The following colleagues at the **Department of Parasitology, Charles University** (Faculty of Science, BIOCEV, Vestec, Czech Republic) contributed to this work:
 
 - **Mgr. Jiří Novák** (supervisor) - scripts from which several modules and configurations were adapted:
-  - `run_cutadapt.jl`
-  - `merge_and_filter_taxa.jl`
-  - `dada2.yml`
-  - `protist_filter.yml`
+  - `call_tools.jl`
+  - `merge_taxa.jl`
+  - `pipeline.yml`
+  - `protist_filter.pr2.yml`
 - **doc. Mgr. Vladimír Hampl** - provided laboratory access and resources.
 
 ## License

@@ -46,7 +46,7 @@ using .DiversityMetrics
         include(joinpath(@__DIR__, "..", "src", "pipeline", "swarm.jl"))
         include(joinpath(@__DIR__, "..", "src", "analysis", "plots.jl"))
         include(joinpath(@__DIR__, "..", "src", "analysis", "analysis.jl"))
-        using .DADA2, .OTUPipeline
+        using .DADA2, .OTUPipeline, .Analysis
         include("integration/test_pipeline.jl")
     else
         @info "Skipping integration tests (pass --integration to enable)"

@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version: ["1.10", "1"]   # 1.10 LTS + latest stable
+        julia-version: ["1"]   # latest stable (Manifest.toml is version-pinned)
         os: [ubuntu-latest]
 
     steps:
