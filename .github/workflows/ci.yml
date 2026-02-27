@@ -38,11 +38,10 @@ jobs:
           r-version: "4.4"
 
       - name: Install R packages
-        uses: r-lib/actions/setup-r-dependencies@v2
-        with:
-          packages: |
-            any::dada2
-            any::vegan
+        run: |
+          Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
+          Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
+          Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
 
       - name: Install cutadapt
         run: pip install cutadapt

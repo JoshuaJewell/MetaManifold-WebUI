@@ -1,6 +1,7 @@
 @testset "Tools - get_primer_args mode dispatch" begin
-    # Use the real primers.yml — always present in the repo
-    primers_path = joinpath(@__DIR__, "..", "..", "config", "primers.yml")
+    # Use the real primers.yml — always present in the repo.
+    # @__DIR__ is test/unit/; repo root is two levels up.
+    primers_path = abspath(@__DIR__, "..", "..", "config", "primers.yml")
 
     @testset "paired mode emits -g and -G" begin
         args = Tools.get_primer_args(["EMP"], primers_path; mode="paired")
