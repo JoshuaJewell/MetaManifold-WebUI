@@ -253,7 +253,12 @@ rsconnect/
 ### Other
 # Things with ambiguous intellectual property
 internal
-data/
+data/*
+# MiSeq SOP integration test dataset (3-sample subset, public domain)
+!data/MiSeq_SOP/
+data/MiSeq_SOP/*
+!data/MiSeq_SOP/pipeline.yml
+!data/MiSeq_SOP/*.fastq.gz
 
 ### Lock files
 .~lock.*

@@ -106,7 +106,7 @@ export dada2, dada2_denoise, dada2_classify,
         if isfile(chimera_ckpt) &&
            mtime(chimera_ckpt) > mtime(config_path) &&
            mtime(chimera_ckpt) > trimmed_mtime
-            @info "Skipping dada2_denoise: ckpt_chimera.RData up to date"
+            @info "DADA2: skipping dada2_denoise - ckpt_chimera.RData up to date"
         else
             R"rm(list=ls())"
             prefilter_qc(config_path;    progress, input_dir=trimmed.dir, workspace_root)
@@ -169,7 +169,7 @@ export dada2, dada2_denoise, dada2_classify,
         if all(isfile, (result.fasta, result.count_table, result.taxonomy)) &&
            all(f -> mtime(f) > mtime(config_path), (result.fasta, result.count_table, result.taxonomy)) &&
            all(f -> mtime(f) > trimmed_mtime, (result.fasta, result.count_table, result.taxonomy))
-            @info "Skipping dada2: outputs up to date in $tables_dir"
+            @info "DADA2: skipping - outputs up to date in $tables_dir"
             return result
         end
         pipeline_log(project, "DADA2 pipeline started")

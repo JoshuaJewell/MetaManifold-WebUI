@@ -34,7 +34,7 @@
            !_section_stale(config_path, stage_sections(:dada2_chimera_removal), hash_file) &&
            mtime(chimera_ckpt) > mtime(filter_ckpt) &&
            mtime(chimera_ckpt) > mtime(length_ckpt)
-            @info "Skipping chimera_removal: checkpoint up to date"
+            @info "DADA2: skipping chimera_removal - checkpoint up to date"
             return nothing
         end
 
@@ -63,7 +63,7 @@
                 """
             else
                 R"seq_table_nochim <- seq_table"
-                @info "Chimera removal skipped: seq_table is empty"
+                @info "DADA2: chimera removal skipped - seq_table is empty"
             end
 
             # Drop duplicate sample row (single-sample fallback)

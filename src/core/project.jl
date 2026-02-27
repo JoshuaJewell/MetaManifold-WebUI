@@ -14,61 +14,47 @@ export new_project
 # This file is merged at runtime; delete it to inherit everything from above.
 """
 
-    # pipeline.yml stubs written at each project level. Comments explain the
-    # cascade role so users have context without needing a separate docs file.
+    # pipeline.yml stubs written into data/ dirs. Comments explain the cascade role.
 
-    const _PROJECT_PIPELINE_YML = """
-# Pipeline configuration overrides - PROJECT LEVEL
+    const _STUDY_PIPELINE_YML = """
+# Pipeline configuration - STUDY LEVEL
 #
-# Settings written here serve as the default for every run under this
-# study; any group- or run-level file can override them further.
+# Settings written here are the default for every run under this study.
+# Place settings that define the study as a whole here: which primer pair
+# was used, the target amplicon length range, the taxonomy database, etc.
 #
-# This is the right place for choices that define the study as a whole:
-# which primer set was used, the target amplicon length range, or the
-# taxonomy database for this organism group.
+# Leave a key out entirely to inherit the global (config/pipeline.yml)
+# settings. Only write what you deliberately want to change.
 #
-# Leave a key out entirely to inherit the global settings unchanged. Only
-# write what you deliberately want to change.
-#
-# Note that this level is overridden by any group or run beneath it; it
-# simply serves as the fallback for every run that does not explicitly
-# override it.
+# Any group- or run-level pipeline.yml beneath this directory can override
+# these values further.
 """
 
     const _GROUP_PIPELINE_YML = """
-# Pipeline configuration overrides - GROUP LEVEL
+# Pipeline configuration - GROUP LEVEL
 #
-# Settings written here serve as the default for all runs nested beneath
-# this directory; any run-level file can override them further.
+# Settings written here apply to all runs in this sub-directory and take
+# precedence over the study-level file above.
 #
-# Use it when a subset of runs within the study share settings that differ
-# from the study defaults - for example, if one batch of samples was
-# sequenced with different conditions or from collected different locations.
+# Use this when a subset of runs share settings that differ from the rest
+# of the study (e.g. a different sequencing batch or primer set).
 #
-# Leave a key out entirely to inherit the study settings unchanged. Only
-# write what you deliberately want to change.
-#
-# Note that this level is overridden by any run beneath it; it simply
-# serves as the fallback for every run that does not explicitly override it.
+# Leave a key out entirely to inherit from the study level. Only write
+# what you deliberately want to change.
 """
 
     const _RUN_PIPELINE_YML = """
-# Pipeline configuration overrides - RUN LEVEL
+# Pipeline configuration - RUN LEVEL
 #
 # Settings written here apply to this single run only and take precedence
 # over every level above.
 #
-# Use it when runs within the study differ from one another - for example,
-# if one batch of samples was sequenced with different conditions or from
-# collected different locations.
+# Leave a key out entirely to inherit from the group or study level. Only
+# write what you deliberately want to change.
 #
-# Leave a key out entirely to inherit the group or study settings unchanged.
-# Only write what you deliberately want to change.
-#
-# run_config.yml in this same directory is generated automatically at
-# runtime. It shows the fully merged result of every cascade level and is
-# the single place to see the complete configuration that was actually used.
-# Do not edit it; it is overwritten on each run.
+# The fully-merged result of every cascade level is written to
+# projects/{study}/{run}/run_config.yml at runtime. That file is the
+# authoritative record of exactly what configuration was used.
 """
 
     const _GLOBAL_CONFIGS_MD = """
@@ -121,18 +107,19 @@ run-level file for narrower scope.
     """
         new_project(name; data_dir, projects_dir, config_dir)
 
-    Bootstrap a project tree under `projects_dir/{name}/` mirroring the
-    directory structure found under `data_dir/{name}/`.
+    Bootstrap a project for the study named `name`.
 
-    Any directory within `data_dir/{name}/` that contains `.fastq.gz` files is
-    treated as a leaf run. The study root and all intermediate directories each
-    receive an empty `pipeline.yml` override stub and a `*_configs.md` file
-    explaining that level's role in the cascade. Users add only the settings
-    they want to change; everything else is inherited from the nearest ancestor,
-    falling back to `config/defaults/pipeline.yml`.
+    Pipeline configuration stubs (`pipeline.yml`) are created inside the data
+    tree (`data_dir/{name}/`) so that inputs and their settings are co-located.
+    Edit those files before (re-)running the pipeline. Omitted keys inherit from
+    the nearest ancestor, falling back to `config/defaults/pipeline.yml`.
 
-    `databases.yml` and `tools.yml` are copied from `config/defaults/` on first
-    run (they are not part of the cascade - edit them in place).
+    Output directories are created under `projects_dir/{name}/` mirroring the
+    data layout. They contain only pipeline outputs and the auto-generated
+    `run_config.yml` (the fully-merged configuration actually used).
+
+    `databases.yml`, `tools.yml`, and `primers.yml` are copied from
+    `config/defaults/` on first run (edit them in place; they are not cascaded).
 
     Re-running `new_project` never overwrites existing files.
 
@@ -161,53 +148,57 @@ run-level file for narrower scope.
         end
 
         # Bootstrap config/ level docs and pipeline.yml stub.
-        _create_if_absent(joinpath(config_dir, "pipeline.yml"),   _PIPELINE_YML_HEADER)
+        _create_if_absent(joinpath(config_dir, "pipeline.yml"),        _PIPELINE_YML_HEADER)
         _create_if_absent(joinpath(config_dir, "global_configs.md"),   _GLOBAL_CONFIGS_MD)
         _create_if_absent(joinpath(defaults_dir, "default_configs.md"), _DEFAULT_CONFIGS_MD)
 
         # Find leaf directories (those containing .fastq.gz), relative to root_data.
         leaf_relpaths = String[]
-        for (dirpath, _, files) in walkdir(root_data)
+        for (dirpath, _, files) in walkdir(root_data; follow_symlinks=true)
             if any(f -> endswith(f, ".fastq.gz"), files)
                 push!(leaf_relpaths, relpath(dirpath, root_data))
             end
         end
         isempty(leaf_relpaths) && error("No .fastq.gz files found under $root_data")
 
-        # Classify every project directory by its role in the cascade.
-        leaf_dirs = Set(rp == "." ? root_project : joinpath(root_project, rp)
-                        for rp in leaf_relpaths)
+        # Collect all data-tree dirs that need a pipeline.yml stub.
+        leaf_data_dirs = Set(rp == "." ? root_data : joinpath(root_data, rp)
+                             for rp in leaf_relpaths)
 
-        all_dirs = Set{String}([root_project])
+        all_data_dirs = Set{String}([root_data])
         for rp in leaf_relpaths
             rp == "." && continue
             parts = splitpath(rp)
             for i in 1:length(parts)
-                push!(all_dirs, joinpath(root_project, parts[1:i]...))
+                push!(all_data_dirs, joinpath(root_data, parts[1:i]...))
             end
         end
 
-        # Process top-down so each level can serve as source for its children.
-        sorted_dirs = sort(collect(all_dirs), by = d -> length(splitpath(d)))
-
-        for dir in sorted_dirs
-            mkpath(dir)
-            yml_content = if dir in leaf_dirs
+        # Write pipeline.yml stubs into data/ (top-down so parents exist first).
+        sorted_data_dirs = sort(collect(all_data_dirs), by = d -> length(splitpath(d)))
+        for dir in sorted_data_dirs
+            yml_content = if dir in leaf_data_dirs
                 _RUN_PIPELINE_YML
-            elseif dir == root_project
-                _PROJECT_PIPELINE_YML
+            elseif dir == root_data
+                _STUDY_PIPELINE_YML
             else
                 _GROUP_PIPELINE_YML
             end
             _create_if_absent(joinpath(dir, "pipeline.yml"), yml_content)
         end
 
-        # Return one ProjectCtx per leaf, with study_dir = root_project.
+        # Create output directories in projects/ (no pipeline.yml written here).
+        for rp in leaf_relpaths
+            proj_dir = rp == "." ? root_project : joinpath(root_project, rp)
+            mkpath(proj_dir)
+        end
+
+        # Return one ProjectCtx per leaf.
         projects = ProjectCtx[]
         for rp in leaf_relpaths
             proj_dir  = rp == "." ? root_project : joinpath(root_project, rp)
             fastq_dir = rp == "." ? root_data    : joinpath(root_data,    rp)
-            ctx = ProjectCtx(proj_dir, config_dir, fastq_dir, root_project)
+            ctx = ProjectCtx(proj_dir, config_dir, fastq_dir, root_project, root_data)
             pipeline_log(ctx, "Project initialised")
             push!(projects, ctx)
         end

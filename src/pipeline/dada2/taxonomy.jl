@@ -114,7 +114,7 @@
             emit("  Cleaning up $host:$staging_dir")
             run(ssh(host, "rm -rf $staging_dir"))
         else
-            @warn "Skipping remote cleanup: staging path '$staging_dir' looks too shallow to delete safely"
+            @warn "DADA2: skipping remote cleanup - staging path '$staging_dir' looks too shallow to delete safely"
         end
 
         run(`ssh -o ControlPath=$ctl -O exit $host`)
@@ -134,7 +134,7 @@
         if isfile(checkpoint) &&
            !_section_stale(config_path, stage_sections(:dada2_assign_taxonomy), hash_file) &&
            mtime(checkpoint) > mtime(chimera_ckpt)
-            @info "Skipping assign_taxonomy: checkpoint up to date"
+            @info "DADA2: skipping assign_taxonomy - checkpoint up to date"
             return nothing
         end
 
@@ -187,7 +187,7 @@
         open(log_path, "w") do io; println(io, "=== assign_taxonomy ===\nconfig: $config_path") end
 
         if !has_data
-            @info "Taxonomy assignment skipped: no ASVs in seq_table_nochim"
+            @info "DADA2: taxonomy assignment skipped - no ASVs in seq_table_nochim"
             R"taxa_df <- data.frame()"
             R"save(seq_table_nochim, index, taxa_df, file=$checkpoint)"
             for suffix in (taxa_prefix * ".csv", taxa_prefix * "_bootstraps.csv",

@@ -146,7 +146,11 @@
     end
 
     ## Source label helper
-    _source_label(key::String) = key == "merged" ? "unfiltered" : key
+    function _source_label(key::String)
+        key == "merged"     && return "unfiltered"
+        key == "merged_otu" && return "unfiltered (OTU)"
+        endswith(key, "_otu") ? replace(key, r"_otu$" => " (OTU)") : key
+    end
 
     ## Taxa rank iteration
     # Derive taxa chart ranks from database levels and optional config override.

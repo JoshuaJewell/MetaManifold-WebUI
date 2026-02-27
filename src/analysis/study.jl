@@ -244,18 +244,15 @@
             push!(report_sections, "Alpha Diversity by Group" => String(take!(buf)))
         end
 
-        # Write one report per source per method.
+        # Collect (method, src) work items for parallel report writing.
+        report_work = Tuple{String,String,Vector{DataFrame},Vector{String}}[]
         for method in _TAX_METHODS
-            msrc_keys = _all_method_source_keys(all_mergeds, method)
-            for src in msrc_keys
-                src_run_dfs  = DataFrame[]
+            for src in _all_method_source_keys(all_mergeds, method)
+                src_run_dfs   = DataFrame[]
                 src_all_scols = String[]
-                # Determine the table key to look up
-                table_key = src
-                for (gdir_inner, members_inner) in groups
-                    for (proj, merged, dm) in members_inner
-                        csv = get(merged.tables, table_key, "")
-                        # For "merged" under dada2, fall back to "merged"
+                for (_, members_inner) in groups
+                    for (_, merged, dm) in members_inner
+                        csv = get(merged.tables, src, "")
                         if isempty(csv) && method == "dada2" && src == "merged"
                             csv = get(merged.tables, "merged", "")
                         end
@@ -268,25 +265,30 @@
                 end
                 isempty(src_run_dfs) && continue
                 method == "dada2" && !_has_dada2(src_run_dfs[1], default_db_meta.levels) && continue
-
                 view_dfs = [_method_df(df, method, default_db_meta.levels) for df in src_run_dfs]
                 combined = reduce((a, b) -> vcat(a, b; cols=:union), view_dfs)
                 _total_seqs(combined, src_all_scols) == 0 && continue
-                sd = _method_source_dirname(src)
-                sl = sd == "unfiltered" ? "unfiltered" : sd
+                push!(report_work, (method, src, view_dfs, src_all_scols))
+            end
+        end
+
+        report_tasks = map(report_work) do (method, src, view_dfs, src_all_scols)
+            Threads.@spawn begin
+                combined = reduce((a, b) -> vcat(a, b; cols=:union), view_dfs)
+                sd       = _method_source_dirname(src)
+                sl       = sd == "unfiltered" ? "unfiltered" : sd
                 sections = copy(report_sections)
                 for (rank_name, rank_col) in report_ranks
                     section = _top_taxa_section(combined, src_all_scols, rank_name, rank_col; n=20)
                     !isempty(section) && push!(sections, "Top 20 $(rank_name) ($(sl))" => section)
                 end
-
                 rpath = joinpath(analysis_dir, "analysis_report_$(method)_$(sd).txt")
-                _write_report(rpath,
-                              "Study Report\n  Source: $sl ($method)",
-                              sections)
+                _write_report(rpath, "Study Report\n  Source: $sl ($method)", sections)
                 log_written(study_dir, rpath)
             end
         end
+
+        foreach(fetch, report_tasks)
     end
 
     #  Public: analyse_study (entry point from main.jl)

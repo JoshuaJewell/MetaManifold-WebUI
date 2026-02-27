@@ -102,28 +102,33 @@
             _collect_source_data_sg(src_key)
         isempty(run_dfs) && return
 
-        # taxa bar & group comparison for ALL sources (dual method)
+        # Collect (method, src) work items for parallel dispatch.
+        chart_work = Tuple{String,String,Vector{DataFrame},Vector{Vector{String}},Vector{String},Vector{String}}[]
         for method in _TAX_METHODS
-            msrc_keys = _method_source_keys(members[1][2], method)
-            for src in msrc_keys
+            for src in _method_source_keys(members[1][2], method)
                 s_dfs, s_scols, s_names, _, s_all = _collect_source_data_sg(
                     endswith(src, "_dada2") ? src : src)
-                # For "merged" under dada2, use the same "merged" key
                 if isempty(s_dfs) && method == "dada2" && src == "merged"
                     s_dfs, s_scols, s_names, _, s_all = _collect_source_data_sg("merged")
                 end
                 isempty(s_dfs) && continue
-                # Skip dada2 if no dada2 columns
                 method == "dada2" && !_has_dada2(s_dfs[1], db_meta.levels) && continue
                 view_dfs = [_method_df(df, method, db_meta.levels) for df in s_dfs]
                 combined = reduce((a, b) -> vcat(a, b; cols=:union), view_dfs)
                 _total_seqs(combined, s_all) == 0 && continue
-                sd = _method_source_dirname(src)
-                src_sub = "Source: $sd ($method)"
+                push!(chart_work, (method, src, view_dfs, s_scols, s_names, s_all))
+            end
+        end
+
+        # taxa bar & group comparison for ALL sources (dual method) - parallel
+        chart_tasks = map(chart_work) do (method, src, view_dfs, s_scols, s_names, s_all)
+            Threads.@spawn begin
+                combined       = reduce((a, b) -> vcat(a, b; cols=:union), view_dfs)
+                sd             = _method_source_dirname(src)
+                src_sub        = "Source: $sd ($method)"
                 method_fig_dir = joinpath(figures_dir, method)
-                # Use cleaned source key for directory naming
-                clean_src = src == "merged" ? "merged" :
-                            (endswith(src, "_dada2") ? src[1:end-6] : src)
+                clean_src      = src == "merged" ? "merged" :
+                                 (endswith(src, "_dada2") ? src[1:end-6] : src)
                 _plot() do
                     _generate_taxa_charts(combined, s_all, method_fig_dir, 15, src_sub, clean_src;
                                            ranks=taxa_ranks, rank_order=db_meta.levels)
@@ -133,13 +138,11 @@
                         group_comparison_chart(view_dfs, s_scols, s_names,
                                                joinpath(dir, "group_comparison.pdf");
                                                top_n=15, rank, relative=true,
-                                               subtitle=src_sub,
-                                               rank_order=db_meta.levels)
+                                               subtitle=src_sub, rank_order=db_meta.levels)
                         group_comparison_chart(view_dfs, s_scols, s_names,
                                                joinpath(dir, "group_comparison_absolute.pdf");
                                                top_n=15, rank, relative=false,
-                                               subtitle=src_sub,
-                                               rank_order=db_meta.levels)
+                                               subtitle=src_sub, rank_order=db_meta.levels)
                     end
                 end
             end
@@ -262,29 +265,17 @@
                   "Stress: $(round(nmds_stress; digits=3)) ($quality)")
         end
 
-        # Write one report per source per method.
-        for method in _TAX_METHODS
-            msrc_keys = _method_source_keys(members[1][2], method)
-            for src in msrc_keys
-                s_dfs, s_scols, _, _, s_all = _collect_source_data_sg(
-                    endswith(src, "_dada2") ? src : src)
-                if isempty(s_dfs) && method == "dada2" && src == "merged"
-                    s_dfs, s_scols, _, _, s_all = _collect_source_data_sg("merged")
-                end
-                isempty(s_dfs) && continue
-                method == "dada2" && !_has_dada2(s_dfs[1], db_meta.levels) && continue
-                view_dfs = [_method_df(df, method, db_meta.levels) for df in s_dfs]
+        # Write one report per source per method - parallel.
+        report_tasks = map(chart_work) do (method, src, view_dfs, _, _, s_all)
+            Threads.@spawn begin
                 combined = reduce((a, b) -> vcat(a, b; cols=:union), view_dfs)
-                _total_seqs(combined, s_all) == 0 && continue
-                sd = _method_source_dirname(src)
-                sl = sd == "unfiltered" ? "unfiltered" : sd
-
+                sd       = _method_source_dirname(src)
+                sl       = sd == "unfiltered" ? "unfiltered" : sd
                 sections = copy(shared_sections)
                 for (rank_name, rank_col) in report_ranks
                     section = _top_taxa_section(combined, s_all, rank_name, rank_col; n=20)
                     !isempty(section) && push!(sections, "Top 20 $(rank_name) ($(sl))" => section)
                 end
-
                 rpath = joinpath(analysis_dir, "analysis_report_$(method)_$(sd).txt")
                 _write_report(rpath,
                               "Comparison Report\n  Runs: $(join(run_names, ", "))\n  Source: $sl ($method)",
@@ -292,4 +283,7 @@
                 log_written(group_dir, rpath)
             end
         end
+
+        foreach(fetch, chart_tasks)
+        foreach(fetch, report_tasks)
     end

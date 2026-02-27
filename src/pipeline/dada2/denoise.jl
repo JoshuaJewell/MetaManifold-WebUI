@@ -23,7 +23,7 @@
         if isfile(errors_ckpt) && isfile(filter_ckpt) &&
            !_section_stale(config_path, stage_sections(:dada2_learn_errors), hash_file) &&
            mtime(errors_ckpt) > mtime(filter_ckpt)
-            @info "Skipping learn_errors: checkpoint up to date"
+            @info "DADA2: skipping learn_errors - checkpoint up to date"
             return nothing
         end
 
@@ -96,7 +96,7 @@
         if isfile(denoise_ckpt) &&
            !_section_stale(config_path, stage_sections(:dada2_denoise), hash_file) &&
            mtime(denoise_ckpt) > mtime(errors_ckpt)
-            @info "Skipping denoise: checkpoint up to date"
+            @info "DADA2: skipping denoise - checkpoint up to date"
             return nothing
         end
 
@@ -190,7 +190,7 @@
         if isfile(length_ckpt) &&
            !_section_stale(config_path, stage_sections(:dada2_filter_length), hash_file) &&
            mtime(length_ckpt) > mtime(denoise_ckpt)
-            @info "Skipping filter_length: checkpoint up to date"
+            @info "DADA2: skipping filter_length - checkpoint up to date"
             return nothing
         end
 

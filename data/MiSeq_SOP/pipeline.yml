@@ -1,0 +1,29 @@
+# Pipeline configuration - MiSeq SOP (Schloss et al. 2013)
+#
+# 16S V4 amplicon, paired 2x250, primers already removed.
+# discard_untrimmed: false lets reads pass through cutadapt unchanged.
+
+cutadapt:
+  primer_pairs:
+    - EMP
+  min_length: 100
+  discard_untrimmed: false
+
+dada2:
+  filter_trim:
+    trunc_len: [240, 160]
+    max_ee: [2, 2]
+    min_len: 100
+    trunc_q: 2
+
+  taxonomy:
+    database: pr2
+
+swarm:
+  differences: 1
+  chimera_check: true
+  min_abundance: 2
+
+merge_taxa:
+  filters:
+  - "bacteria_archaea.pr2.yml"

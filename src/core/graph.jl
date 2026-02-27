@@ -107,6 +107,15 @@ export PIPELINE_STAGES, stage_by_name, stage_sections, print_pipeline
             ["merge_taxa"]
         ),
 
+        ## OTU pipeline (parallel to DADA2)
+        StageNode(
+            :swarm,
+            "OTU Clustering (SWARM)",
+            DataType[TrimmedReads],
+            OTUResult,
+            ["swarm"]
+        ),
+
         ## Analysis
         StageNode(
             :analyse_run,

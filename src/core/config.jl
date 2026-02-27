@@ -2,12 +2,15 @@ module Config
 
 # Hierarchical config cascade and per-section content-hash helpers.
 #
-# Config cascade (global -> project -> run):
-#   config/defaults/pipeline.yml        <- full defaults (source of truth)
-#   config/pipeline.yml                 <- machine-level overrides
-#   projects/{study}/pipeline.yml       <- study-level overrides
+# Config cascade (global -> study -> run):
+#   config/defaults/pipeline.yml     <- full defaults (source of truth)
+#   config/pipeline.yml              <- machine-level overrides
+#   data/{study}/pipeline.yml        <- study-level overrides
 #   ...intermediate dirs...
-#   projects/{study}/{run}/pipeline.yml <- run-level overrides
+#   data/{study}/{run}/pipeline.yml  <- run-level overrides
+#
+# Pipeline configs live alongside the input data so that inputs and their
+# settings are co-located in data/ and outputs remain isolated in projects/.
 #
 # Each override file contains only intentional changes; omitted keys are
 # inherited from the nearest ancestor. At the start of each run, all levels
@@ -91,7 +94,7 @@ export _section_stale, _write_section_hash,
         load_merged_config(_cascade_paths(config_dir, study_dir, project_dir))
 
     load_merged_config(project::ProjectCtx) =
-        load_merged_config(project.config_dir, project.study_dir, project.dir)
+        load_merged_config(project.config_dir, project.data_study_dir, project.data_dir)
 
     # run_config.yml
     # Merge all cascade levels and write the result to {project.dir}/run_config.yml.
@@ -100,7 +103,7 @@ export _section_stale, _write_section_hash,
     function write_run_config(project::ProjectCtx)
         run_config_path = joinpath(project.dir, "run_config.yml")
         primers_path    = joinpath(project.config_dir, "primers.yml")
-        paths = _cascade_paths(project.config_dir, project.study_dir, project.dir)
+        paths = _cascade_paths(project.config_dir, project.data_study_dir, project.data_dir)
         source_paths = isfile(primers_path) ? vcat(paths, primers_path) : paths
         if !isfile(run_config_path) ||
            any(p -> isfile(p) && mtime(p) > mtime(run_config_path), source_paths)

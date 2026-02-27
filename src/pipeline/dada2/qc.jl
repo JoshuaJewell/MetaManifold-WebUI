@@ -18,7 +18,7 @@
         if isfile(unfiltered_pdf)
             all_inputs = vcat(ctx.fwd_files, ctx.rev_files)
             if isempty(all_inputs) || all(mtime(unfiltered_pdf) > mtime(f) for f in all_inputs)
-                @info "Skipping prefilter_qc: quality_unfiltered.pdf up to date"
+                @info "DADA2: skipping prefilter_qc - quality_unfiltered.pdf up to date"
                 return nothing
             end
         end
@@ -64,7 +64,7 @@
         if isfile(filter_ckpt) && !_section_stale(config_path, stage_sections(:dada2_filter_trim), hash_file)
             all_inputs = vcat(ctx.fwd_files, ctx.rev_files)
             if isempty(all_inputs) || all(mtime(filter_ckpt) > mtime(f) for f in all_inputs)
-                @info "Skipping filter_trim: checkpoint up to date"
+                @info "DADA2: skipping filter_trim - checkpoint up to date"
                 return nothing
             end
         end

@@ -74,17 +74,19 @@
         # Helper: serialize CairoMakie calls if plot_lock is provided.
         _plot(f) = isnothing(plot_lock) ? f() : lock(f, plot_lock)
 
-        # CSV cache
-        cache = _CSVCache()
+        # cache is already populated by the skip guard above; protect concurrent access.
+        cache_lock = ReentrantLock()
+        _read(path) = lock(cache_lock) do
+            _cached_read(cache, path, db_meta)
+        end
 
         src_key   = _source_key(merged)
         src_label = _source_label(src_key)
         subtitle  = "Source: $src_label"
 
-        # pipeline summary
+        # pipeline summary (sequential - needed by reports below)
         stats_df = _pipeline_summary(project, merged, db_meta)
 
-        # pipeline stages plot
         if !isnothing(stats_df)
             _plot() do
                 pipeline_stats_plot(stats_df, stages_pdf; subtitle)
@@ -93,90 +95,88 @@
             log_written(project, stages_pdf)
         end
 
-        # taxa bar charts for all sources at multiple ranks (dual method)
+        # Collect (method, src) work items to dispatch in parallel.
+        work_items = Tuple{String,String,String,DataFrame,Vector{String}}[]
         for method in _TAX_METHODS
-            msrc_keys = _method_source_keys(merged, method)
-            for src in msrc_keys
-                # For dada2 method with "merged" key, use merged.csv;
-                # for _dada2 suffixed keys, use the corresponding CSV.
-                csv_key = src
-                src_csv_path = get(merged.tables, csv_key, "")
+            for src in _method_source_keys(merged, method)
+                src_csv_path = get(merged.tables, src, "")
                 if isempty(src_csv_path) || !isfile(src_csv_path) || filesize(src_csv_path) == 0
-                    # For "merged" key under dada2 method, fall back to merged.csv
                     src == "merged" || continue
                     src_csv_path = merged.tables["merged"]
                     (!isfile(src_csv_path) || filesize(src_csv_path) == 0) && continue
                 end
-                raw_df, src_scols = _cached_read(cache, src_csv_path, db_meta)
+                raw_df, src_scols = _read(src_csv_path)
                 isempty(src_scols) && continue
-                # Skip dada2 method if no dada2 taxonomy columns
                 method == "dada2" && !_has_dada2(raw_df, db_meta.levels) && continue
                 view_df = _method_df(raw_df, method, db_meta.levels)
                 _total_seqs(view_df, src_scols) == 0 && continue
-                sd = _method_source_dirname(src)
-                src_sub = "Source: $sd ($method)"
-                method_fig_dir = joinpath(figures_dir, method)
-                _plot() do
-                    _generate_taxa_charts(view_df, src_scols, method_fig_dir,
-                                           top_n, src_sub, src == "merged" ? "merged" :
-                                           (endswith(src, "_dada2") ? src[1:end-6] : src);
-                                           ranks=taxa_ranks, rank_order=db_meta.levels)
-                end
+                push!(work_items, (method, src, src_csv_path, view_df, src_scols))
             end
         end
 
-        # filter composition (priority-based)
-        if has_filters
-            filter_totals, comp_scols = _priority_filter_composition(merged, cache, db_meta)
-            if !isnothing(filter_totals) && !isempty(filter_totals)
-                _plot() do
-                    filter_composition_plot(filter_totals, comp_scols, filter_pdf;
-                                            subtitle, colour_overrides=merged.filter_colours)
-                end
-                @info "Written: $filter_pdf"
-                log_written(project, filter_pdf)
-            end
+        # pre-load merged_df_full and all filter CSVs into the cache before
+        # spawning tasks so concurrent reads only ever hit the fast-path.
+        merged_df_full, _ = _read(merged_csv)
+        for fpath in values(merged.tables)
+            isfile(fpath) && filesize(fpath) > 0 && _read(fpath)
         end
-
-        # alpha diversity (from primary source)
-        primary_csv = merged.tables[src_key]
-        if isfile(primary_csv) && filesize(primary_csv) > 0
-            prim_df, prim_scols = _cached_read(cache, primary_csv, db_meta)
-            if !isempty(prim_scols)
-                alpha = _compute_alpha(prim_df, prim_scols)
-                _plot() do
-                    alpha_diversity_plot(alpha, alpha_pdf; subtitle)
-                end
-                @info "Written: $alpha_pdf"
-                log_written(project, alpha_pdf)
-            end
-        end
-
-        # analysis reports (dual method, one per source per method)
         run_name = basename(project.dir)
-        merged_df_full, _ = _cached_read(cache, merged_csv, db_meta)
-        for method in _TAX_METHODS
-            msrc_keys = _method_source_keys(merged, method)
-            for src in msrc_keys
-                csv_key = src
-                src_csv_path = get(merged.tables, csv_key, "")
-                if isempty(src_csv_path) || !isfile(src_csv_path) || filesize(src_csv_path) == 0
-                    src == "merged" || continue
-                    src_csv_path = merged.tables["merged"]
-                    (!isfile(src_csv_path) || filesize(src_csv_path) == 0) && continue
+
+        # Spawn one task per (method, source): taxa charts + report in parallel.
+        tasks = map(work_items) do (method, src, _, view_df, src_scols)
+            Threads.@spawn begin
+                sd       = _method_source_dirname(src)
+                src_sub  = "Source: $sd ($method)"
+                clean_src = src == "merged" ? "merged" :
+                            (endswith(src, "_dada2") ? src[1:end-6] : src)
+
+                _plot() do
+                    _generate_taxa_charts(view_df, src_scols,
+                                          joinpath(figures_dir, method),
+                                          top_n, src_sub, clean_src;
+                                          ranks=taxa_ranks, rank_order=db_meta.levels)
                 end
-                raw_df, src_scols = _cached_read(cache, src_csv_path, db_meta)
-                isempty(src_scols) && continue
-                method == "dada2" && !_has_dada2(raw_df, db_meta.levels) && continue
-                view_df = _method_df(raw_df, method, db_meta.levels)
-                _total_seqs(view_df, src_scols) == 0 && continue
-                sd = _method_source_dirname(src)
+
                 report_path = joinpath(analysis_dir, "analysis_report_$(method)_$(sd).txt")
-                clean_src = src == "merged" ? "merged" : (endswith(src, "_dada2") ? src[1:end-6] : src)
                 _generate_report(view_df, src_scols, stats_df, merged_df_full,
                                  clean_src, report_path, run_name;
                                  stats_key=src, report_ranks=report_ranks)
                 log_written(project, report_path)
             end
         end
+
+        # filter composition and alpha can run concurrently with the per-source tasks.
+        filter_task = Threads.@spawn begin
+            if has_filters
+                # cache is fully pre-loaded; lock(cache_lock) in _read is a no-op here.
+                filter_totals, comp_scols = _priority_filter_composition(merged, cache, db_meta)
+                if !isnothing(filter_totals) && !isempty(filter_totals)
+                    _plot() do
+                        filter_composition_plot(filter_totals, comp_scols, filter_pdf;
+                                                subtitle, colour_overrides=merged.filter_colours)
+                    end
+                    @info "Written: $filter_pdf"
+                    log_written(project, filter_pdf)
+                end
+            end
+        end
+
+        alpha_task = Threads.@spawn begin
+            primary_csv = merged.tables[src_key]
+            if isfile(primary_csv) && filesize(primary_csv) > 0
+                prim_df, prim_scols = _read(primary_csv)
+                if !isempty(prim_scols)
+                    alpha = _compute_alpha(prim_df, prim_scols)
+                    _plot() do
+                        alpha_diversity_plot(alpha, alpha_pdf; subtitle)
+                    end
+                    @info "Written: $alpha_pdf"
+                    log_written(project, alpha_pdf)
+                end
+            end
+        end
+
+        foreach(fetch, tasks)
+        fetch(filter_task)
+        fetch(alpha_task)
     end

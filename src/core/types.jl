@@ -1,15 +1,16 @@
 module PipelineTypes
 
-    export HasFasta, ProjectCtx, TrimmedReads, ASVResult, DenoisedASVs, TaxonomyHits, MergedTables, DatabaseMeta,
+    export HasFasta, ProjectCtx, TrimmedReads, ASVResult, OTUResult, DenoisedASVs, TaxonomyHits, MergedTables, DatabaseMeta,
            StageNode
 
     abstract type HasFasta end
 
     struct ProjectCtx
-        dir::String         # projects/{.../run}/ - configs and stage output dirs live here
-        config_dir::String  # config/
-        data_dir::String    # data/{.../run}/ - FASTQ input files
-        study_dir::String   # projects/{study}/ - top of the per-project config cascade
+        dir::String           # projects/{.../run}/ - stage outputs and run_config.yml live here
+        config_dir::String    # config/ - global defaults, tools.yml, primers.yml
+        data_dir::String      # data/{.../run}/ - FASTQ input files
+        study_dir::String     # projects/{study}/ - output root (logs, analysis)
+        data_study_dir::String # data/{study}/ - top of the per-run config cascade
     end
 
     struct TrimmedReads
@@ -20,6 +21,11 @@ module PipelineTypes
         fasta::String        # .../dada2/Tables/asvs.fasta  (or cdhit/asvs.fasta after cdhit)
         count_table::String  # .../dada2/Tables/seqtab_nochim.csv
         taxonomy::String     # .../dada2/Tables/taxonomy.csv
+    end
+
+    struct OTUResult <: HasFasta
+        fasta::String        # .../swarm/seeds.fasta (OTU representative sequences)
+        count_table::String  # .../swarm/otu_table.csv (per-OTU per-sample counts)
     end
 
     struct DenoisedASVs

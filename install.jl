@@ -302,6 +302,45 @@ function install_python_tool(name::String)::String
     name
 end
 
+function download_swarm()::String
+    # Check for bundled binary first.
+    bundled = joinpath(BIN_DIR, "swarm")
+    if isfile(bundled) && Sys.isexecutable(bundled)
+        @info "Using bundled swarm binary at $bundled"
+        return bundled
+    end
+
+    @info "Fetching latest swarm release info from GitHub..."
+    json = fetch_string("https://api.github.com/repos/torognes/swarm/releases/latest")
+    json === nothing && error("Cannot reach GitHub API. Check your internet connection.")
+
+    # Match e.g. swarm-3.1.6-linux-x86_64
+    os_tag   = OS_TYPE == "linux" ? "linux" : "macos"
+    arch_tag = ARCH_STR
+    pattern  = Regex(
+        "\"browser_download_url\":\\s*\"(https://[^\"]*swarm[^\"]*$(os_tag)[^\"]*$(arch_tag)[^\"]*)\""
+    )
+    url = first_match(pattern, json)
+
+    # Fallback: any asset for this OS
+    if url === nothing
+        url = first_match(
+            Regex("\"browser_download_url\":\\s*\"(https://[^\"]*swarm[^\"]*$(os_tag)[^\"]*)\""),
+            json
+        )
+    end
+
+    url === nothing && error(
+        "No swarm binary found for $OS_TYPE/$ARCH_STR in the latest GitHub release.\n" *
+        "Download manually from https://github.com/torognes/swarm/releases and place at bin/swarm."
+    )
+
+    dest = joinpath(BIN_DIR, "swarm")
+    download_to(url, dest)
+    chmod(dest, 0o755)
+    dest
+end
+
 function install_r_packages(packages::Vector{String}; force_reinstall::Bool=false)
     pkgs_r      = join(["\"$p\"" for p in packages], ", ")
     force_r     = force_reinstall ? "TRUE" : "FALSE"
@@ -448,6 +487,11 @@ function main()
     path = resolve_tool("cd_hit_est", "cd-hit-est", config,
         () -> download_cdhit())
     resolved["cd_hit_est"] = Dict("path" => path)
+
+    # swarm
+    path = resolve_tool("swarm", "swarm", config,
+        () -> download_swarm())
+    resolved["swarm"] = Dict("path" => path)
 
     # R packages
     println()

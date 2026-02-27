@@ -81,6 +81,15 @@ cdhit:
   threads: 0            # worker threads; 0 = all available (-T)
   optional_args: ""     # additional flags passed verbatim to cd-hit-est
 
+swarm:
+  differences: 1          # -d: max differences between sequences in the same cluster
+  threads: 0              # -t: worker threads; 0 = all available
+  chimera_check: true     # run vsearch --uchime_denovo before clustering
+  min_abundance: 2        # --minsize: discard singleton dereps before clustering
+  fastq_minovlen: 20      # --fastq_minovlen: min overlap for paired-end merging
+  identity: 0.97          # --id: threshold for mapping reads back to OTU seeds
+  optional_args: ""       # additional flags passed verbatim to swarm
+
 merge_taxa:
   # List of filter configs to apply, each relative to config/filters/.
   # Each entry produces a separate filtered CSV in the project's merged/ directory.
