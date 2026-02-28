@@ -44,14 +44,14 @@ jobs:
           sudo apt-get install -y r-base r-base-dev
 
       - name: Install R packages
-        env:
-          R_LIBS_USER: /usr/local/lib/R/site-library
         run: |
-          sudo mkdir -p /usr/local/lib/R/site-library
-          sudo chmod -R 777 /usr/local/lib/R/site-library
-          Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
-          Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
-          Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
+          # Install into R's default site-library (requires sudo for apt R)
+          sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
+          sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
+          sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
+          # Write an .Rprofile that prepends the system site-library so RCall
+          # finds packages regardless of which lib path it starts with
+          sudo Rscript -e 'cat(".libPaths(c(\"/usr/local/lib/R/site-library\", \"/usr/lib/R/library\", .libPaths()))\n", file="/etc/R/Rprofile.site", append=TRUE)'
 
       - name: Install cutadapt
         run: pip install cutadapt
@@ -76,20 +76,9 @@ jobs:
         run: julia --project=. config/ci/download_databases.jl
 
       - name: Rebuild RCall against installed R
-        env:
-          R_LIBS_USER: /usr/local/lib/R/site-library
-        run: |
-          julia --project=. -e 'import Pkg; Pkg.build("RCall")'
-          echo "=== R library paths seen by RCall ==="
-          julia --project=. -e '
-            using RCall
-            R"cat(paste(.libPaths(), collapse=\"\n\"))"
-            R"cat(\"\\ndada2 installed:\", \"dada2\" %in% rownames(installed.packages()))"
-          '
+        run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
 
       - name: Run tests
-        env:
-          R_LIBS_USER: /usr/local/lib/R/site-library
         run: julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration
 
       - name: Process coverage
