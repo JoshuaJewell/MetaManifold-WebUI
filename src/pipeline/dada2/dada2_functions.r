@@ -15,7 +15,8 @@
 # https://creativecommons.org/licenses/by/4.0/.
 
 library(dada2)
-library(tidyverse)
+library(dplyr)
+library(tibble)
 # library(yaml)
 
 # Config loading/validation, workspace setup, and file discovery are now
