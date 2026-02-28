@@ -45,13 +45,13 @@ jobs:
 
       - name: Install R packages
         run: |
-          # Install into R's default site-library (requires sudo for apt R)
-          sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
-          sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
-          sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
-          # Write an .Rprofile that prepends the system site-library so RCall
-          # finds packages regardless of which lib path it starts with
-          sudo Rscript -e 'cat(".libPaths(c(\"/usr/local/lib/R/site-library\", \"/usr/lib/R/library\", .libPaths()))\n", file="/etc/R/Rprofile.site", append=TRUE)'
+          # Make site-library writable so runner user can install there too
+          sudo mkdir -p /usr/local/lib/R/site-library
+          sudo chmod -R a+rwX /usr/local/lib/R/site-library
+          # Install explicitly into the system site-library (visible to all users)
+          Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org", lib="/usr/local/lib/R/site-library")'
+          Rscript -e 'library(BiocManager, lib.loc="/usr/local/lib/R/site-library"); BiocManager::install("dada2", ask=FALSE, lib="/usr/local/lib/R/site-library")'
+          Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org", lib="/usr/local/lib/R/site-library")'
 
       - name: Install cutadapt
         run: pip install cutadapt
