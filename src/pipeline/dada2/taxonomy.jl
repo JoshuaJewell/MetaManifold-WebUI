@@ -189,7 +189,8 @@
         if skip_classification
             @info "DADA2: taxonomy classification skipped - writing count tables without assignments"
             R"""
-            taxa_df <- data.frame(SeqName = index$SeqName, stringsAsFactors = FALSE)
+            taxa_df <- data.frame(SeqName = index$SeqName, Sequence = index$Sequence,
+                                  stringsAsFactors = FALSE)
             """
             R"write_combined_table(taxa_df, index, seq_table_nochim, $tables_dir, $combined_file, $asv_file)"
             R"save(seq_table_nochim, index, taxa_df, file=$checkpoint)"
