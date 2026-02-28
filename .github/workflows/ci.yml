@@ -79,6 +79,8 @@ jobs:
         run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
 
       - name: Run tests
+        env:
+          CI_SKIP_TAXONOMY: "1"
         run: julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration
 
       - name: Process coverage

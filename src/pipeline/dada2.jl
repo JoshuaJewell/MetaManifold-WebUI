@@ -128,7 +128,7 @@ export dada2, dada2_denoise, dada2_classify,
     Respects the mtime skip guard inside `assign_taxonomy()`.
     """
     function dada2_classify(project::ProjectCtx, denoised::DenoisedASVs;
-                            taxonomy_db=nothing, progress=nothing)
+                            taxonomy_db=nothing, progress=nothing, skip_taxonomy=false)
         config_path    = denoised.config_path
         workspace_root = denoised.workspace_root
         cfg        = get(YAML.load_file(config_path), "dada2", Dict())
@@ -143,7 +143,8 @@ export dada2, dada2_denoise, dada2_classify,
                         progress,
                         input_dir      = denoised.input_dir,
                         workspace_root,
-                        taxonomy_db)
+                        taxonomy_db,
+                        skip_classification = skip_taxonomy)
         pipeline_log(project, "DADA2 taxonomy complete")
         for f in (result.fasta, result.count_table, result.taxonomy)
             isfile(f) && log_written(project, f)
@@ -152,7 +153,7 @@ export dada2, dada2_denoise, dada2_classify,
     end
 
     function dada2(project::ProjectCtx, trimmed::TrimmedReads;
-                   taxonomy_db=nothing, progress=nothing)
+                   taxonomy_db=nothing, progress=nothing, skip_taxonomy=false)
         config_path    = write_run_config(project)
         workspace_root = joinpath(project.dir, "dada2")
         cfg        = get(YAML.load_file(config_path), "dada2", Dict())
@@ -174,7 +175,7 @@ export dada2, dada2_denoise, dada2_classify,
         end
         pipeline_log(project, "DADA2 pipeline started")
         denoised = dada2_denoise(project, trimmed; progress)
-        result = dada2_classify(project, denoised; taxonomy_db, progress)
+        result = dada2_classify(project, denoised; taxonomy_db, progress, skip_taxonomy)
         pipeline_log(project, "DADA2 complete")
         return result
     end

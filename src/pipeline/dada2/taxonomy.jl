@@ -120,7 +120,7 @@
         run(`ssh -o ControlPath=$ctl -O exit $host`)
     end
 
-    function assign_taxonomy(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing)
+    function assign_taxonomy(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing, skip_classification=false)
         emit    = _emitter(progress)
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
         verbose = ctx.verbose
@@ -186,7 +186,18 @@
         log_path = joinpath(ctx.dirs["Logs"], "assign_taxonomy.log")
         open(log_path, "w") do io; println(io, "=== assign_taxonomy ===\nconfig: $config_path") end
 
-        if !has_data
+        if skip_classification
+            @info "DADA2: taxonomy classification skipped - writing count tables without assignments"
+            R"""
+            taxa_df <- data.frame(SeqName = index$SeqName, stringsAsFactors = FALSE)
+            """
+            R"write_combined_table(taxa_df, index, seq_table_nochim, $tables_dir, $combined_file, $asv_file)"
+            R"save(seq_table_nochim, index, taxa_df, file=$checkpoint)"
+            for suffix in (taxa_prefix * ".csv", taxa_prefix * "_bootstraps.csv",
+                           taxa_prefix * "_combined.csv")
+                touch(joinpath(tables_dir, suffix))
+            end
+        elseif !has_data
             @info "DADA2: taxonomy assignment skipped - no ASVs in seq_table_nochim"
             R"taxa_df <- data.frame()"
             R"save(seq_table_nochim, index, taxa_df, file=$checkpoint)"

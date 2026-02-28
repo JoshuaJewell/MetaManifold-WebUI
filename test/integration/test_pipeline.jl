@@ -88,9 +88,10 @@
         return
     end
 
-    db_meta = make_db_meta(db_config, db_name)
-    r_lock_int = ReentrantLock()
-    plot_lock  = ReentrantLock()
+    db_meta       = make_db_meta(db_config, db_name)
+    r_lock_int    = ReentrantLock()
+    plot_lock     = ReentrantLock()
+    skip_taxonomy = haskey(ENV, "CI_SKIP_TAXONOMY")
 
     merged_results = Vector{Union{MergedTables,Nothing}}(undef, length(projects))
     asvs_results   = Vector{Union{ASVResult,Nothing}}(undef, length(projects))
@@ -114,7 +115,8 @@
         # Stage 2: DADA2 + SWARM in parallel
         dada2_task = Threads.@spawn begin
             result = lock(r_lock_int) do
-                dada2(project, trimmed, taxonomy_db=dbs_loaded[dada2_key])
+                dada2(project, trimmed, taxonomy_db=dbs_loaded[dada2_key],
+                      skip_taxonomy=skip_taxonomy)
             end
             cdhit(project, result)
         end
