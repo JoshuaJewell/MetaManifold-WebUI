@@ -76,6 +76,17 @@ jobs:
       - name: Rebuild RCall against installed R
         run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
 
+      - name: Diagnose R library paths
+        run: |
+          echo "=== Rscript libPaths ==="
+          Rscript -e 'cat(paste(.libPaths(), collapse="\n"), "\n")'
+          echo "=== dada2 installed (Rscript) ==="
+          Rscript -e 'cat("dada2:", "dada2" %in% rownames(installed.packages(all.available=TRUE)), "\n")'
+          echo "=== RCall libPaths ==="
+          julia --project=. -e 'using RCall; R"cat(paste(.libPaths(), collapse=\"\n\"), \"\n\")"'
+          echo "=== dada2 installed (RCall) ==="
+          julia --project=. -e 'using RCall; R"cat(\"dada2:\", \"dada2\" %in% rownames(installed.packages(all.available=TRUE)), \"\n\")"'
+
       - name: Run tests
         run: julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration
 
