@@ -43,13 +43,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y r-base r-base-dev
 
+      - name: Install R system dependencies
+        run: sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev libfontconfig1-dev
+
       - name: Install R packages
         run: |
-          # Install into R's main system library (.Library) so all R sessions,
-          # including RCall's embedded one, find the packages without any path config.
           sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org", lib=.Library)'
           sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE, lib=.Library)'
           sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org", lib=.Library)'
+          Rscript -e 'if (!"dada2" %in% rownames(installed.packages())) stop("dada2 failed to install")'
+          Rscript -e 'if (!"vegan" %in% rownames(installed.packages())) stop("vegan failed to install")'
 
       - name: Install cutadapt
         run: pip install cutadapt
@@ -75,17 +78,6 @@ jobs:
 
       - name: Rebuild RCall against installed R
         run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
-
-      - name: Diagnose R library paths
-        run: |
-          echo "=== Rscript libPaths ==="
-          Rscript -e 'cat(paste(.libPaths(), collapse="\n"), "\n")'
-          echo "=== dada2 installed (Rscript) ==="
-          Rscript -e 'cat("dada2:", "dada2" %in% rownames(installed.packages(all.available=TRUE)), "\n")'
-          echo "=== RCall libPaths ==="
-          julia --project=. -e 'using RCall; R"cat(paste(.libPaths(), collapse=\"\n\"), \"\n\")"'
-          echo "=== dada2 installed (RCall) ==="
-          julia --project=. -e 'using RCall; R"cat(\"dada2:\", \"dada2\" %in% rownames(installed.packages(all.available=TRUE)), \"\n\")"'
 
       - name: Run tests
         run: julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration
