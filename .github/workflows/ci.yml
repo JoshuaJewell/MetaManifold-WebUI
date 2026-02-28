@@ -20,9 +20,6 @@ jobs:
         julia-version: ["1"]   # latest stable (Manifest.toml is version-pinned)
         os: [ubuntu-latest]
 
-    env:
-      R_LIBS_USER: ${{ github.workspace }}/.r-libs
-
     steps:
       - uses: actions/checkout@v4
 
@@ -48,12 +45,11 @@ jobs:
 
       - name: Install R packages
         run: |
-          # R_LIBS_USER is set as a job-level env var so both Rscript and RCall's
-          # embedded R session see the same library path automatically.
-          mkdir -p "$R_LIBS_USER"
-          Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
-          Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
-          Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
+          # Install into R's main system library (.Library) so all R sessions,
+          # including RCall's embedded one, find the packages without any path config.
+          sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org", lib=.Library)'
+          sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE, lib=.Library)'
+          sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org", lib=.Library)'
 
       - name: Install cutadapt
         run: pip install cutadapt
