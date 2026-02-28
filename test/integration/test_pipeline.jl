@@ -24,9 +24,14 @@
     PROJECT_ROOT = joinpath(@__DIR__, "..", "..")
     PROJECT_NAME = "MiSeq_SOP"
 
-    ## Check prerequisites
-    tools_config = joinpath(PROJECT_ROOT, "config", "tools.yml")
-    db_config    = joinpath(PROJECT_ROOT, "config", "databases.yml")
+    ## Check prerequisites — fall back to committed CI configs if real ones absent
+    ci_config_dir = joinpath(PROJECT_ROOT, "config", "ci")
+    tools_config = let p = joinpath(PROJECT_ROOT, "config", "tools.yml")
+        isfile(p) ? p : joinpath(ci_config_dir, "tools.yml")
+    end
+    db_config = let p = joinpath(PROJECT_ROOT, "config", "databases.yml")
+        isfile(p) ? p : joinpath(ci_config_dir, "databases.yml")
+    end
 
     if !isfile(tools_config) || !isfile(db_config)
         @warn "Integration test skipped: tools.yml or databases.yml not found"
@@ -56,12 +61,16 @@
         isdir(study_analysis) && rm(study_analysis; recursive=true)
     end
 
+    # Use CI config dir if real config/tools.yml is absent
+    effective_config_dir = isfile(joinpath(PROJECT_ROOT, "config", "tools.yml")) ?
+        joinpath(PROJECT_ROOT, "config") : ci_config_dir
+
     local projects
     try
         projects = new_project(PROJECT_NAME;
                                data_dir     = joinpath(PROJECT_ROOT, "data"),
                                projects_dir = joinpath(PROJECT_ROOT, "projects"),
-                               config_dir   = joinpath(PROJECT_ROOT, "config"))
+                               config_dir   = effective_config_dir)
     catch e
         @warn "Integration test skipped: could not create project - $e"
         return

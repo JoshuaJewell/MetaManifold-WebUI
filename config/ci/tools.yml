@@ -1,0 +1,17 @@
+# CI-only tools config. All tools resolved from PATH.
+# Committed to the repo; the real config/tools.yml is gitignored.
+
+cutadapt:
+  path: "cutadapt"
+
+fastqc:
+  path: "fastqc"
+
+multiqc:
+  path: "multiqc"
+
+vsearch:
+  path: "vsearch"
+
+cd_hit_est:
+  path: "cd-hit-est"

@@ -1,0 +1,36 @@
+# CI-only databases config. Uses URI downloads (no local: paths).
+# Committed to the repo; the real config/databases.yml is gitignored.
+
+databases:
+  dir: "./databases"
+  pr2:
+    dada2:
+      uri: "https://github.com/pr2database/pr2database/releases/download/v5.0.0/pr2_version_5.0.0_SSU_dada2.fasta.gz"
+      local: ~
+      remote_path: ~
+    vsearch:
+      uri: "https://github.com/pr2database/pr2database/releases/download/v5.1.0.0/pr2_version_5.1.0_SSU_taxo_long.fasta.gz"
+      local: ~
+    levels:
+      - Domain
+      - Supergroup
+      - Division
+      - Subdivision
+      - Class
+      - Order
+      - Family
+      - Genus
+      - Species
+    vsearch_format: pr2
+    corrections:
+      - source: Division
+        target: Supergroup
+        values:
+          Rhizaria: Rhizaria
+          Alveolata: Alveolata
+          Stramenopiles: Stramenopiles
+          Hemimastigophora: Hemimastigophora
+          Discoba: Discoba
+          Metamonada: Metamonada
+          Telonemia: Telonemia
+          Ancyromonadida: Ancyromonadida
