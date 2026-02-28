@@ -44,10 +44,14 @@ jobs:
           sudo apt-get install -y r-base r-base-dev
 
       - name: Install R packages
+        env:
+          R_LIBS_USER: /usr/local/lib/R/site-library
         run: |
-          sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
-          sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
-          sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
+          sudo mkdir -p /usr/local/lib/R/site-library
+          sudo chmod -R 777 /usr/local/lib/R/site-library
+          Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
+          Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
+          Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
 
       - name: Install cutadapt
         run: pip install cutadapt
@@ -75,6 +79,8 @@ jobs:
         run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
 
       - name: Run tests
+        env:
+          R_LIBS_USER: /usr/local/lib/R/site-library
         run: julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration
 
       - name: Process coverage
