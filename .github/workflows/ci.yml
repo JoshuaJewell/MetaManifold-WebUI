@@ -20,6 +20,9 @@ jobs:
         julia-version: ["1"]   # latest stable (Manifest.toml is version-pinned)
         os: [ubuntu-latest]
 
+    env:
+      R_LIBS_USER: ${{ github.workspace }}/.r-libs
+
     steps:
       - uses: actions/checkout@v4
 
@@ -45,13 +48,12 @@ jobs:
 
       - name: Install R packages
         run: |
-          # Make site-library writable so runner user can install there too
-          sudo mkdir -p /usr/local/lib/R/site-library
-          sudo chmod -R a+rwX /usr/local/lib/R/site-library
-          # Install explicitly into the system site-library (visible to all users)
-          Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org", lib="/usr/local/lib/R/site-library")'
-          Rscript -e 'library(BiocManager, lib.loc="/usr/local/lib/R/site-library"); BiocManager::install("dada2", ask=FALSE, lib="/usr/local/lib/R/site-library")'
-          Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org", lib="/usr/local/lib/R/site-library")'
+          # R_LIBS_USER is set as a job-level env var so both Rscript and RCall's
+          # embedded R session see the same library path automatically.
+          mkdir -p "$R_LIBS_USER"
+          Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org")'
+          Rscript -e 'BiocManager::install("dada2", ask=FALSE)'
+          Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org")'
 
       - name: Install cutadapt
         run: pip install cutadapt
