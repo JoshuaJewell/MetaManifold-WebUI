@@ -61,16 +61,12 @@
         isdir(study_analysis) && rm(study_analysis; recursive=true)
     end
 
-    # Use CI config dir if real config/tools.yml is absent
-    effective_config_dir = isfile(joinpath(PROJECT_ROOT, "config", "tools.yml")) ?
-        joinpath(PROJECT_ROOT, "config") : ci_config_dir
-
     local projects
     try
         projects = new_project(PROJECT_NAME;
                                data_dir     = joinpath(PROJECT_ROOT, "data"),
                                projects_dir = joinpath(PROJECT_ROOT, "projects"),
-                               config_dir   = effective_config_dir)
+                               config_dir   = joinpath(PROJECT_ROOT, "config"))
     catch e
         @warn "Integration test skipped: could not create project - $e"
         return
