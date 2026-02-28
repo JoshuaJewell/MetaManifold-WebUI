@@ -50,9 +50,8 @@ jobs:
         run: |
           sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org", lib=.Library)'
           sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE, lib=.Library)'
-          sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org", lib=.Library)'
-          Rscript -e 'if (!"dada2" %in% rownames(installed.packages())) stop("dada2 failed to install")'
-          Rscript -e 'if (!"vegan" %in% rownames(installed.packages())) stop("vegan failed to install")'
+          sudo Rscript -e 'install.packages(c("vegan", "tidyverse"), repos="https://cloud.r-project.org", lib=.Library)'
+          Rscript -e 'for (pkg in c("dada2","vegan","tidyverse")) if (!require(pkg,character.only=TRUE)) stop(pkg, " failed to install")'
 
       - name: Install cutadapt
         run: pip install cutadapt
