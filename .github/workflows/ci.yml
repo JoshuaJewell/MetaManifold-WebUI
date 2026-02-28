@@ -69,15 +69,7 @@ jobs:
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
 
       - name: Download PR2 databases
-        run: julia --project=. -e '
-          include("src/core/types.jl")
-          include("src/core/graph.jl")
-          include("src/core/log.jl")
-          include("src/core/config.jl")
-          include("src/core/databases.jl")
-          using .Databases
-          Databases.ensure_databases("config/ci/databases.yml")
-        '
+        run: julia --project=. config/ci/download_databases.jl
 
       - name: Rebuild RCall against installed R
         run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
