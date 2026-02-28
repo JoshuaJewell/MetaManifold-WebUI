@@ -76,7 +76,16 @@ jobs:
         run: julia --project=. config/ci/download_databases.jl
 
       - name: Rebuild RCall against installed R
-        run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
+        env:
+          R_LIBS_USER: /usr/local/lib/R/site-library
+        run: |
+          julia --project=. -e 'import Pkg; Pkg.build("RCall")'
+          echo "=== R library paths seen by RCall ==="
+          julia --project=. -e '
+            using RCall
+            R"cat(paste(.libPaths(), collapse=\"\n\"))"
+            R"cat(\"\\ndada2 installed:\", \"dada2\" %in% rownames(installed.packages()))"
+          '
 
       - name: Run tests
         env:
