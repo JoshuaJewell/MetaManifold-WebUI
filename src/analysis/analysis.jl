@@ -22,7 +22,8 @@ module Analysis
 export analyse_run, analyse_study, load_metadata
 
     using CSV, DataFrames, Dates, Logging, Statistics, YAML, RCall
-    using ..PipelineTypes, ..PipelineLog, ..Config, ..DiversityMetrics, ..PipelinePlots
+    using ..PipelineTypes, ..PipelineLog, ..Config, ..DiversityMetrics
+    using ..PipelinePlots, ..PipelinePlotsPlotly
 
     include("helpers.jl")
     include("stats.jl")

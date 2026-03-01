@@ -1,3 +1,6 @@
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
     ## Count-matrix builders
     # Extract a samples x features count matrix from a single DataFrame.
     # Rows = samples (one per element of `scols`), columns = ASV rows.

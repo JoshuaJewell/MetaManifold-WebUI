@@ -2,6 +2,11 @@ module PipelinePlots
 
 # CairoMakie-based plotting for the analysis stage.
 #
+# NOTE: The default pipeline now produces Plotly JSON via PipelinePlotsPlotly
+# (src/analysis/plotly.jl). This module is retained for future PDF-on-demand
+# functionality (e.g. a server endpoint that renders a publication-quality PDF
+# from an existing JSON figure). Do not remove.
+#
 # All public functions write a PDF to the given path and return nothing.
 # Module is named PipelinePlots (not Plots) to avoid shadowing Plots.jl.
 #

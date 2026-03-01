@@ -30,6 +30,7 @@ include("pipeline/merge_taxa.jl")
 include("core/project.jl")
 include("analysis/diversity.jl")
 include("analysis/plots.jl")
+include("analysis/plotly.jl")
 include("analysis/analysis.jl")
 
 using CSV

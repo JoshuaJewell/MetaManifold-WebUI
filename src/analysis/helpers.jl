@@ -1,3 +1,6 @@
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
     ## Column identification
     """
         _sample_cols(df, db_meta) -> Vector{String}

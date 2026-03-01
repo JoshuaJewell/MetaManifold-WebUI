@@ -1,27 +1,31 @@
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
     ## Level 1 - Per-run analysis
     """
         analyse_run(project, merged, asvs, db_meta; plot_lock=nothing)
 
     Produce per-run analysis outputs under `{project.dir}/analysis/`.
-    When `plot_lock` is provided, CairoMakie calls are serialized behind
-    it so multiple runs can prepare data in parallel.
+    Plots are written as Plotly JSON to `analysis/Plots/`.
+    Text reports are written to `analysis/`.
+    `plot_lock` is accepted for API compatibility but not used (Plotly JSON
+    generation requires no global rendering lock).
     """
     function analyse_run(project::ProjectCtx, merged::MergedTables,
                          asvs::ASVResult, db_meta::DatabaseMeta;
                          plot_lock::Union{Nothing,ReentrantLock}=nothing)
         analysis_dir = joinpath(project.dir, "analysis")
-        figures_dir  = joinpath(analysis_dir, "Figures")
+        plots_dir    = joinpath(analysis_dir, "Plots")
         merged_csv   = merged.tables["merged"]
 
         filter_keys  = sort([k for k in keys(merged.tables) if k != "merged"])
         has_filters  = !isempty(filter_keys)
-        all_source_keys = vcat(filter_keys, ["merged"])
 
         # Output paths.
-        summary_path  = joinpath(analysis_dir, "pipeline_summary.csv")
-        stages_pdf    = joinpath(figures_dir,  "pipeline_stages.pdf")
-        alpha_pdf     = joinpath(figures_dir,  "alpha_diversity.pdf")
-        filter_pdf    = joinpath(figures_dir,  "filter_composition.pdf")
+        summary_path = joinpath(analysis_dir, "pipeline_summary.csv")
+        stages_json  = joinpath(plots_dir,    "pipeline_stages.json")
+        alpha_json   = joinpath(plots_dir,    "alpha_diversity.json")
+        filter_json  = joinpath(plots_dir,    "filter_composition.json")
 
         # Read analysis config from the cascade (needed for skip guard and charts).
         config_path  = write_run_config(project)
@@ -34,10 +38,9 @@
         # CSV cache - initialised here so the skip guard and execution share one set of reads.
         cache = _CSVCache()
 
-        # Build required_outputs using the same guards as the execution loop so that
-        # filters producing no rows (empty CSVs) don't add paths that will never be written.
-        required_outputs = String[summary_path, alpha_pdf]
-        has_filters && push!(required_outputs, filter_pdf)
+        # Build required_outputs using the same guards as the execution loop.
+        required_outputs = String[summary_path, alpha_json]
+        has_filters && push!(required_outputs, filter_json)
         for method in _TAX_METHODS
             msrc_keys = _method_source_keys(merged, method)
             for src in msrc_keys
@@ -54,14 +57,15 @@
                 _total_seqs(view_df, src_scols) == 0 && continue
                 sd = _method_source_dirname(src)
                 for (rankdir, _) in taxa_ranks
-                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "taxa_bar.pdf"))
-                    push!(required_outputs, joinpath(figures_dir, method, sd, rankdir, "taxa_bar_absolute.pdf"))
+                    stem = "taxa_bar_$(method)_$(sd)_$(rankdir)"
+                    push!(required_outputs, joinpath(plots_dir, "$(stem).json"))
+                    push!(required_outputs, joinpath(plots_dir, "$(stem)_absolute.json"))
                 end
                 push!(required_outputs, joinpath(analysis_dir, "analysis_report_$(method)_$(sd).txt"))
             end
         end
 
-        # skip guard
+        # Skip guard.
         merged_mtime = isfile(merged_csv) ? mtime(merged_csv) : time()
         if all(isfile, required_outputs) &&
            all(f -> mtime(f) > merged_mtime, required_outputs)
@@ -69,10 +73,7 @@
             return
         end
 
-        mkpath(figures_dir)
-
-        # Helper: serialize CairoMakie calls if plot_lock is provided.
-        _plot(f) = isnothing(plot_lock) ? f() : lock(f, plot_lock)
+        mkpath(plots_dir)
 
         # cache is already populated by the skip guard above; protect concurrent access.
         cache_lock = ReentrantLock()
@@ -88,11 +89,9 @@
         stats_df = _pipeline_summary(project, merged, db_meta)
 
         if !isnothing(stats_df)
-            _plot() do
-                pipeline_stats_plot(stats_df, stages_pdf; subtitle)
-            end
-            @info "Written: $stages_pdf"
-            log_written(project, stages_pdf)
+            PipelinePlotsPlotly.pipeline_stats_plot(stats_df, stages_json; subtitle)
+            @info "Written: $stages_json"
+            log_written(project, stages_json)
         end
 
         # Collect (method, src) work items to dispatch in parallel.
@@ -114,28 +113,24 @@
             end
         end
 
-        # pre-load merged_df_full and all filter CSVs into the cache before
-        # spawning tasks so concurrent reads only ever hit the fast-path.
+        # Pre-load merged_df_full and all filter CSVs into the cache.
         merged_df_full, _ = _read(merged_csv)
         for fpath in values(merged.tables)
             isfile(fpath) && filesize(fpath) > 0 && _read(fpath)
         end
         run_name = basename(project.dir)
 
-        # Spawn one task per (method, source): taxa charts + report in parallel.
+        # Spawn one task per (method, source): taxa charts + report.
         tasks = map(work_items) do (method, src, _, view_df, src_scols)
             Threads.@spawn begin
-                sd       = _method_source_dirname(src)
-                src_sub  = "Source: $sd ($method)"
+                sd        = _method_source_dirname(src)
+                src_sub   = "Source: $sd ($method)"
                 clean_src = src == "merged" ? "merged" :
                             (endswith(src, "_dada2") ? src[1:end-6] : src)
 
-                _plot() do
-                    _generate_taxa_charts(view_df, src_scols,
-                                          joinpath(figures_dir, method),
-                                          top_n, src_sub, clean_src;
-                                          ranks=taxa_ranks, rank_order=db_meta.levels)
-                end
+                _generate_taxa_charts(view_df, src_scols, plots_dir,
+                                      top_n, src_sub, "$(method)_$(sd)";
+                                      ranks=taxa_ranks, rank_order=db_meta.levels)
 
                 report_path = joinpath(analysis_dir, "analysis_report_$(method)_$(sd).txt")
                 _generate_report(view_df, src_scols, stats_df, merged_df_full,
@@ -145,18 +140,16 @@
             end
         end
 
-        # filter composition and alpha can run concurrently with the per-source tasks.
+        # Filter composition and alpha can run concurrently with the per-source tasks.
         filter_task = Threads.@spawn begin
             if has_filters
-                # cache is fully pre-loaded; lock(cache_lock) in _read is a no-op here.
                 filter_totals, comp_scols = _priority_filter_composition(merged, cache, db_meta)
                 if !isnothing(filter_totals) && !isempty(filter_totals)
-                    _plot() do
-                        filter_composition_plot(filter_totals, comp_scols, filter_pdf;
-                                                subtitle, colour_overrides=merged.filter_colours)
-                    end
-                    @info "Written: $filter_pdf"
-                    log_written(project, filter_pdf)
+                    PipelinePlotsPlotly.filter_composition_plot(
+                        filter_totals, comp_scols, filter_json;
+                        subtitle, colour_overrides=merged.filter_colours)
+                    @info "Written: $filter_json"
+                    log_written(project, filter_json)
                 end
             end
         end
@@ -167,11 +160,9 @@
                 prim_df, prim_scols = _read(primary_csv)
                 if !isempty(prim_scols)
                     alpha = _compute_alpha(prim_df, prim_scols)
-                    _plot() do
-                        alpha_diversity_plot(alpha, alpha_pdf; subtitle)
-                    end
-                    @info "Written: $alpha_pdf"
-                    log_written(project, alpha_pdf)
+                    PipelinePlotsPlotly.alpha_diversity_plot(alpha, alpha_json; subtitle)
+                    @info "Written: $alpha_json"
+                    log_written(project, alpha_json)
                 end
             end
         end

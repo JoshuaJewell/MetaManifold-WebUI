@@ -1,4 +1,7 @@
 #!/usr/bin/env Rscript
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
 # Standalone taxonomy assignment for remote execution.
 # Called by _assign_taxonomy_remote() in taxonomy.jl via SSH.
 # All paths refer to the remote filesystem.

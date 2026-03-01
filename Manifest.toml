@@ -2,7 +2,7 @@
 
 julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "be47a58c2ce839315d6617d75a8b8dad1daa6ddc"
+project_hash = "cbcb66964a764892e2a07ef15803d7e3bc4c6c11"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -796,6 +796,18 @@ version = "1.4.0"
     [deps.JSON.weakdeps]
     ArrowTypes = "31f734f8-188a-4ce0-8406-c8a06bd891cd"
 
+[[deps.JSON3]]
+deps = ["Dates", "Mmap", "Parsers", "PrecompileTools", "StructTypes", "UUIDs"]
+git-tree-sha1 = "411eccfe8aba0814ffa0fdf4860913ed09c34975"
+uuid = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+version = "1.14.3"
+
+    [deps.JSON3.extensions]
+    JSON3ArrowExt = ["ArrowTypes"]
+
+    [deps.JSON3.weakdeps]
+    ArrowTypes = "31f734f8-188a-4ce0-8406-c8a06bd891cd"
+
 [[deps.JpegTurbo]]
 deps = ["CEnum", "FileIO", "ImageCore", "JpegTurbo_jll", "TOML"]
 git-tree-sha1 = "9496de8fb52c224a2e3f9ff403947674517317d9"
@@ -836,6 +848,15 @@ deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "eb62a3deb62fc6d8822c0c4bef73e4412419c5d8"
 uuid = "1d63c593-3942-5779-bab2-d838dc0a180e"
 version = "18.1.8+0"
+
+[[deps.LRUCache]]
+git-tree-sha1 = "5519b95a490ff5fe629c4a7aa3b3dfc9160498b3"
+uuid = "8ac3fa9e-de4c-5943-b1dc-09c6b5f20637"
+version = "1.6.2"
+weakdeps = ["Serialization"]
+
+    [deps.LRUCache.extensions]
+    SerializationExt = ["Serialization"]
 
 [[deps.LZO_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -966,6 +987,11 @@ deps = ["Dates", "Logging"]
 git-tree-sha1 = "f00544d95982ea270145636c181ceda21c4e2575"
 uuid = "e6f89c97-d47a-5376-807f-9c37f3926c36"
 version = "1.2.0"
+
+[[deps.MIMEs]]
+git-tree-sha1 = "c64d943587f7187e751162b3b84445bbbd79f691"
+uuid = "6c6e2e6c-3030-632d-7369-2d6c69616d65"
+version = "1.1.0"
 
 [[deps.MacroTools]]
 git-tree-sha1 = "1e0228a030642014fe5cfe68c2c0a818f9e3f522"
@@ -1151,6 +1177,30 @@ version = "1.6.1+0"
 git-tree-sha1 = "05868e21324cede2207c6f0f466b4bfef6d5e7ee"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.8.1"
+
+[[deps.Oxygen]]
+deps = ["DataStructures", "Dates", "HTTP", "JSON", "LRUCache", "MIMEs", "Reexport", "RelocatableFolders", "Sockets", "Statistics", "StructTypes"]
+git-tree-sha1 = "294a35cc29803a3e1fdc3da2e0bf0d8826530575"
+uuid = "df9a0d86-3283-4920-82dc-4555fc0d1d8b"
+version = "1.10.1"
+
+    [deps.Oxygen.extensions]
+    BonitoExt = "Bonito"
+    CairoMakieExt = "CairoMakie"
+    MustacheExt = "Mustache"
+    OteraEngineExt = "OteraEngine"
+    ProtoBufExt = "ProtoBuf"
+    TimeZonesExt = "TimeZones"
+    WGLMakieExt = ["WGLMakie", "Bonito"]
+
+    [deps.Oxygen.weakdeps]
+    Bonito = "824d6782-a2ef-11e9-3a09-e5662e0c26f8"
+    CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+    Mustache = "ffc61752-8dc7-55ee-8c37-f3e9cdd09e70"
+    OteraEngine = "b2d7f28f-acd6-4007-8b26-bc27716e5513"
+    ProtoBuf = "3349acd9-ac6a-5e09-bcdb-63829b23a429"
+    TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
+    WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
 
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -1631,6 +1681,12 @@ version = "0.7.2"
     LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
     SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
     StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[[deps.StructTypes]]
+deps = ["Dates", "UUIDs"]
+git-tree-sha1 = "159331b30e94d7b11379037feeb9b690950cace8"
+uuid = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
+version = "1.11.0"
 
 [[deps.StructUtils]]
 deps = ["Dates", "UUIDs"]

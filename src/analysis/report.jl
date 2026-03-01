@@ -1,16 +1,20 @@
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
     function _generate_taxa_charts(df::DataFrame, scols::Vector{String},
-                                    figures_dir::String, top_n::Int,
+                                    plots_dir::String, top_n::Int,
                                     subtitle::Union{Nothing,String},
-                                    source_key::String;
+                                    method_src_key::String;
                                     ranks, rank_order::Vector{String})
-        src_dir = _source_dirname(source_key)
+        mkpath(plots_dir)
         for (rankdir, rank) in ranks
-            dir = joinpath(figures_dir, src_dir, rankdir)
-            mkpath(dir)
-            taxa_bar_chart(df, scols, joinpath(dir, "taxa_bar.pdf");
-                           top_n, rank, relative=true, subtitle, rank_order)
-            taxa_bar_chart(df, scols, joinpath(dir, "taxa_bar_absolute.pdf");
-                           top_n, rank, relative=false, subtitle, rank_order)
+            stem = "taxa_bar_$(method_src_key)_$(rankdir)"
+            PipelinePlotsPlotly.taxa_bar_chart(df, scols,
+                joinpath(plots_dir, "$(stem).json");
+                top_n, rank, relative=true, subtitle, rank_order)
+            PipelinePlotsPlotly.taxa_bar_chart(df, scols,
+                joinpath(plots_dir, "$(stem)_absolute.json");
+                top_n, rank, relative=false, subtitle, rank_order)
         end
     end
 

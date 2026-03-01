@@ -172,9 +172,24 @@
         analyse_run(project, merged, asvs, db_meta; plot_lock)
 
         analysis_dir = joinpath(project.dir, "analysis")
+        plots_dir    = joinpath(analysis_dir, "Plots")
         @test isdir(analysis_dir)
         @test isfile(joinpath(analysis_dir, "pipeline_summary.csv"))
-        @test isfile(joinpath(analysis_dir, "Figures", "alpha_diversity.pdf"))
+        @test isdir(plots_dir)
+        @test isfile(joinpath(plots_dir, "alpha_diversity.json"))
+        @test isfile(joinpath(plots_dir, "pipeline_stages.json"))
+        let fig = JSON3.read(read(joinpath(plots_dir, "alpha_diversity.json"), String))
+            @test haskey(fig, :data) && haskey(fig, :layout)
+        end
+
+        ## Skip-guard: re-running analyse_run should not overwrite any outputs
+        mtime_alpha  = mtime(joinpath(plots_dir, "alpha_diversity.json"))
+        mtime_stages = mtime(joinpath(plots_dir, "pipeline_stages.json"))
+        mtime_csv    = mtime(joinpath(analysis_dir, "pipeline_summary.csv"))
+        analyse_run(project, merged, asvs, db_meta; plot_lock)
+        @test mtime(joinpath(plots_dir, "alpha_diversity.json"))    == mtime_alpha
+        @test mtime(joinpath(plots_dir, "pipeline_stages.json"))    == mtime_stages
+        @test mtime(joinpath(analysis_dir, "pipeline_summary.csv")) == mtime_csv
     end
 
     ## Stage 6: analyse_study (both runs together)
@@ -183,9 +198,17 @@
         analyse_study(projects, merged_results, fill(db_meta, length(projects)); plot_lock)
 
         study_analysis_dir = joinpath(test_study_dir, "analysis")
+        study_plots_dir    = joinpath(study_analysis_dir, "Plots")
         @test isdir(study_analysis_dir)
-        @test isfile(joinpath(study_analysis_dir, "Figures", "nmds.pdf")) ||
-              isfile(joinpath(study_analysis_dir, "Figures", "alpha_comparison.pdf"))
+        @test isdir(study_plots_dir)
+        @test isfile(joinpath(study_plots_dir, "nmds.json")) ||
+              isfile(joinpath(study_plots_dir, "alpha_comparison.json"))
+        let candidate = joinpath(study_plots_dir, "alpha_comparison.json")
+            if isfile(candidate)
+                fig = JSON3.read(read(candidate, String))
+                @test haskey(fig, :data) && haskey(fig, :layout)
+            end
+        end
         @info "Study analysis complete"
     end
 

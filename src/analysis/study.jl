@@ -1,3 +1,6 @@
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
     ## Level 3 - Study-level analysis
     function _analyse_study_level(study_dir::String,
                                   valid::Vector{Tuple{ProjectCtx, MergedTables, DatabaseMeta}},
@@ -5,9 +8,9 @@
                                   default_db_meta::DatabaseMeta;
                                   plot_lock::Union{Nothing,ReentrantLock}=nothing)
         analysis_dir = joinpath(study_dir, "analysis")
-        figures_dir  = joinpath(analysis_dir, "Figures")
-        nmds_pdf     = joinpath(figures_dir, "nmds.pdf")
-        alpha_pdf    = joinpath(figures_dir, "alpha_comparison.pdf")
+        plots_dir    = joinpath(analysis_dir, "Plots")
+        nmds_json    = joinpath(plots_dir, "nmds.json")
+        alpha_json   = joinpath(plots_dir, "alpha_comparison.json")
         perm_txt     = joinpath(analysis_dir, "permanova.txt")
 
         src_key   = _source_key(valid[1][2])
@@ -33,7 +36,7 @@
         # Initialise cache here so it is shared between the skip guard and execution.
         cache = _CSVCache()
 
-        required_outputs = [nmds_pdf, alpha_pdf]
+        required_outputs = [nmds_json, alpha_json]
         for method in _TAX_METHODS
             msrc_keys = _all_method_source_keys(all_mergeds, method)
             for src in msrc_keys
@@ -62,10 +65,7 @@
         end
 
         reset_log(study_dir)
-        mkpath(figures_dir)
-
-        # Helper: serialize CairoMakie calls if plot_lock is provided.
-        _plot(f) = isnothing(plot_lock) ? f() : lock(f, plot_lock)
+        mkpath(plots_dir)
 
         src_label = _source_label(src_key)
         subtitle  = "Source: $src_label"
@@ -111,14 +111,12 @@
             coords, stress = _run_nmds(mat, r_lock)
             if !any(isnan, coords)
                 nmds_stress = stress
-                _plot() do
-                    nmds_plot(coords, all_scols, nmds_pdf;
-                              colour_by=group_labels, shape_by=run_labels,
-                              colour_label="Group", shape_label="Run",
-                              stress=stress, subtitle)
-                end
-                @info "Written: $nmds_pdf"
-                log_written(study_dir, nmds_pdf)
+                PipelinePlotsPlotly.nmds_plot(coords, all_scols, nmds_json;
+                                              colour_by=group_labels, shape_by=run_labels,
+                                              colour_label="Group", shape_label="Run",
+                                              stress=stress, subtitle)
+                @info "Written: $nmds_json"
+                log_written(study_dir, nmds_json)
             else
                 @warn "Study-level NMDS failed"
                 pipeline_log(study_dir, "WARN: Study-level NMDS failed")
@@ -148,11 +146,9 @@
         end
 
         if !isempty(all_alpha)
-            _plot() do
-                alpha_boxplot(all_alpha, alpha_labels, alpha_pdf; subtitle)
-            end
-            @info "Written: $alpha_pdf"
-            log_written(study_dir, alpha_pdf)
+            PipelinePlotsPlotly.alpha_boxplot(all_alpha, alpha_labels, alpha_json; subtitle)
+            @info "Written: $alpha_json"
+            log_written(study_dir, alpha_json)
         end
 
         # PERMANOVA - always runs using group and run as covariates (derived from the

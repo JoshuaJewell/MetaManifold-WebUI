@@ -1,3 +1,6 @@
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
 # Web UI: Denoising page
 # Stages: chimera_removal
 

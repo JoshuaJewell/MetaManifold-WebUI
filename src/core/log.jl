@@ -1,5 +1,9 @@
 module PipelineLog
 
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+#
+# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
 export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
 
     using SHA, Dates

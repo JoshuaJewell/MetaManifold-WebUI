@@ -1,3 +1,6 @@
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
     ## Source table selection
     # Pick the primary analysis source from a MergedTables.
     # Currently always "merged" (unfiltered); filter selection can be added here.

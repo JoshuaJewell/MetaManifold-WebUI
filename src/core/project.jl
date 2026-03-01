@@ -1,5 +1,9 @@
 module ProjectSetup
 
+# © 2026 Joshua Benjamin Jewell. All rights reserved.
+#
+# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
 export new_project
 
     using ..PipelineTypes
