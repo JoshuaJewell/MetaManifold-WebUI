@@ -141,7 +141,7 @@
         println(io)
         # Rows.
         for row in eachrow(stats_df)
-            print(io, rpad(PipelinePlots._display_name(String(row.sample)), 20))
+            print(io, rpad(PipelinePlotsPlotly._display_name(String(row.sample)), 20))
             for col in cols
                 col == "sample" && continue
                 v = row[Symbol(col)]
@@ -156,7 +156,7 @@
         print(io, rpad("Sample", 20))
         println(io, rpad("Richness", 12), rpad("Shannon", 12), "Simpson")
         for row in eachrow(alpha_df)
-            print(io, rpad(PipelinePlots._display_name(String(row.sample)), 20))
+            print(io, rpad(PipelinePlotsPlotly._display_name(String(row.sample)), 20))
             print(io, rpad(string(row.richness), 12))
             print(io, rpad(string(round(row.shannon; digits=3)), 12))
             println(io, round(row.simpson; digits=3))

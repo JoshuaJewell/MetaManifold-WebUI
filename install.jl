@@ -385,8 +385,16 @@ function download_swarm()::String
         "Download manually from https://github.com/torognes/swarm/releases and place at bin/swarm."
     )
 
+    tarball = joinpath(BIN_DIR, "swarm_download.tar.gz")
+    download_to(url, tarball)
+    run(`tar -xzf $tarball -C $BIN_DIR --warning=no-unknown-keyword`)
+    rm(tarball)
+
+    bin = find_file_in_dir(BIN_DIR, "swarm")
+    bin === nothing && error("swarm binary not found after extraction.")
+
     dest = joinpath(BIN_DIR, "swarm")
-    download_to(url, dest)
+    bin != dest && mv(bin, dest; force=true)
     chmod(dest, 0o755)
     dest
 end
@@ -554,8 +562,8 @@ const SYSIMAGE_PATH = joinpath(PROJECT_ROOT, "MetaManifold$(SYSIMAGE_EXT)")
 
 # All non-stdlib packages listed in Project.toml
 const SYSIMAGE_PACKAGES = [
-    :CSV, :CodecZlib, :DataFrames, :HTTP, :JSON3,
-    :Oxygen, :RCall, :StatsBase, :TimeZones, :YAML,
+    :CSV, :CairoMakie, :CodecZlib, :DataFrames, :HTTP, :JSON3,
+    :Oxygen, :RCall, :StatsBase, :StatsPlots, :TimeZones, :YAML,
 ]
 
 function build_sysimage()

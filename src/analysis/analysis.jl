@@ -3,8 +3,8 @@ module Analysis
 # Post-pipeline analysis: per-run, per-group, and study-level outputs.
 #
 # Entry points (called from main.jl):
-#   analyse_run(project, merged, asvs, db_meta; plot_lock)
-#   analyse_study(projects, merged_results, db_metas; plot_lock)
+#   analyse_run(project, merged, asvs, db_meta)
+#   analyse_study(projects, merged_results, db_metas)
 #   load_metadata(start_dir, study_dir)
 #
 # Internal structure (src/analysis/):
@@ -23,7 +23,7 @@ export analyse_run, analyse_study, load_metadata
 
     using CSV, DataFrames, Dates, Logging, Statistics, YAML, RCall
     using ..PipelineTypes, ..PipelineLog, ..Config, ..DiversityMetrics
-    using ..PipelinePlots, ..PipelinePlotsPlotly
+    using ..PipelinePlotsPlotly
 
     include("helpers.jl")
     include("stats.jl")

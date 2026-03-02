@@ -1,6 +1,5 @@
-#!/usr/bin/env julia
+#!/usr/bin/env -S julia --project=.
 
-# Activate the project environment (Project.toml one directory up from src/).
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."); io=devnull)
 
@@ -29,14 +28,13 @@ include("pipeline/swarm.jl")
 include("pipeline/merge_taxa.jl")
 include("core/project.jl")
 include("analysis/diversity.jl")
-include("analysis/plots.jl")
 include("analysis/plotly.jl")
 include("analysis/analysis.jl")
 
 using CSV
 using YAML
 using .PipelineTypes, .PipelineGraph, .PipelineLog, .Config, .Databases, .Validation, .Tools, .TaxonomyTableTools, .DADA2, .OTUPipeline, .ProjectSetup
-using .DiversityMetrics, .PipelinePlots, .Analysis
+using .DiversityMetrics, .PipelinePlotsPlotly, .Analysis
 
 ## Instantiate parameters
 config_dir       = "./config"
@@ -47,7 +45,7 @@ dbs = ensure_databases(databases_config)
 ## Main
 const r_lock = ReentrantLock()
 
-projects = new_project("Multi_v_Vespa")
+projects = new_project("Nu_Mul-v-Ves")
 
 tools_config = joinpath(config_dir, "tools.yml")
 n_errors = validate_environment(projects, databases_config, tools_config)
@@ -121,23 +119,20 @@ Threads.@threads for (i, project) in collect(enumerate(projects))
     end
 end
 
-# Analysis: data prep runs in parallel, CairoMakie calls serialized via plot_lock.
-const plot_lock = ReentrantLock()
-
 Threads.@threads for (i, project) in collect(enumerate(projects))
     merged = merged_results[i]
     asvs   = asvs_results[i]
     (isnothing(merged) || isnothing(asvs)) && continue
     isassigned(db_metas, i) || continue
     try
-        analyse_run(project, merged, asvs, db_metas[i]; plot_lock)
+        analyse_run(project, merged, asvs, db_metas[i])
     catch e
         @error "analyse_run failed for $(basename(project.dir))" exception=(e, catch_backtrace())
     end
 end
 
 if any(!isnothing, merged_results)
-    analyse_study(projects, merged_results, db_metas; plot_lock)
+    analyse_study(projects, merged_results, db_metas)
 end
 
 write_combined_log(projects)

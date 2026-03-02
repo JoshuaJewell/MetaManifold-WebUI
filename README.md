@@ -244,16 +244,16 @@ dada2:
 
 **Outputs written to `projects/{name}/{run}/dada2/Tables/`:**
 
-| File | Contents |
-|------|----------|
-| `seqtab_nochim.csv` | Chimera-free ASV count table (samples x ASVs) |
+| File                      | Contents                                               |
+| --------------------------| -------------------------------------------------------|
+| `seqtab_nochim.csv`       | Chimera-free ASV count table (samples x ASVs)          |
 | `asvs.fasta` / `asvs.csv` | ASV sequences with short identifiers (seq1, seq2, ...) |
-| `taxonomy.csv` | Taxonomy assignments per ASV |
-| `taxonomy_bootstraps.csv` | Bootstrap confidence values per rank |
-| `taxonomy_combined.csv` | Taxonomy + bootstrap columns combined |
-| `tax_counts.csv` | Taxonomy + per-sample counts |
-| `asv_counts.csv` | ASV sequences + per-sample counts (no taxonomy) |
-| `pipeline_stats.csv` | Read counts retained at each pipeline stage |
+| `taxonomy.csv`            | Taxonomy assignments per ASV                           |
+| `taxonomy_bootstraps.csv` | Bootstrap confidence values per rank                   |
+| `taxonomy_combined.csv`   | Taxonomy + bootstrap columns combined                  |
+| `tax_counts.csv`          | Taxonomy + per-sample counts                           |
+| `asv_counts.csv`          | ASV sequences + per-sample counts (no taxonomy)        |
+| `pipeline_stats.csv`      | Read counts retained at each pipeline stage            |
 
 ### Configuring vsearch (`vsearch:` in `pipeline.yml`)
 
