@@ -6,10 +6,13 @@
 # required R packages. Writes resolved tool paths to config/tools.yml.
 #
 # Usage via install.sh, or directly by:
-#   julia --project=. install.jl [--update]
+#   julia --project=. install.jl [--update] [--sysimage]
 #
 # Options:
 #   --update    Re-check tool versions and update managed binaries in bin/
+#   --sysimage  After installation, compile a sysimage of all Julia deps to
+#               speed up subsequent startup. Output: MetaManifold.so (.dylib on macOS)
+#               Use with: julia --sysimage MetaManifold.so --project=. ...
 
 using Pkg
 @info "Installing Julia package dependencies..."
@@ -19,7 +22,8 @@ using YAML
 import Downloads
 
 ## Instantiate
-const UPDATE_MODE   = "--update" in ARGS
+const UPDATE_MODE   = "--update"   in ARGS
+const SYSIMAGE_MODE = "--sysimage" in ARGS
 const PROJECT_ROOT  = @__DIR__
 const BIN_DIR       = joinpath(PROJECT_ROOT, "bin")
 const CONFIG_DIR    = joinpath(PROJECT_ROOT, "config")
@@ -172,7 +176,7 @@ function download_vsearch()::String
 
     tarball = joinpath(BIN_DIR, "vsearch_download.tar.gz")
     download_to(url, tarball)
-    run(`tar -xzf $tarball -C $BIN_DIR`)
+    run(`tar -xzf $tarball -C $BIN_DIR --warning=no-unknown-keyword`)
     rm(tarball)
 
     bin = find_file_in_dir(BIN_DIR, "vsearch")
@@ -202,7 +206,7 @@ function download_fastqc()::String
 end
 
 function download_cdhit()::String
-    # System package manager (no compilation needed)
+    # System package manager
     if OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
         @info "Trying apt-get install cd-hit..."
         try
@@ -237,7 +241,7 @@ function download_cdhit()::String
     @info "Downloading cd-hit v4.8.1 precompiled binary..."
     tarball = joinpath(BIN_DIR, "cdhit_download.tar.gz")
     download_to(url, tarball)
-    run(`tar -xzf $tarball -C $BIN_DIR`)
+    run(`tar -xzf $tarball -C $BIN_DIR --warning=no-unknown-keyword`)
     rm(tarball)
 
     bin = find_file_in_dir(BIN_DIR, "cd-hit-est")
@@ -247,6 +251,52 @@ function download_cdhit()::String
     bin != dest && mv(bin, dest; force=true)
     chmod(dest, 0o755)
     dest
+end
+
+function ensure_pipx()
+    Sys.which("pipx") !== nothing && return  # already present
+
+    @info "pipx not found — attempting to install it..."
+
+    if OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
+        try
+            run(`sudo apt-get install -y pipx`)
+            Sys.which("pipx") !== nothing && return
+        catch
+            @warn "apt-get install pipx failed."
+        end
+    elseif OS_TYPE == "macos" && Sys.which("brew") !== nothing
+        try
+            run(`brew install pipx`)
+            run(`pipx ensurepath`)
+            Sys.which("pipx") !== nothing && return
+        catch
+            @warn "brew install pipx failed."
+        end
+    end
+
+    # Fallback: bootstrap pipx via pip/python3
+    pip_cmd = nothing
+    for candidate in (`pip3`, `pip`, `python3 -m pip`)
+        try
+            run(pipeline(`$candidate --version`; stdout=devnull, stderr=devnull))
+            pip_cmd = candidate
+            break
+        catch
+        end
+    end
+
+    if pip_cmd !== nothing
+        try
+            run(`$pip_cmd install --user pipx`)
+            run(`python3 -m pipx ensurepath`)
+            Sys.which("pipx") !== nothing && return
+        catch
+        end
+    end
+
+    @warn "Could not install pipx automatically. Python tools (cutadapt, multiqc) " *
+          "may need to be installed manually."
 end
 
 function install_python_tool(name::String)::String
@@ -341,31 +391,72 @@ function download_swarm()::String
     dest
 end
 
+function install_r_sysdeps()
+    # System libraries required to compile Bioconductor / tidyverse packages from source
+    deps = [
+        "pkg-config",                                   # needed by all configure scripts
+        "libbz2-dev", "liblzma-dev", "zlib1g-dev",    # Rsamtools / Rhtslib
+        "libcurl4-openssl-dev", "libssl-dev",           # httr / curl / openssl
+        "libxml2-dev",                                   # xml2 / rvest
+        "libfreetype6-dev", "libpng-dev",               # ragg / systemfonts
+        "libjpeg-dev", "libtiff5-dev",                  # ragg
+        "libfontconfig1-dev",                            # systemfonts
+        "libharfbuzz-dev", "libfribidi-dev",            # textshaping
+        "libhdf5-dev",                                   # rhdf5 / HDF5Array
+    ]
+    if OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
+        @info "Installing R system library dependencies via apt-get..."
+        try
+            run(`sudo apt-get install -y $deps`)
+        catch
+            @warn "apt-get install of R system deps failed (no sudo?). " *
+                  "Some R packages may not compile. Install manually:\n  " *
+                  join(deps, " ")
+        end
+    end
+end
+
 function install_r_packages(packages::Vector{String}; force_reinstall::Bool=false)
-    pkgs_r      = join(["\"$p\"" for p in packages], ", ")
-    force_r     = force_reinstall ? "TRUE" : "FALSE"
+    pkgs_r  = join(["\"$p\"" for p in packages], ", ")
+    force_r = force_reinstall ? "TRUE" : "FALSE"
     snippet = """
+        # Ensure a user-writable library is first on the search path
+        user_lib <- Sys.getenv("R_LIBS_USER",
+                        unset = file.path(path.expand("~"), "R", "library"))
+        dir.create(user_lib, recursive = TRUE, showWarnings = FALSE)
+        .libPaths(c(user_lib, .libPaths()))
+
         if (!requireNamespace("BiocManager", quietly = TRUE))
-            install.packages("BiocManager", repos = "https://cloud.r-project.org")
+            install.packages("BiocManager", repos = "https://cloud.r-project.org",
+                             lib = user_lib)
 
         pkgs <- c($pkgs_r)
 
         if ($force_r) {
-            message("Reinstalling all packages from source (--update mode)...")
-            BiocManager::install(pkgs, ask = FALSE, force = TRUE, type = "source")
+            message("Reinstalling all packages (--update mode)...")
+            BiocManager::install(pkgs, ask = FALSE, force = TRUE, dependencies = NA)
         } else {
-            # requireNamespace only checks presence, not load-time linkage (e.g. Rcpp ABI).
-            # Use tryCatch(library(...)) to detect packages that are present but broken.
             broken <- pkgs[!sapply(pkgs, function(p) {
                 tryCatch({ library(p, character.only = TRUE); TRUE },
                          error = function(e) FALSE)
             })]
             if (length(broken) > 0) {
                 message("Installing/repairing: ", paste(broken, collapse = ", "))
-                BiocManager::install(broken, ask = FALSE, type = "source")
+                BiocManager::install(broken, ask = FALSE, dependencies = NA)
             } else {
                 message("All R packages already installed and loadable.")
             }
+        }
+
+        # Final verification — exit non-zero so Julia can detect failures
+        failed <- pkgs[!sapply(pkgs, function(p) {
+            tryCatch({ library(p, character.only = TRUE); TRUE },
+                     error = function(e) FALSE)
+        })]
+        if (length(failed) > 0) {
+            message("ERROR: the following packages could not be loaded after install: ",
+                    paste(failed, collapse = ", "))
+            quit(status = 1)
         }
     """
     try
@@ -434,11 +525,17 @@ function resolve_tool(
                 return install_fn()
             catch e
                 @error "Auto-install failed: $e"
-                println("  Falling back to manual entry.")
-                choice = 2
+                println()
+                println("  What would you like to do?")
+                println("  1) Enter a path manually  (local: /path/to/$bin  or  remote: user@host:/path/to/$bin)")
+                println("  2) Skip  (configure later in config/tools.yml)")
+                print("  Choice [1]: ")
+                raw2 = strip(readline())
+                choice = isempty(raw2) ? 1 : something(tryparse(Int, raw2), 1)
+                choice == 1 || return nothing
+                return prompt_path("  Enter path")
             end
         end
-        # After potential fallback, re-map remaining choices
         if choice == 2
             return prompt_path("  Enter path")
         end
@@ -449,6 +546,38 @@ function resolve_tool(
         end
         return nothing  # Skip
     end
+end
+
+## Sysimage creation
+const SYSIMAGE_EXT  = Sys.isapple() ? ".dylib" : ".so"
+const SYSIMAGE_PATH = joinpath(PROJECT_ROOT, "MetaManifold$(SYSIMAGE_EXT)")
+
+# All non-stdlib packages listed in Project.toml
+const SYSIMAGE_PACKAGES = [
+    :CSV, :CodecZlib, :DataFrames, :HTTP, :JSON3,
+    :Oxygen, :RCall, :StatsBase, :TimeZones, :YAML,
+]
+
+function build_sysimage()
+    @info "Installing PackageCompiler..."
+    Pkg.add("PackageCompiler")
+
+    # Import after installation so it is available in this session
+    @eval using PackageCompiler
+
+    pkg_list = join(string.(SYSIMAGE_PACKAGES), ", ")
+    @info "Compiling sysimage — this may take several minutes...\n  Packages: $pkg_list\n  Output:   $SYSIMAGE_PATH"
+
+    @eval PackageCompiler.create_sysimage(
+        $SYSIMAGE_PACKAGES;
+        sysimage_path = $SYSIMAGE_PATH,
+        project       = $PROJECT_ROOT,
+    )
+
+    @info "Sysimage written to $SYSIMAGE_PATH"
+    println()
+    println("To use the sysimage, launch Julia with:")
+    println("  julia --sysimage $(basename(SYSIMAGE_PATH)) --project=. <script>")
 end
 
 ## Main
@@ -462,6 +591,11 @@ function main()
 
     config = load_tools_config()
     resolved = Dict{String,Any}()
+
+    # Ensure pipx/pip is available before resolving Python-based tools
+    println("  --- Python installer -----------------------------------------------")
+    ensure_pipx()
+    println()
 
     # cutadapt
     path = resolve_tool("cutadapt", "cutadapt", config,
@@ -498,6 +632,7 @@ function main()
     println("  --- R packages -----------------------------------------------------")
     r_packages = ["dada2", "tidyverse", "vegan"]
     if prompt_yn("  Install/check R packages (dada2, tidyverse, vegan)?")
+        install_r_sysdeps()
         install_r_packages(r_packages; force_reinstall=UPDATE_MODE)
     end
 
@@ -506,6 +641,13 @@ function main()
 
     # Create a data directory
     mkpath("data")
+
+    # Sysimage
+    if SYSIMAGE_MODE
+        println()
+        println("  --- Julia sysimage -------------------------------------------------")
+        build_sysimage()
+    end
 
     println()
     println("Installation complete.")
