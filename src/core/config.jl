@@ -25,11 +25,32 @@ module Config
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-export _section_stale, _write_section_hash,
-       load_merged_config, write_run_config
+export _section_stale, _write_section_hash, _stale_keys,
+       load_merged_config, write_run_config, stage_sections
 
     using SHA, YAML
     using ..PipelineTypes
+
+    const _STAGE_SECTIONS = Dict(
+        :fastqc_multiqc => ["fastqc", "multiqc"],
+        :cutadapt => ["cutadapt"],
+        :dada2_filter_trim => ["dada2.file_patterns", "dada2.filter_trim"],
+        :dada2_learn_errors => ["dada2.dada"],
+        :dada2_denoise => ["dada2.dada", "dada2.merge"],
+        :dada2_filter_length => ["dada2.asv"],
+        :dada2_chimera_removal => ["dada2.asv", "dada2.output"],
+        :dada2_assign_taxonomy => ["dada2.taxonomy", "dada2.output"],
+        :cdhit => ["cdhit"],
+        :swarm => ["swarm"],
+        :vsearch => ["vsearch"],
+        :merge_taxa => ["merge_taxa", "vsearch.enabled", "swarm.enabled", "dada2.taxonomy.enabled"],
+    )
+
+    function stage_sections(name::Symbol)::String
+        sections = get(_STAGE_SECTIONS, name, nothing)
+        isnothing(sections) && error("No pipeline stage named :$name")
+        join(sections, ",")
+    end
 
     # Deep merge
     # Recursively merge `patch` into `base`. Dict values are merged recursively;
@@ -179,6 +200,86 @@ export _section_stale, _write_section_hash,
     """
     function _write_section_hash(config_path::String, section::String, hash_file::String)
         write(hash_file, _section_hash(config_path, section))
+        _write_section_values(config_path, section, hash_file)
+    end
+
+    """
+        _stale_keys(config_path, section, hash_file) -> Vector{String}
+
+    If the section is stale, return the individual dotted config keys that
+    changed compared to the snapshot stored in `hash_file.values`.
+
+    When the stage last ran, `_write_section_hash` stores the hash; we also
+    store a companion `.values` file with the canonical per-key values. If that
+    file is missing (e.g. older run), we fall back to returning the section
+    names only.
+    """
+    function _stale_keys(config_path::String, section::String, hash_file::String)::Vector{String}
+        cfg = YAML.load_file(config_path)
+        cfg isa Dict || return String[]
+
+        values_file = hash_file * ".values"
+        sections = [strip(s) for s in split(section, ",")]
+
+        # Collect current leaf keys
+        current = Dict{String,String}()
+        for sec in sections
+            val = _get_nested(cfg, sec)
+            isnothing(val) && continue
+            if val isa Dict
+                for (k, v) in val
+                    current["$sec.$k"] = _canonical(v)
+                end
+            else
+                current[sec] = _canonical(val)
+            end
+        end
+
+        # Read stored values from companion file
+        if isfile(values_file)
+            stored = Dict{String,String}()
+            for line in eachline(values_file)
+                idx = findfirst('=', line)
+                isnothing(idx) && continue
+                stored[line[1:idx-1]] = line[idx+1:end]
+            end
+            # Diff: keys present in current but not stored, or with different values
+            changed = String[]
+            for (k, v) in current
+                if !haskey(stored, k) || stored[k] != v
+                    push!(changed, k)
+                end
+            end
+            # Keys removed in current config
+            for k in keys(stored)
+                haskey(current, k) || push!(changed, k)
+            end
+            return sort(changed)
+        else
+            # No companion file - return section names as fallback
+            return sections
+        end
+    end
+
+    # Extend _write_section_hash to also write companion values file.
+    function _write_section_values(config_path::String, section::String, hash_file::String)
+        cfg = YAML.load_file(config_path)
+        cfg isa Dict || return
+        sections = [strip(s) for s in split(section, ",")]
+        values_file = hash_file * ".values"
+        open(values_file, "w") do io
+            for sec in sections
+                val = _get_nested(cfg, sec)
+                isnothing(val) && continue
+                if val isa Dict
+                    for (k, v) in sort(collect(val); by=first)
+                        println(io, "$sec.$k=", _canonical(v))
+                    end
+                else
+                    println(io, "$sec=", _canonical(val))
+                end
+            end
+        end
     end
 
 end

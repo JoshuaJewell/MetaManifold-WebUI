@@ -4,15 +4,13 @@
 # Shared pipeline context - helpers and setup called at the start of every stage.
 # Included into module DADA2 by src/dada2.jl.
 
-    # Emitter
-
+    ## Emitter
     # Returns a function that routes progress messages to @info (CLI) or a
     # Channel{String} (Genie SSE). Pass the result as `emit` in stage functions.
-    _emitter(::Nothing)           = msg -> @info msg
-    _emitter(ch::Channel{String}) = msg -> put!(ch, msg)
+    _emitter(::Nothing,           lbl="") = msg -> @info (isempty(lbl) ? msg : "[$lbl] $msg")
+    _emitter(ch::Channel{String}, lbl="") = msg -> put!(ch,  isempty(lbl) ? msg : "[$lbl] $msg")
 
-    # Database helpers
-
+    ## Database helpers
     # Resolve the DADA2 taxonomy database from config/databases.yml.
     function _resolve_taxonomy_db(cfg, emit)
         db_key   = string(cfg["taxonomy"]["database"])
@@ -22,7 +20,7 @@
         return resolve_db(dbs_path, db_key, "dada2"; emit)
     end
 
-    # Config
+    ## Config
     function validate_config(cfg)
         required = ["file_patterns", "filter_trim", "dada",
                     "merge", "asv", "taxonomy", "output"]
@@ -38,7 +36,7 @@
             error("taxonomy.database is required")
     end
 
-    # File discovery
+    ## File discovery
     function find_fastq_files(input_dir, fwd_pattern, rev_pattern, mode)
         all_files = sort(readdir(input_dir, join=true))
         fwd = mode in ("paired", "forward") ?
@@ -71,8 +69,8 @@
         end
     end
 
-    function extract_sample_names(files, split_char, split_index)
-        [split(basename(f), split_char)[split_index] for f in files]
+    function extract_sample_names(files)
+        [replace(basename(f), r"_R[12]_trimmed\.fastq\.gz$" => "") for f in files]
     end
 
     # Workspace
@@ -90,7 +88,7 @@
         dirs
     end
 
-    # R function loader
+    ## R function loader
     # Source the R helper functions into the current R session. Called by each
     # stage after its mtime skip check, so R is not loaded for skipped stages.
     # When `ctx` is provided, emits the single-sample warning (once per run).
@@ -106,7 +104,7 @@
         R"source($functions_r)"
     end
 
-    # Pipeline context
+    ## Pipeline context
     # Shared pure-Julia setup called at the start of every stage: loads and
     # validates config, discovers files, handles the single-sample fallback, and
     # computes all path variables. Returns a NamedTuple so stage functions can
@@ -136,7 +134,7 @@
         validate_sample_files(fwd_files, rev_files, mode)
 
         primary_files = isempty(fwd_files) ? rev_files : fwd_files
-        sample_names  = extract_sample_names(primary_files, "_", 1)
+        sample_names  = extract_sample_names(primary_files)
 
         # Single-sample fallback: dada() returns a bare object (not a list) for a
         # single input file, breaking makeSequenceTable() and sapply() downstream.
@@ -168,8 +166,11 @@
             "chimera" => joinpath(dirs["Checkpoints"], "ckpt_chimera.RData"),
         )
 
+        # Run label for logging: last path component before /dada2
+        run_label = basename(dirname(root))
+
         (; cfg, verbose, mode, dirs, sample_names, single_sample,
         fwd_files, rev_files, fwd_out, rev_out,
-        in_fwd, out_fwd, in_rev_arg, out_rev_arg, ckpts)
+        in_fwd, out_fwd, in_rev_arg, out_rev_arg, ckpts, run_label)
     end
 

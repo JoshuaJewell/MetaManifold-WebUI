@@ -1,10 +1,7 @@
 # © 2026 Joshua Benjamin Jewell. All rights reserved.
 # Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-# Web UI: Denoising page
-# Stages: learn_errors, denoise, filter_length
-
-    # Error model
+## Error Model
     """
         learn_errors(config_path; progress)
 
@@ -17,8 +14,10 @@
     Saves: `Checkpoints/ckpt_errors.RData`
     """
     function learn_errors(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
-        emit    = _emitter(progress)
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
+        lbl     = ctx.run_label
+        emit    = _emitter(progress, lbl)
+        @info "[$(lbl)] DADA2: Learn errors starting"
 
         errors_ckpt = ctx.ckpts["errors"]
         filter_ckpt = ctx.ckpts["filter"]
@@ -26,7 +25,7 @@
         if isfile(errors_ckpt) && isfile(filter_ckpt) &&
            !_section_stale(config_path, stage_sections(:dada2_learn_errors), hash_file) &&
            mtime(errors_ckpt) > mtime(filter_ckpt)
-            @info "DADA2: skipping learn_errors - checkpoint up to date"
+            @info "[$(lbl)] DADA2: Skipping learn errors - checkpoint up to date"
             return nothing
         end
 
@@ -69,7 +68,7 @@
         nothing
     end
 
-    # Denoise
+    ## Denoise
     """
         denoise(config_path; progress)
 
@@ -84,8 +83,10 @@
     Saves: `Checkpoints/ckpt_denoise.RData` (unfiltered seq_table)
     """
     function denoise(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
-        emit    = _emitter(progress)
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
+        lbl     = ctx.run_label
+        emit    = _emitter(progress, lbl)
+        @info "[$(lbl)] DADA2: Denoise starting"
         verbose = ctx.verbose
         fwd_out = ctx.fwd_out
         rev_out = ctx.rev_out
@@ -99,7 +100,7 @@
         if isfile(denoise_ckpt) &&
            !_section_stale(config_path, stage_sections(:dada2_denoise), hash_file) &&
            mtime(denoise_ckpt) > mtime(errors_ckpt)
-            @info "DADA2: skipping denoise - checkpoint up to date"
+            @info "[$(lbl)] DADA2: Skipping denoise - checkpoint up to date"
             return nothing
         end
 
@@ -166,7 +167,7 @@
         nothing
     end
 
-    # Length filter
+    ## Length Filter
     """
         filter_length(config_path; progress)
 
@@ -181,8 +182,10 @@
     Saves: `Checkpoints/ckpt_length.RData`
     """
     function filter_length(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
-        emit = _emitter(progress)
         ctx  = _pipeline_context(config_path; input_dir, workspace_root)
+        lbl  = ctx.run_label
+        emit = _emitter(progress, lbl)
+        @info "[$(lbl)] DADA2: Filter length starting"
 
         isfile(ctx.ckpts["denoise"]) ||
             error("Denoise checkpoint not found. Run denoise() first.")
@@ -193,7 +196,7 @@
         if isfile(length_ckpt) &&
            !_section_stale(config_path, stage_sections(:dada2_filter_length), hash_file) &&
            mtime(length_ckpt) > mtime(denoise_ckpt)
-            @info "DADA2: skipping filter_length - checkpoint up to date"
+            @info "[$(lbl)] DADA2: Skipping filter length - checkpoint up to date"
             return nothing
         end
 

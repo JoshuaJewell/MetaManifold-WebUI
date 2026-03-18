@@ -4,7 +4,7 @@
 # Web UI: QC page
 # Stages: prefilter_qc, filter_trim
 
-    # Pre-filter quality assessment
+    ## Pre-filter quality assessment
     """
         prefilter_qc(config_path; progress)
 
@@ -14,14 +14,18 @@
     values in config before running `filter_trim()`.
     """
     function prefilter_qc(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
-        emit = _emitter(progress)
         ctx  = _pipeline_context(config_path; input_dir, workspace_root)
+        lbl  = ctx.run_label
+        emit = _emitter(progress, lbl)
+        @info "[$(lbl)] DADA2: Prefilter QC starting"
 
         unfiltered_pdf = joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf")
-        if isfile(unfiltered_pdf)
+        hash_file      = joinpath(ctx.dirs["Checkpoints"], "prefilter_qc.hash")
+        if isfile(unfiltered_pdf) &&
+           !_section_stale(config_path, "dada2.file_patterns", hash_file)
             all_inputs = vcat(ctx.fwd_files, ctx.rev_files)
             if isempty(all_inputs) || all(mtime(unfiltered_pdf) > mtime(f) for f in all_inputs)
-                @info "DADA2: skipping prefilter_qc - quality_unfiltered.pdf up to date"
+                @info "[$(lbl)] DADA2: Skipping prefilter QC - quality_unfiltered.pdf up to date"
                 return nothing
             end
         end
@@ -33,20 +37,21 @@
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
         try
             emit("Plotting unfiltered quality profiles")
-            fwd_for_plot   = isempty(ctx.fwd_files) ? nothing : ctx.fwd_files
-            rev_for_plot   = isempty(ctx.rev_files) ? nothing : ctx.rev_files
+            fwd_for_plot   = isempty(ctx.fwd_files) ? nothing : ctx.single_sample ? ctx.fwd_files[1:1] : ctx.fwd_files
+            rev_for_plot   = isempty(ctx.rev_files) ? nothing : ctx.single_sample ? ctx.rev_files[1:1] : ctx.rev_files
             unfiltered_pdf = joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf")
             R"plot_quality_profiles($fwd_for_plot, $rev_for_plot, $unfiltered_pdf)"
 
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
+        _write_section_hash(config_path, "dada2.file_patterns", hash_file)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf"))")
         emit("Log: $log_path")
         nothing
     end
 
-    # Filter and trim
+    ## Filter and trim
     """
         filter_trim(config_path; progress)
 
@@ -59,15 +64,17 @@
     Saves: `Checkpoints/ckpt_filter.RData`
     """
     function filter_trim(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
-        emit    = _emitter(progress)
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
+        lbl     = ctx.run_label
+        emit    = _emitter(progress, lbl)
+        @info "[$(lbl)] DADA2: Filter and trim starting"
 
         filter_ckpt = ctx.ckpts["filter"]
         hash_file   = joinpath(ctx.dirs["Checkpoints"], "filter_trim.hash")
         if isfile(filter_ckpt) && !_section_stale(config_path, stage_sections(:dada2_filter_trim), hash_file)
             all_inputs = vcat(ctx.fwd_files, ctx.rev_files)
             if isempty(all_inputs) || all(mtime(filter_ckpt) > mtime(f) for f in all_inputs)
-                @info "DADA2: skipping filter_trim - checkpoint up to date"
+                @info "[$(lbl)] DADA2: Skipping filter and trim - checkpoint up to date"
                 return nothing
             end
         end
@@ -121,8 +128,8 @@
             end
 
             emit("Plotting filtered quality profiles")
-            fwd_filt = isempty(fwd_out) ? nothing : fwd_out
-            rev_filt = isempty(rev_out) ? nothing : rev_out
+            fwd_filt = isempty(fwd_out) ? nothing : ctx.single_sample ? fwd_out[1:1] : fwd_out
+            rev_filt = isempty(rev_out) ? nothing : ctx.single_sample ? rev_out[1:1] : rev_out
             filtered_pdf = joinpath(ctx.dirs["Figures"], "quality_filtered.pdf")
             R"plot_quality_profiles($fwd_filt, $rev_filt, $filtered_pdf)"
 

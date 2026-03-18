@@ -281,3 +281,8 @@ hide.*
 projects/
 pipelinesteps.txt
 archive/
+.*
+
+### Exceptions
+!.github
+!.github/**

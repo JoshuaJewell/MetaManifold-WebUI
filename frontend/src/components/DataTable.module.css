@@ -1,0 +1,307 @@
+.wrapper { display: flex; flex-direction: column; gap: 8px; }
+
+.toolbar {
+  display:     flex;
+  align-items: center;
+  gap:         12px;
+}
+
+.search {
+  padding:       5px 10px;
+  border:        1px solid var(--color-border);
+  border-radius: 6px;
+  font-size:     .875rem;
+  background:    var(--color-bg);
+  flex:          1;
+  max-width:     280px;
+}
+
+.count { font-size: .8rem; color: var(--color-muted-fg); margin-left: auto; }
+
+.scroll {
+  overflow-x: auto;
+  border:     1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.table {
+  width:           100%;
+  border-collapse: collapse;
+  font-size:       .85rem;
+}
+
+/* ── Header cells ────────────────────────────────────────────────────────── */
+
+.table th {
+  position:      sticky;
+  top:           0;
+  background:    var(--color-surface);
+  padding:       8px 12px;
+  text-align:    left;
+  font-weight:   600;
+  border-bottom: 1px solid var(--color-border);
+  white-space:   nowrap;
+}
+
+.sortable {
+  cursor:     pointer;
+  user-select: none;
+  position:   relative;   /* anchor for dropdown */
+}
+.sortable:hover { background: var(--color-bg); }
+
+.headerLabel { margin-right: 4px; }
+
+.sortIcon       { font-size: .7rem; color: var(--color-muted-fg); opacity: .4; }
+.sortIconActive { font-size: .7rem; color: var(--color-primary); }
+
+.dropdownBtn {
+  padding:       1px 4px;
+  border:        1px solid var(--color-border);
+  border-radius: 3px;
+  background:    var(--color-bg);
+  cursor:        pointer;
+  font-size:     .7rem;
+  color:         var(--color-muted-fg);
+  line-height:   1;
+  vertical-align: middle;
+}
+.dropdownBtn:hover        { background: var(--color-surface); color: var(--color-fg); }
+.dropdownBtnActive        { color: var(--color-primary); font-weight: 700; border-color: var(--color-primary); }
+
+/* ── Dropdown popover ────────────────────────────────────────────────────── */
+
+.dropdown {
+  position:       absolute;
+  top:            100%;
+  left:           0;
+  z-index:        100;
+  min-width:      200px;
+  max-width:      300px;
+  background:     var(--color-bg);
+  border:         1px solid var(--color-border);
+  border-radius:  6px;
+  box-shadow:     0 4px 16px rgba(0,0,0,.15);
+  display:        flex;
+  flex-direction: column;
+  font-weight:    normal;
+  cursor:         default;
+}
+
+.dropdownSearch {
+  margin:        6px 8px 4px;
+  padding:       4px 8px;
+  border:        1px solid var(--color-border);
+  border-radius: 4px;
+  font-size:     .8rem;
+  background:    var(--color-bg);
+  font-family:   inherit;
+}
+
+.dropdownActions {
+  display:     flex;
+  gap:         6px;
+  padding:     2px 8px 4px;
+  font-size:   .72rem;
+  align-items: center;
+}
+.dropdownActions button {
+  padding:       1px 6px;
+  border:        1px solid var(--color-border);
+  border-radius: 3px;
+  background:    var(--color-bg);
+  cursor:        pointer;
+  font-size:     .72rem;
+}
+.dropdownActions button:hover { background: var(--color-surface); }
+.dropdownCount { color: var(--color-muted-fg); margin-left: auto; }
+
+.dropdownList {
+  max-height:    240px;
+  overflow-y:    auto;
+  border-top:    1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dropdownItem {
+  display:        flex;
+  align-items:    center;
+  gap:            6px;
+  padding:        3px 8px;
+  font-size:      .8rem;
+  cursor:         pointer;
+  white-space:    nowrap;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+}
+.dropdownItem:hover { background: var(--color-surface); }
+.dropdownItem input { margin: 0; flex-shrink: 0; }
+.dropdownItem span  { overflow: hidden; text-overflow: ellipsis; }
+
+.popupOnlyTag    { font-size: .68rem; color: var(--color-primary); font-weight: 600; }
+.dropdownError   { padding: 8px; color: #b91c1c; font-size: .8rem; }
+.dropdownLoading { padding: 8px; color: var(--color-muted-fg); font-size: .8rem; }
+.dropdownEmpty   { padding: 8px; color: var(--color-muted-fg); font-size: .8rem; }
+
+.dropdownFooter {
+  display: flex;
+  gap:     6px;
+  padding: 6px 8px;
+}
+
+/* ── Numeric filter ──────────────────────────────────────────────────────── */
+
+.numericInfo {
+  padding:    6px 8px 2px;
+  font-size:  .75rem;
+  color:      var(--color-muted-fg);
+}
+
+.numericInputs {
+  display:        flex;
+  flex-direction: column;
+  gap:            6px;
+  padding:        4px 8px 6px;
+}
+.numericInputs label {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+  font-size:   .8rem;
+}
+.numericInputs label span {
+  width:      30px;
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size:  .78rem;
+}
+
+.numericInput {
+  flex:          1;
+  padding:       4px 8px;
+  border:        1px solid var(--color-border);
+  border-radius: 4px;
+  font-size:     .8rem;
+  background:    var(--color-bg);
+  font-family:   inherit;
+}
+
+/* ── Table body ──────────────────────────────────────────────────────────── */
+
+.table td {
+  padding:        6px 12px;
+  border-bottom:  1px solid var(--color-border-light);
+  max-width:      240px;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+  white-space:    nowrap;
+  cursor:         pointer;
+  transition:     background .15s;
+}
+.table td.copied {
+  animation: copyFlash .35s ease-out;
+}
+@keyframes copyFlash {
+  0%   { background: var(--color-primary); color: #fff; }
+  100% { background: transparent; color: inherit; }
+}
+
+.table tr:last-child td { border-bottom: none; }
+.table tr:hover td { background: var(--color-surface); }
+
+.pager {
+  display:         flex;
+  align-items:     center;
+  gap:             12px;
+  justify-content: center;
+  font-size:       .875rem;
+}
+.pager button {
+  padding:       4px 12px;
+  border:        1px solid var(--color-border);
+  border-radius: 5px;
+  background:    var(--color-bg);
+  cursor:        pointer;
+}
+.pager button:hover:not(:disabled) { background: var(--color-surface); }
+.pager button:disabled { opacity: .4; cursor: default; }
+
+/* ── BLAST link ─────────────────────────────────────────────────────────── */
+
+.blastCell { text-align: center; cursor: default; }
+.blastLink {
+  font-size:       .72rem;
+  font-weight:     600;
+  padding:         2px 6px;
+  border:          1px solid var(--color-primary);
+  border-radius:   4px;
+  color:           var(--color-primary);
+  text-decoration: none;
+  white-space:     nowrap;
+}
+.blastLink:hover { background: var(--color-primary); color: #fff; }
+
+/* Row popup (OTU to ASV members) */
+
+.popupActiveRow td { background: var(--color-surface) !important; }
+
+.popup {
+  position:       fixed;
+  z-index:        200;
+  max-width:      80vw;
+  max-height:     320px;
+  background:     var(--color-bg);
+  border:         1px solid var(--color-border);
+  border-radius:  6px;
+  box-shadow:     0 6px 24px rgba(0,0,0,.2);
+  display:        flex;
+  flex-direction: column;
+  font-size:      .8rem;
+}
+
+.popupTitle {
+  padding:       6px 10px;
+  font-weight:   600;
+  font-size:     .78rem;
+  border-bottom: 1px solid var(--color-border);
+  color:         var(--color-muted-fg);
+}
+
+.popupScroll {
+  overflow:   auto;
+  max-height: 260px;
+}
+
+.popupTable {
+  width:           100%;
+  border-collapse: collapse;
+}
+.popupTable th {
+  position:      sticky;
+  top:           0;
+  background:    var(--color-surface);
+  padding:       4px 8px;
+  text-align:    left;
+  font-weight:   600;
+  font-size:     .75rem;
+  white-space:   nowrap;
+  border-bottom: 1px solid var(--color-border);
+}
+.popupTable td {
+  padding:       3px 8px;
+  border-bottom: 1px solid var(--color-border-light);
+  white-space:   nowrap;
+  max-width:     180px;
+  overflow:      hidden;
+  text-overflow: ellipsis;
+  cursor:        pointer;
+  transition:    background .15s;
+}
+.popupTable td.copied {
+  animation: copyFlash .35s ease-out;
+}
+.popupTable tr:last-child td { border-bottom: none; }
+.popupTable tr:hover td { background: var(--color-surface); }
+
+.msg   { color: var(--color-muted-fg); font-size: .9rem; }
+.error { color: #b91c1c; font-size: .9rem; }

@@ -31,8 +31,7 @@ export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
     end
     log_written(project::ProjectCtx, path::String) = log_written(project.dir, path)
 
-    # Tool-level log/stats/hash files to embed, relative to the project dir.
-    # Each entry is (stage_label, relative_path).  Only existing files are included.
+    # (stage_label, relative_path) pairs - only existing files are included
     const _TOOL_LOG_FILES = [
         ("QC",       "QC/logs/fastqc.log"),
         ("QC",       "QC/logs/multiqc.log"),
@@ -80,7 +79,6 @@ export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
         pipeline_log(project, "--- End of tool logs ---")
     end
 
-    # Append a single tool file into the pipeline.log with a header/footer.
     function _append_tool_file(dir::String, relpath_::String, abspath_::String)
         contents = read(abspath_, String)
         open(joinpath(dir, "pipeline.log"), "a") do io
@@ -103,7 +101,6 @@ export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
     """
     function write_combined_log(projects::Vector{ProjectCtx};
                                 study_dir::String = projects[1].study_dir)
-        # Finalise each run's pipeline.log with tool-level contents.
         for project in projects
             finalise_log(project)
         end
@@ -119,14 +116,12 @@ export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
             println(io, "  Runs:  ", length(projects))
             println(io, sep)
 
-            # Per-run sections
             for project in projects
                 run_name = relpath(project.dir, study_dir)
                 println(io, "\n", sep)
                 println(io, "  RUN: ", run_name)
                 println(io, sep)
 
-                # run_config.yml
                 config_path = joinpath(project.dir, "run_config.yml")
                 if isfile(config_path)
                     println(io, "\n--- run_config.yml ---")
@@ -134,7 +129,6 @@ export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
                     println(io)
                 end
 
-                # pipeline.log (now includes tool logs)
                 log_path = joinpath(project.dir, "pipeline.log")
                 if isfile(log_path)
                     println(io, "--- pipeline.log ---")
@@ -142,7 +136,7 @@ export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
                 end
             end
 
-            # Group-level logs (directories between runs and study root)
+            # Directories between run dirs and study root
             group_dirs = Set{String}()
             for project in projects
                 gdir = dirname(project.dir)
@@ -163,7 +157,6 @@ export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
                 print(io, read(log_path, String))
             end
 
-            # Study-level log
             study_log = joinpath(study_dir, "pipeline.log")
             if isfile(study_log)
                 println(io, "\n", sep)

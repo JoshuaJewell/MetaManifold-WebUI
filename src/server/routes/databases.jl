@@ -37,5 +37,5 @@ end
     job = submit_job!("db_download"; study=nothing) do
         ensure_databases(db_cfg)
     end
-    json(job)
+    json(_job_to_namedtuple(job))
 end

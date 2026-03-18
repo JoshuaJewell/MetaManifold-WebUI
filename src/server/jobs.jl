@@ -29,6 +29,9 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
     const _jobs      = Dict{String, Job}()
     const _jobs_lock = ReentrantLock()
 
+    # Keep at most this many finished jobs (prevents unbounded growth).
+    const _MAX_FINISHED_JOBS = 50
+
     # SSE subscriber channels: each connected client gets a Channel{String}
     const _subscribers      = Vector{Channel{String}}()
     const _subscribers_lock = ReentrantLock()
@@ -37,15 +40,31 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
         "job_" * replace(string(uuid4())[1:8], "-" => "")
     end
 
-    function submit_job!(type::String, f::Function;
+    # Remove oldest finished jobs when the store exceeds the cap.
+    # Must be called inside a lock(_jobs_lock) block.
+    function _prune_finished!()
+        finished = filter(p -> p.second.status in (complete, failed, cancelled),
+                          collect(_jobs))
+        length(finished) <= _MAX_FINISHED_JOBS && return
+        sort!(finished; by = p -> something(p.second.finished_at, p.second.created_at))
+        n_remove = length(finished) - _MAX_FINISHED_JOBS
+        for i in 1:n_remove
+            id, job = finished[i]
+            job.task = nothing  # release Task closure (large captured data)
+            delete!(_jobs, id)
+        end
+    end
+
+    function submit_job!(f::Function, type::String;
                         study=nothing, run=nothing, stage=nothing)
         id  = _new_id()
         job = Job(id, type, study, run, stage,
                 queued, now(UTC), nothing, nothing, nothing)
         lock(_jobs_lock) do
             _jobs[id] = job
+            _prune_finished!()
         end
-        job.task = @async begin
+        job.task = Threads.@spawn begin
             lock(_jobs_lock) do
                 job.status = running
             end
@@ -63,6 +82,11 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
                     job.message     = sprint(showerror, e)
                 end
             end
+            # Release the Task's closure so captured data (DataFrames, dbs, etc.)
+            # can be garbage-collected.  The Job struct keeps metadata but not the
+            # heavyweight execution context.
+            job.task = nothing
+            GC.gc(false)  # hint to the GC - non-full collection
             _emit_job_update(job)
             if !isnothing(stage) && !isnothing(study)
                 _emit_stage_update(job)
@@ -120,8 +144,17 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
     function broadcast_event!(event::String, data::String)
         msg = "event: $event\ndata: $data\n\n"
         lock(_subscribers_lock) do
-            for ch in _subscribers
-                isopen(ch) && put!(ch, msg)
+            # Prune closed/stale channels while broadcasting
+            filter!(_subscribers) do ch
+                if !isopen(ch)
+                    return false
+                end
+                try
+                    put!(ch, msg)
+                catch
+                    return false  # channel was closed between check and put
+                end
+                true
             end
         end
     end

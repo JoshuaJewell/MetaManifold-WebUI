@@ -1,10 +1,8 @@
 # © 2026 Joshua Benjamin Jewell. All rights reserved.
 # Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-# Web UI: Denoising page
-# Stages: chimera_removal
+## Chimera Removal
 
-    # Chimera removal
     """
         chimera_removal(config_path; progress)
 
@@ -12,15 +10,17 @@
     row if present, and write core output files (seq table, FASTA, pipeline
     stats).
 
-    Review `Tables/pipeline_stats.csv` for unexpected read loss at any stage
-    before committing to the (potentially long) `assign_taxonomy()` step.
+    Review `Tables/pipeline_stats.csv` for unexpected read loss before
+    committing to the (potentially long) `assign_taxonomy()` step.
 
     Requires: `Checkpoints/ckpt_filter.RData`, `Checkpoints/ckpt_length.RData`
     Saves: `Checkpoints/ckpt_chimera.RData`
     """
     function chimera_removal(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing)
-        emit    = _emitter(progress)
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
+        lbl     = ctx.run_label
+        emit    = _emitter(progress, lbl)
+        @info "[$(lbl)] DADA2: Chimera removal starting"
         verbose = ctx.verbose
         mode    = ctx.mode
 
@@ -37,7 +37,7 @@
            !_section_stale(config_path, stage_sections(:dada2_chimera_removal), hash_file) &&
            mtime(chimera_ckpt) > mtime(filter_ckpt) &&
            mtime(chimera_ckpt) > mtime(length_ckpt)
-            @info "DADA2: skipping chimera_removal - checkpoint up to date"
+            @info "[$(lbl)] DADA2: Skipping chimera removal - checkpoint up to date"
             return nothing
         end
 
@@ -66,10 +66,10 @@
                 """
             else
                 R"seq_table_nochim <- seq_table"
-                @info "DADA2: chimera removal skipped - seq_table is empty"
+                @info "[$(lbl)] DADA2: Chimera removal skipped - seq_table is empty"
             end
 
-            # Drop duplicate sample row (single-sample fallback)
+            # Single-sample mode produces a duplicate row - collapse it
             final_names = ctx.sample_names
             if ctx.single_sample
                 R"filter_stats     <- filter_stats[1, , drop=FALSE]"

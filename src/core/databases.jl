@@ -39,7 +39,7 @@ export ensure_databases, resolve_db, make_db_meta
             example_path = joinpath(dirname(config_path), "databases.example.yml")
             if isfile(example_path)
                 cp(example_path, config_path)
-                @warn "ensure_databases: $config_path not found — copied from $example_path. " *
+                @warn "ensure_databases: $config_path not found - copied from $example_path. " *
                     "Set local: paths for any pre-downloaded databases."
             else
                 @warn "ensure_databases: $config_path not found. " *
@@ -107,7 +107,8 @@ export ensure_databases, resolve_db, make_db_meta
 
     # Fixed column names that are never sample counts, regardless of database.
     const _FIXED_NONCOUNTS = Set([
-        "SeqName", "Pident", "Accession", "rRNA", "Organellum", "specimen",
+        "SeqName", "ASV", "ASVs", "OTU",
+        "Pident", "Accession", "rRNA", "Organellum", "specimen",
         "Sequence", "sequence", "", "Column1",
     ])
 

@@ -33,10 +33,16 @@ function _flatten(d::Dict, prefix::String="")
     out
 end
 
+function _default_cfg(root::String)
+    factory = _flatten(_load_yml(joinpath(root, "config", "defaults", "pipeline.yml")))
+    global_ = _flatten(_load_yml(joinpath(root, "config", "pipeline.yml")))
+    merge(factory, global_)  # global overrides factory; factory provides all keys
+end
+
 function _resolve_config(study::String, run::Union{String,Nothing}=nothing,
                          group::Union{String,Nothing}=nothing)
     root        = dirname(ServerState.data_dir())
-    default_cfg = _flatten(_load_yml(joinpath(root, "config", "defaults", "pipeline.yml")))
+    default_cfg = _default_cfg(root)
     study_cfg   = _flatten(_load_yml(joinpath(ServerState.data_dir(), study, "pipeline.yml")))
     group_cfg   = isnothing(group) ? Dict{String,Any}() :
                   _flatten(_load_yml(joinpath(ServerState.data_dir(), study, group, "pipeline.yml")))
@@ -90,6 +96,48 @@ end
 
 ## Routes
 
+# Default (global) config endpoints
+@get "/api/v1/config" function(req)
+    root = dirname(ServerState.data_dir())
+    json(Dict(k => (; value=v, source="default") for (k, v) in _default_cfg(root)))
+end
+
+@patch "/api/v1/config" function(req)
+    root      = dirname(ServerState.data_dir())
+    user_path = joinpath(root, "config", "pipeline.yml")
+    body = JSON3.read(req.body)
+    for (k, v) in body
+        _write_override(user_path, string(k), v)
+    end
+    json(Dict(k => (; value=v, source="default") for (k, v) in _default_cfg(root)))
+end
+
+@delete "/api/v1/config/{key}" function(req, key::String)
+    root      = dirname(ServerState.data_dir())
+    user_path = joinpath(root, "config", "pipeline.yml")
+    _delete_override(user_path, key)
+    json(Dict(k => (; value=v, source="default") for (k, v) in _default_cfg(root)))
+end
+
+# List available primer pair names from config/primers.yml
+@get "/api/v1/primers" function(req)
+    primers_path = joinpath(dirname(ServerState.data_dir()), "config", "primers.yml")
+    isfile(primers_path) || return json([])
+    cfg = YAML.load_file(primers_path)
+    cfg isa Dict || return json([])
+    pairs = get(cfg, "Pairs", [])
+    pairs isa Vector || return json([])
+    # Each pair is a single-key Dict like Dict("EMP" => ["EMP515F", "EMP806R"])
+    names = String[]
+    for p in pairs
+        p isa Dict || continue
+        for k in keys(p)
+            push!(names, string(k))
+        end
+    end
+    json(names)
+end
+
 @get "/api/v1/studies/{study}/config" function(req, study::String)
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
@@ -115,25 +163,122 @@ end
     json(_resolve_config(study))
 end
 
+## Override indicators - which downstream entities override a given level's keys
+
+# Returns { "dotted.key": ["group1", "run1", ...] } for each study-level key
+# that has a group or run override.
+@get "/api/v1/studies/{study}/config/overrides" function(req, study::String)
+    study in _study_names() || return json_error(404, "study_not_found",
+                                                     "Study '$study' not found")
+    overrides = Dict{String,Vector{String}}()
+    # Check group-level pipeline.yml files
+    for group in _group_names(study)
+        group_cfg = _flatten(_load_yml(joinpath(ServerState.data_dir(), study, group, "pipeline.yml")))
+        for k in keys(group_cfg)
+            push!(get!(overrides, k, String[]), group)
+        end
+        # Check runs within this group
+        for run in _group_run_names(study, group)
+            run_cfg = _flatten(_load_yml(joinpath(ServerState.data_dir(), study, group, run, "pipeline.yml")))
+            for k in keys(run_cfg)
+                push!(get!(overrides, k, String[]), "$group/$run")
+            end
+        end
+    end
+    # Check direct (ungrouped) runs
+    for run in _run_names(study)
+        run_cfg = _flatten(_load_yml(joinpath(ServerState.data_dir(), study, run, "pipeline.yml")))
+        for k in keys(run_cfg)
+            push!(get!(overrides, k, String[]), run)
+        end
+    end
+    json(overrides)
+end
+
+# Returns { "dotted.key": ["run1", ...] } for each group-level key
+# that has a run override.
+@get "/api/v1/studies/{study}/groups/{group}/config/overrides" function(req, study::String, group::String)
+    study in _study_names() || return json_error(404, "study_not_found",
+                                                     "Study '$study' not found")
+    group in _group_names(study) || return json_error(404, "group_not_found",
+                                                          "Group '$group' not found")
+    overrides = Dict{String,Vector{String}}()
+    for run in _group_run_names(study, group)
+        run_cfg = _flatten(_load_yml(joinpath(ServerState.data_dir(), study, group, run, "pipeline.yml")))
+        for k in keys(run_cfg)
+            push!(get!(overrides, k, String[]), run)
+        end
+    end
+    json(overrides)
+end
+
+## Group config endpoints
+
+@get "/api/v1/studies/{study}/groups/{group}/config" function(req, study::String, group::String)
+    study in _study_names() || return json_error(404, "study_not_found",
+                                                     "Study '$study' not found")
+    group in _group_names(study) || return json_error(404, "group_not_found",
+                                                          "Group '$group' not found")
+    json(_resolve_config(study, nothing, group))
+end
+
+@patch "/api/v1/studies/{study}/groups/{group}/config" function(req, study::String, group::String)
+    study in _study_names() || return json_error(404, "study_not_found",
+                                                     "Study '$study' not found")
+    group in _group_names(study) || return json_error(404, "group_not_found",
+                                                          "Group '$group' not found")
+    body = JSON3.read(req.body)
+    path = joinpath(ServerState.data_dir(), study, group, "pipeline.yml")
+    for (k, v) in body
+        _write_override(path, string(k), v)
+    end
+    json(_resolve_config(study, nothing, group))
+end
+
+@delete "/api/v1/studies/{study}/groups/{group}/config/{key}" function(req, study::String,
+                                                                            group::String,
+                                                                            key::String)
+    study in _study_names() || return json_error(404, "study_not_found",
+                                                     "Study '$study' not found")
+    group in _group_names(study) || return json_error(404, "group_not_found",
+                                                          "Group '$group' not found")
+    path = joinpath(ServerState.data_dir(), study, group, "pipeline.yml")
+    _delete_override(path, key)
+    json(_resolve_config(study, nothing, group))
+end
+
+## Run config endpoints
+# Helper: find all valid run names including those inside groups
+function _all_run_names(study::String)
+    runs = copy(_run_names(study))
+    for group in _group_names(study)
+        append!(runs, _group_run_names(study, group))
+    end
+    runs
+end
+
 @get "/api/v1/studies/{study}/runs/{run}/config" function(req, study::String, run::String)
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
-    run in _run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
-    json(_resolve_config(study, run))
+    run in _all_run_names(study) || return json_error(404, "run_not_found",
+                                                          "Run '$run' not found")
+    group = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
+    json(_resolve_config(study, run, group))
 end
 
 @patch "/api/v1/studies/{study}/runs/{run}/config" function(req, study::String, run::String)
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
-    run in _run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    run in _all_run_names(study) || return json_error(404, "run_not_found",
+                                                          "Run '$run' not found")
+    group = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
+    run_path = isnothing(group) ? run : joinpath(group, run)
     body = JSON3.read(req.body)
-    path = joinpath(ServerState.data_dir(), study, run, "pipeline.yml")
+    path = joinpath(ServerState.data_dir(), study, run_path, "pipeline.yml")
     for (k, v) in body
         _write_override(path, string(k), v)
     end
-    json(_resolve_config(study, run))
+    json(_resolve_config(study, run, group))
 end
 
 @delete "/api/v1/studies/{study}/runs/{run}/config/{key}" function(req, study::String,
@@ -141,9 +286,11 @@ end
                                                                         key::String)
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
-    run in _run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
-    path = joinpath(ServerState.data_dir(), study, run, "pipeline.yml")
+    run in _all_run_names(study) || return json_error(404, "run_not_found",
+                                                          "Run '$run' not found")
+    group = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
+    run_path = isnothing(group) ? run : joinpath(group, run)
+    path = joinpath(ServerState.data_dir(), study, run_path, "pipeline.yml")
     _delete_override(path, key)
-    json(_resolve_config(study, run))
+    json(_resolve_config(study, run, group))
 end

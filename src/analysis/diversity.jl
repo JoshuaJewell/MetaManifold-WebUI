@@ -1,14 +1,7 @@
 module DiversityMetrics
 
-# Pure-Julia alpha and beta diversity metrics.
-#
-# No external dependencies beyond the Julia stdlib.  NMDS ordination
-# is delegated to R/vegan in the Analysis module - this module only
-# provides the distance matrix that feeds it.
-#
 # © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 export richness, shannon, simpson
 

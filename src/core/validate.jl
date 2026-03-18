@@ -1,11 +1,5 @@
 module Validation
 
-# Pre-flight validation for the MetabarcodingPipeline.
-#
-# validate_environment() collects all detectable errors upfront and reports
-# them together rather than crashing mid-run. Call it from main.jl before
-# the project @threads loop.
-#
 # © 2026 Joshua Benjamin Jewell. All rights reserved.
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
@@ -16,8 +10,6 @@ export validate_environment, validate_project
     using ..PipelineTypes
     using ..Config
 
-    ## Helpers
-
     struct ValidationError
         context::String
         message::String
@@ -27,10 +19,9 @@ export validate_environment, validate_project
         push!(errors, ValidationError(ctx, msg))
     end
 
-    # Return true if `val` is a real number (not missing/nothing/NaN).
     _is_number(val) = val isa Number && !isnan(Float64(val))
 
-    # Resolve IUPAC ambiguity codes to a regex character class for primer checking.
+    # IUPAC ambiguity codes -> regex character classes
     const _IUPAC = Dict(
         'M' => "[AC]", 'R' => "[AG]", 'W' => "[AT]", 'S' => "[CG]",
         'Y' => "[CT]", 'K' => "[GT]", 'V' => "[ACG]", 'H' => "[ACT]",
@@ -44,7 +35,7 @@ export validate_environment, validate_project
         Regex(String(take!(buf)))
     end
 
-    ## Tools validation
+    ## Tools Validation
 
     function _validate_tools(errors::Vector{ValidationError}, tools_config_path::String)
         ctx = "tools"
@@ -73,7 +64,7 @@ export validate_environment, validate_project
         end
     end
 
-    ## Database validation
+    ## Database Validation
 
     function _validate_databases(errors::Vector{ValidationError}, databases_config_path::String)
         ctx = "databases"
@@ -105,7 +96,7 @@ export validate_environment, validate_project
         end
     end
 
-    ## Primers validation
+    ## Primers Validation
 
     function _validate_primers(errors::Vector{ValidationError}, primers_path::String)
         ctx = "primers ($primers_path)"
@@ -125,7 +116,6 @@ export validate_environment, validate_project
         fwd isa Dict || _err(errors, ctx, "'Forward' must be a mapping of name -> sequence")
         rev isa Dict || _err(errors, ctx, "'Reverse' must be a mapping of name -> sequence")
 
-        # Validate sequences contain only valid IUPAC bases.
         valid_bases = Set("ACGTMRWSYKVHDBNacgtmrwsykvhdbn")
         for (name, seq) in merge(fwd isa Dict ? fwd : Dict(), rev isa Dict ? rev : Dict())
             seq isa String || begin
@@ -136,7 +126,6 @@ export validate_environment, validate_project
                 _err(errors, ctx, "primer '$name' contains invalid bases: $(join(unique(bad)))")
         end
 
-        # Validate each pair references defined primers.
         pairs isa Vector || return
         for entry in pairs
             entry isa Dict || continue
@@ -154,10 +143,9 @@ export validate_environment, validate_project
         end
     end
 
-    ## Pipeline config validation
+    ## Pipeline Config Validation
 
     function _validate_pipeline_cfg(errors::Vector{ValidationError}, cfg::Dict, ctx::String)
-        # cutadapt
         ca = get(cfg, "cutadapt", Dict())
         if ca isa Dict
             pp = get(ca, "primer_pairs", nothing)
@@ -168,7 +156,6 @@ export validate_environment, validate_project
                 _err(errors, ctx, "cutadapt.min_length must be a positive number (got: $ml)")
         end
 
-        # dada2 filter_trim
         da = get(cfg, "dada2", Dict())
         if da isa Dict
             ft = get(da, "filter_trim", Dict())
@@ -197,7 +184,6 @@ export validate_environment, validate_project
             end
         end
 
-        # vsearch
         vs = get(cfg, "vsearch", Dict())
         if vs isa Dict
             id = get(vs, "identity", nothing)
@@ -208,7 +194,6 @@ export validate_environment, validate_project
                 _err(errors, ctx, "vsearch.query_cov must be between 0 and 1 (got: $qc)")
         end
 
-        # cdhit
         cd = get(cfg, "cdhit", Dict())
         if cd isa Dict
             id = get(cd, "identity", nothing)
@@ -216,7 +201,6 @@ export validate_environment, validate_project
                 _err(errors, ctx, "cdhit.identity must be between 0 and 1 (got: $id)")
         end
 
-        # swarm
         sw = get(cfg, "swarm", Dict())
         if sw isa Dict
             d = get(sw, "differences", nothing)
@@ -228,7 +212,7 @@ export validate_environment, validate_project
         end
     end
 
-    ## Per-project validation
+    ## Per-project Validation
 
     """
         validate_project(project, databases_config_path) -> Vector{ValidationError}
@@ -240,24 +224,23 @@ export validate_environment, validate_project
         errors = ValidationError[]
         ctx    = basename(project.dir)
 
-        # Data directory has FASTQ files.
-        isdir(project.data_dir) ||
-            _err(errors, ctx, "data directory not found: $(project.data_dir)")
-        fastqs = filter(f -> endswith(f, ".fastq.gz"), readdir(project.data_dir))
+        for d in project.data_dirs
+            isdir(d) ||
+                _err(errors, ctx, "data directory not found: $d")
+        end
+        fastqs = find_fastqs(project)
         isempty(fastqs) &&
-            _err(errors, ctx, "no .fastq.gz files found in $(project.data_dir)")
+            _err(errors, ctx, "no .fastq.gz files found in $(join(project.data_dirs, ", "))")
 
-        # Primers config exists and is internally consistent.
         primers_path = joinpath(project.config_dir, "primers.yml")
         _validate_primers(errors, primers_path)
 
-        # Merged pipeline config is internally consistent.
         try
             config_path = write_run_config(project)
             cfg         = YAML.load_file(config_path)
             _validate_pipeline_cfg(errors, cfg, ctx)
 
-            # Primer pairs referenced in cutadapt config exist in primers.yml.
+            # Check cutadapt primer_pairs references exist in primers.yml
             ca = get(cfg, "cutadapt", Dict())
             pp = get(ca,  "primer_pairs", String[])
             if pp isa Vector && isfile(primers_path)
@@ -273,7 +256,6 @@ export validate_environment, validate_project
                 end
             end
 
-            # Referenced database is configured.
             da      = get(cfg, "dada2",    Dict())
             tx      = get(da,  "taxonomy", Dict())
             db_name = string(get(tx, "database", "pr2"))
@@ -288,7 +270,7 @@ export validate_environment, validate_project
         return errors
     end
 
-    ## Top-level entry point
+    ## Entry Point
 
     """
         validate_environment(projects, databases_config_path, tools_config_path)
@@ -320,4 +302,4 @@ export validate_environment, validate_project
         return length(all_errors)
     end
 
-end # module Validation
+end

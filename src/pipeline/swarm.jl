@@ -8,21 +8,9 @@ export swarm
 
     using CSV, DataFrames, YAML, Logging
     using ..PipelineTypes
-    using ..PipelineGraph
     using ..PipelineLog
     using ..Config
-    using ..Tools: tool_bin
-
-    function _run_logged(cmd_str::String, log_path::String; mode::String="w")
-        try
-            open(log_path, mode) do io
-                run(pipeline(`bash -lc $cmd_str`; stdout=io, stderr=io))
-            end
-        catch e
-            isfile(log_path) && print(stderr, read(log_path, String))
-            rethrow()
-        end
-    end
+    using ..Tools: tool_bin, _sq, _run_logged
 
     function _swarm_args(cfg::Dict)::String
         parts = String[]
@@ -34,191 +22,225 @@ export swarm
         join(parts, " ")
     end
 
-    # Latest mtime of trimmed FASTQ files.
-    function _trimmed_mtime(trimmed::TrimmedReads)
-        files = filter(f -> endswith(f, ".fastq.gz"), readdir(trimmed.dir))
-        isempty(files) ? 0.0 : maximum(mtime(joinpath(trimmed.dir, f)) for f in files)
-    end
+    ## Step 1: Write DADA2 ASVs as abundance-annotated FASTA for SWARM.
+    # Reads the ASV count table to compute total abundance per ASV.
+    function _write_annotated_fasta(asvs::ASVResult, swarm_dir::String)
+        annotated = joinpath(swarm_dir, "asvs_annotated.fasta")
 
-    ## Step 1: merge paired-end reads per sample into per-sample FASTA files.
-    # Returns the list of sample stems that were found.
-    function _merge_pairs!(merged_dir::String, trimmed::TrimmedReads, cfg::Dict,
-                           vsearch_bin::String, log_dir::String)
-        mkpath(merged_dir)
-        mode     = get(get(cfg, "file_patterns", Dict()), "mode", "paired")
-        minovlen = get(cfg, "fastq_minovlen", 20)
-        r1_files = filter(f -> occursin(r"_R1_trimmed\.fastq\.gz$", f), readdir(trimmed.dir))
-        samples  = [replace(f, r"_R1_trimmed\.fastq\.gz$" => "") for f in r1_files]
-        for sample in samples
-            r1        = joinpath(trimmed.dir, sample * "_R1_trimmed.fastq.gz")
-            out_fasta = joinpath(merged_dir, sample * ".fasta")
-            isfile(out_fasta) && mtime(out_fasta) > mtime(r1) && continue
-            log_path = joinpath(log_dir, "merge_$(sample).log")
-            if mode == "paired"
-                r2  = joinpath(trimmed.dir, sample * "_R2_trimmed.fastq.gz")
-                cmd = "$(vsearch_bin) --fastq_mergepairs $(r1) --reverse $(r2) --fastaout $(out_fasta) --fastq_minovlen $(minovlen) --quiet"
-            else
-                cmd = "$(vsearch_bin) --fastq_filter $(r1) --fastaout $(out_fasta) --quiet"
-            end
-            _run_logged(cmd, log_path)
-        end
-        return samples
-    end
-
-    ## Step 2: pool all per-sample FASTAs, dereplicate, sort by abundance.
-    function _derep_sort!(swarm_dir::String, merged_dir::String, samples::Vector{String},
-                          min_abundance::Int, vsearch_bin::String, log_dir::String)
-        pooled = joinpath(swarm_dir, "pooled.fasta")
-        derep  = joinpath(swarm_dir, "derep.fasta")
-        sorted = joinpath(swarm_dir, "sorted.fasta")
-        open(pooled, "w") do io
-            for sample in samples
-                fa = joinpath(merged_dir, sample * ".fasta")
-                isfile(fa) && write(io, read(fa, String))
+        # Read ASV fasta to get seq IDs and sequences
+        seqs = Vector{Pair{String,String}}()
+        open(asvs.fasta, "r") do io
+            id = ""
+            for line in eachline(io)
+                if startswith(line, ">")
+                    id = strip(line[2:end])
+                else
+                    push!(seqs, id => strip(line))
+                end
             end
         end
-        _run_logged("$(vsearch_bin) --derep_fulllength $(pooled) --output $(derep) --sizeout --quiet",
-                    joinpath(log_dir, "derep.log"))
-        _run_logged("$(vsearch_bin) --sortbysize $(derep) --output $(sorted) --minsize $(min_abundance) --quiet",
-                    joinpath(log_dir, "sort.log"))
-        return sorted
+
+        # Read count table for total abundance per ASV
+        # asv_counts.csv has SeqName,Sequence,sample1,sample2,...
+        counts_path = joinpath(dirname(asvs.taxonomy), "asv_counts.csv")
+        if isfile(counts_path)
+            df = CSV.read(counts_path, DataFrame)
+            sample_cols = filter(c -> c ∉ ("SeqName", "Sequence", "sequence"), names(df))
+            abundances = Dict{String,Int}()
+            for row in eachrow(df)
+                total = sum(ismissing(row[c]) ? 0 : Int(row[c]) for c in sample_cols)
+                abundances[string(row.SeqName)] = total
+            end
+        else
+            # Fallback: use seqtab_nochim.csv (sequences as row names)
+            abundances = Dict{String,Int}()
+            df = CSV.read(asvs.count_table, DataFrame)
+            # seqtab_nochim has sequences as first column, counts in remaining
+            for (i, (id, _)) in enumerate(seqs)
+                if i <= nrow(df)
+                    sample_cols = names(df)[2:end]
+                    total = sum(ismissing(df[i, c]) ? 0 : Int(df[i, c]) for c in sample_cols)
+                    abundances[id] = total
+                end
+            end
+        end
+
+        open(annotated, "w") do io
+            for (id, seq) in seqs
+                size = get(abundances, id, 1)
+                println(io, ">$(id);size=$(size)")
+                println(io, seq)
+            end
+        end
+
+        @info "SWARM: Wrote $(length(seqs)) annotated ASVs to $annotated"
+        return annotated
     end
 
-    ## Step 3: chimera filtering with vsearch uchime_denovo (optional).
-    function _chimera_filter!(sorted::String, swarm_dir::String, vsearch_bin::String, log_dir::String)
-        nochim = joinpath(swarm_dir, "nochim.fasta")
-        _run_logged("$(vsearch_bin) --uchime_denovo $(sorted) --nonchimeras $(nochim) --quiet",
-                    joinpath(log_dir, "chimera.log"))
-        return nochim
-    end
-
-    ## Step 3b: remove sequences containing ambiguous bases (N).
+    ## Step 2: remove sequences containing ambiguous bases (N).
     # Swarm rejects any IUPAC ambiguity code; vsearch --fastx_filter drops them cleanly.
     function _filter_ns!(input::String, swarm_dir::String, vsearch_bin::String, log_dir::String)
         noN = joinpath(swarm_dir, "noN.fasta")
-        _run_logged("$(vsearch_bin) --fastx_filter $(input) --fastaout $(noN) --fastq_maxns 0 --sizeout --quiet",
+        _run_logged("$(vsearch_bin) --fastx_filter $(_sq(input)) --fastaout $(_sq(noN)) --fastq_maxns 0 --sizeout --quiet",
                     joinpath(log_dir, "filter_ns.log"))
         return noN
     end
 
-    ## Step 4: SWARM clustering. Seeds are renamed otu1, otu2, ... for clean IDs.
+    ## Step 3: SWARM clustering. Seeds are renamed otu1, otu2, ... for clean IDs.
     function _cluster!(input_fasta::String, swarm_dir::String, args::String,
                        swarm_bin::String, log_dir::String)
         seeds_raw = joinpath(swarm_dir, "seeds_raw.fasta")
         seeds     = joinpath(swarm_dir, "seeds.fasta")
         swarm_txt = joinpath(swarm_dir, "swarm.txt")
-        _run_logged("$(swarm_bin) -z $(args) $(input_fasta) --seeds $(seeds_raw) --uclust-file $(swarm_txt)",
+        _run_logged("$(swarm_bin) -z $(args) $(_sq(input_fasta)) --seeds $(_sq(seeds_raw)) --uclust-file $(_sq(swarm_txt))",
                     joinpath(log_dir, "swarm.log"))
         # Rename to otu1, otu2, ... for consistent IDs across count table and taxonomy search.
-        _run_logged("awk 'BEGIN{n=0}/^>/{printf \">otu%d\\n\",++n;next}{print}' $(seeds_raw) > $(seeds)",
+        _run_logged("awk 'BEGIN{n=0}/^>/{printf \">otu%d\\n\",++n;next}{print}' $(_sq(seeds_raw)) > $(_sq(seeds))",
                     joinpath(log_dir, "rename.log"))
         return seeds
     end
 
-    ## Step 5: map per-sample merged reads back to OTU seeds, build count table CSV.
-    function _build_count_table!(merged_dir::String, seeds::String, samples::Vector{String},
-                                  identity::Float64, vsearch_bin::String,
-                                  swarm_dir::String, log_dir::String)
-        counts_dir = joinpath(swarm_dir, "counts")
-        mkpath(counts_dir)
+    ## Parse SWARM uclust file into cluster membership.
+    # Returns (cluster_members, otu_ids) and writes cluster_membership.csv.
+    function _parse_clusters(swarm_dir::String, seeds::String)
+        swarm_txt = joinpath(swarm_dir, "swarm.txt")
+        cluster_members = Dict{Int,Vector{String}}()  # cluster_idx => [asv_id, ...]
+        open(swarm_txt, "r") do io
+            for line in eachline(io)
+                fields = split(line, '\t')
+                length(fields) < 9 && continue
+                rec_type = fields[1]
+                cluster  = parse(Int, fields[2])
+                query_id = replace(fields[9], r";size=\d+$" => "")
+                if rec_type == "S" || rec_type == "H"
+                    push!(get!(cluster_members, cluster, String[]), query_id)
+                end
+            end
+        end
+
+        # Build OTU ID list from seeds fasta (otu1, otu2, ...)
         otu_ids = String[]
         open(seeds, "r") do io
             for line in eachline(io)
                 startswith(line, ">") && push!(otu_ids, strip(line[2:end]))
             end
         end
-        sample_counts = Dict{String, Dict{String,Int}}()
-        for sample in samples
-            fa = joinpath(merged_dir, sample * ".fasta")
-            isfile(fa) || continue
-            hits_file = joinpath(counts_dir, sample * "_hits.txt")
-            cmd = "$(vsearch_bin) --usearch_global $(fa) --db $(seeds) --userout $(hits_file) --userfields target --maxaccepts 1 --id $(identity) --quiet"
-            _run_logged(cmd, joinpath(log_dir, "count_$(sample).log"))
-            counts = Dict{String,Int}()
-            open(hits_file, "r") do io
-                for line in eachline(io)
-                    otu = strip(line)
-                    isempty(otu) || (counts[otu] = get(counts, otu, 0) + 1)
+
+        # Write cluster_membership.csv: ASV to OTU mapping
+        membership_path = joinpath(swarm_dir, "cluster_membership.csv")
+        open(membership_path, "w") do io
+            println(io, "ASV,OTU")
+            for (i, otu) in enumerate(otu_ids)
+                for asv in get(cluster_members, i - 1, String[])
+                    println(io, "$asv,$otu")
                 end
             end
-            sample_counts[sample] = counts
         end
+        @info "SWARM: Wrote cluster membership to $membership_path"
+
+        return cluster_members, otu_ids
+    end
+
+    ## Step 4: build OTU count table by aggregating ASV counts per OTU cluster.
+    function _build_count_table_from_asvs!(swarm_dir::String, seeds::String,
+                                            asvs::ASVResult)
+        cluster_members, otu_ids = _parse_clusters(swarm_dir, seeds)
+
+        # Read ASV count table
+        counts_path = joinpath(dirname(asvs.taxonomy), "asv_counts.csv")
+        df_counts = if isfile(counts_path)
+            CSV.read(counts_path, DataFrame)
+        else
+            CSV.read(asvs.count_table, DataFrame)
+        end
+
+        sample_cols = filter(c -> c ∉ ("SeqName", "Sequence", "sequence"), names(df_counts))
+
+        # Build per-ASV count lookup: asv_id => Dict(sample => count)
+        asv_counts = Dict{String, Dict{String,Int}}()
+        seq_col = "SeqName" in names(df_counts) ? "SeqName" : names(df_counts)[1]
+        for row in eachrow(df_counts)
+            id = string(row[seq_col])
+            counts = Dict{String,Int}()
+            for sc in sample_cols
+                v = row[sc]
+                counts[sc] = ismissing(v) ? 0 : Int(v)
+            end
+            asv_counts[id] = counts
+        end
+
+        # Aggregate: for each OTU (cluster), sum counts of member ASVs
         df = DataFrame(SeqName = otu_ids)
-        for sample in samples
-            sc = get(sample_counts, sample, Dict{String,Int}())
-            df[!, sample] = [get(sc, otu, 0) for otu in otu_ids]
+        # Strip suffixes from sample column names to match merge_taxa behaviour
+        clean_samples = [replace(sc, r"_R[12]_filt\.fastq\.gz$" => "") for sc in sample_cols]
+        for (sc, cs) in zip(sample_cols, clean_samples)
+            col_data = Int[]
+            for (i, _) in enumerate(otu_ids)
+                members = get(cluster_members, i - 1, String[])
+                total = sum(get(get(asv_counts, m, Dict{String,Int}()), sc, 0) for m in members; init=0)
+                push!(col_data, total)
+            end
+            df[!, cs] = col_data
         end
+
         otu_table = joinpath(swarm_dir, "otu_table.csv")
         CSV.write(otu_table, df)
-        @info "SWARM: $(length(otu_ids)) OTUs written to $otu_table"
+        @info "SWARM: $(length(otu_ids)) OTUs written to $otu_table (aggregated from ASV counts)"
         return otu_table
     end
 
     """
-        swarm(project, trimmed; swarm_bin, vsearch_bin) -> Union{OTUResult, Nothing}
+        swarm(project, asvs; swarm_bin, vsearch_bin) -> Union{OTUResult, Nothing}
 
-    Run the SWARM OTU clustering pipeline on trimmed reads:
-      merge pairs -> pool -> dereplicate -> sort -> [chimera filter] -> cluster -> count table.
+    Run the SWARM OTU clustering pipeline on DADA2-denoised ASVs:
+      annotate with abundances -> filter Ns -> cluster -> aggregate count table.
+
+    DADA2 has already performed quality filtering, denoising, and chimera removal,
+    so SWARM only needs to cluster the clean ASVs into OTUs.
 
     Outputs are written to `{project.dir}/swarm/`. Returns an OTUResult pointing to
     `seeds.fasta` (OTU representatives) and `otu_table.csv` (per-sample counts).
-
-    Skips the entire pipeline when outputs are up to date and config is unchanged.
-    Per-sample merge steps are individually skipped when already current.
     """
-    function swarm(project::ProjectCtx, trimmed::TrimmedReads;
+    function swarm(project::ProjectCtx, asvs::ASVResult;
                    swarm_bin   = tool_bin("swarm"),
                    vsearch_bin = tool_bin("vsearch"))
+        lbl = basename(project.dir)
         if isnothing(Sys.which(swarm_bin))
-            @warn "swarm binary not found ('$swarm_bin') - skipping OTU pipeline. Install swarm or set path in config/tools.yml."
+            @warn "[$lbl] SWARM: Binary not found ('$swarm_bin') - skipping OTU pipeline. Install swarm or set path in config/tools.yml."
             return nothing
         end
         config_path = write_run_config(project)
         cfg         = get(YAML.load_file(config_path), "swarm", Dict())
         swarm_dir   = joinpath(project.dir, "swarm")
-        merged_dir  = joinpath(swarm_dir, "merged")
         log_dir     = joinpath(swarm_dir, "logs")
         hash_file   = joinpath(swarm_dir, "config.hash")
         seeds       = joinpath(swarm_dir, "seeds.fasta")
         otu_table   = joinpath(swarm_dir, "otu_table.csv")
+        membership  = joinpath(swarm_dir, "cluster_membership.csv")
 
-        t_mtime = _trimmed_mtime(trimmed)
-        if isfile(seeds) && isfile(otu_table) &&
+        asv_mtime = mtime(asvs.fasta)
+        if isfile(seeds) && isfile(otu_table) && isfile(membership) &&
            !_section_stale(config_path, stage_sections(:swarm), hash_file) &&
-           mtime(seeds) > t_mtime && mtime(otu_table) > t_mtime
-            @info "SWARM: skipping - outputs up to date in $swarm_dir"
+           mtime(seeds) > asv_mtime && mtime(otu_table) > asv_mtime
+            @info "[$lbl] SWARM: Skipping - outputs up to date in $swarm_dir"
             return OTUResult(seeds, otu_table)
         end
 
-        mkpath(merged_dir); mkpath(log_dir)
+        mkpath(swarm_dir); mkpath(log_dir)
 
-        args          = _swarm_args(cfg)
-        min_abundance = get(cfg, "min_abundance", 2)
-        do_chimera    = get(cfg, "chimera_check", true)
-        identity      = Float64(get(cfg, "identity", 0.97))
+        args = _swarm_args(cfg)
 
-        @info "SWARM: merging paired reads"
-        samples = _merge_pairs!(merged_dir, trimmed, cfg, vsearch_bin, log_dir)
+        @info "[$lbl] SWARM: Annotating $(asvs.fasta) with abundances"
+        annotated = _write_annotated_fasta(asvs, swarm_dir)
 
-        @info "SWARM: dereplicating and sorting (minsize=$min_abundance)"
-        sorted = _derep_sort!(swarm_dir, merged_dir, samples, min_abundance, vsearch_bin, log_dir)
+        @info "[$lbl] SWARM: Removing ambiguous-base sequences"
+        cluster_input = _filter_ns!(annotated, swarm_dir, vsearch_bin, log_dir)
 
-        after_chimera = if do_chimera
-            @info "SWARM: chimera filtering"
-            _chimera_filter!(sorted, swarm_dir, vsearch_bin, log_dir)
-        else
-            sorted
-        end
-
-        @info "SWARM: removing ambiguous-base sequences"
-        cluster_input = _filter_ns!(after_chimera, swarm_dir, vsearch_bin, log_dir)
-
-        @info "SWARM: clustering"
+        @info "[$lbl] SWARM: Clustering"
         seeds = _cluster!(cluster_input, swarm_dir, args, swarm_bin, log_dir)
 
-        @info "SWARM: building count table (identity=$identity)"
-        otu_table = _build_count_table!(merged_dir, seeds, samples, identity,
-                                         vsearch_bin, swarm_dir, log_dir)
+        @info "[$lbl] SWARM: Building OTU count table from ASV counts"
+        otu_table = _build_count_table_from_asvs!(swarm_dir, seeds, asvs)
 
         _write_section_hash(config_path, stage_sections(:swarm), hash_file)
         pipeline_log(project, "SWARM complete")

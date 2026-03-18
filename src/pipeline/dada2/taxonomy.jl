@@ -1,10 +1,7 @@
 # © 2026 Joshua Benjamin Jewell. All rights reserved.
 # Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-# Web UI: Taxonomy page
-# Stages: assign_taxonomy
-
-    # Taxonomy assignment
+    ## Taxonomy Assignment
     """
         assign_taxonomy(config_path; progress)
 
@@ -13,13 +10,6 @@
     Requires: `Checkpoints/ckpt_chimera.RData`
     Saves: `Checkpoints/checkpoint.RData`
     """
-    # DISCLAIMER: Remote taxonomy execution connects to a user-configured server via SSH,
-    # transfers files via SCP, executes Rscript, and deletes the staging directory on
-    # completion. The user is solely responsible for ensuring they have authorisation to
-    # use the configured remote host, that the staging_dir is a safe path to write to
-    # and delete from, and that the remote server has sufficient resources. The authors
-    # of this software accept no liability for unintended data loss, unauthorised access,
-    # or any other consequences arising from misconfiguration or misuse of this feature.
     function _assign_taxonomy_remote(emit, chimera_ckpt, db_path, db_remote_path, tables_dir,
                                       checkpoint, taxa_prefix, multithread,
                                       min_boot, tax_levels, verbose, remote_cfg,
@@ -35,7 +25,6 @@
             error("databases.yml dada2.remote_path must be an absolute path on the server " *
                   "(got: '$db_remote_path'). Do not include the hostname.")
 
-        # Append a unique run ID so cleanup only ever touches this specific run's dir.
         run_id      = string(floor(Int, time()))
         staging_dir = "$base_dir/run_$run_id"
 
@@ -45,11 +34,7 @@
         remote_tables = "$staging_dir/Tables"
         remote_ckpt   = "$staging_dir/checkpoint.RData"
 
-        # Use a ControlMaster socket so the connection is established once and
-        # all subsequent ssh/scp calls reuse it silently.
-        # ConnectTimeout: fail fast instead of hanging on unreachable hosts.
-        # NumberOfPasswordPrompts=1: fail immediately on wrong password.
-        # ServerAlive*: detect stale connections during long Rscript runs.
+        # ControlMaster reuses a single SSH connection for all ssh/scp calls
         ctl     = "/tmp/ssh_mux_$run_id"
         id_opt  = isnothing(identity_file) ? `` : `-i $identity_file`
         ssh_opts = `$id_opt -o ControlMaster=auto -o ControlPath=$ctl -o ControlPersist=yes -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=3`
@@ -69,8 +54,7 @@
         run(scp(functions_r,  "$host:$staging_dir/dada2_functions.r"))
         run(scp(remote_r,     "$host:$staging_dir/taxonomy_remote.r"))
 
-        # If db_remote_path is set (from databases.yml dada2.remote_path), use it directly.
-        # Otherwise transfer the local db_path to the remote staging directory.
+        # Use remote_path from databases.yml if set, otherwise transfer local db
         remote_db_resolved = if !isnothing(db_remote_path)
             emit("  Using remote database: $db_remote_path")
             db_remote_path
@@ -85,7 +69,6 @@
 
         levels_str  = join(tax_levels, ",")
         verbose_str = verbose ? "true" : "false"
-        # Julia Bool true/false -> R TRUE/FALSE; integers pass through as-is.
         mt_str      = multithread isa Bool ? (multithread ? "TRUE" : "FALSE") : string(multithread)
         remote_cmd  = "$rscript $staging_dir/taxonomy_remote.r " *
                       "functions=$staging_dir/dada2_functions.r " *
@@ -110,22 +93,23 @@
         run(scp("$host:$remote_tables/$(taxa_prefix)_combined.csv",   "$tables_dir/"))
         run(scp("$host:$remote_ckpt",                                 checkpoint))
 
-        # Safety check before cleanup: staging_dir must be at least 3 components
-        # deep to guard against dangerous paths.
+        # Guard against dangerously shallow rm -rf paths
         parts = filter(!isempty, split(staging_dir, '/'))
         if length(parts) >= 3
             emit("  Cleaning up $host:$staging_dir")
             run(ssh(host, "rm -rf $staging_dir"))
         else
-            @warn "DADA2: skipping remote cleanup - staging path '$staging_dir' looks too shallow to delete safely"
+            @warn "DADA2: Skipping remote cleanup - staging path '$staging_dir' looks too shallow to delete safely"
         end
 
         run(`ssh -o ControlPath=$ctl -O exit $host`)
     end
 
     function assign_taxonomy(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing, skip_classification=false)
-        emit    = _emitter(progress)
         ctx     = _pipeline_context(config_path; input_dir, workspace_root)
+        lbl     = ctx.run_label
+        emit    = _emitter(progress, lbl)
+        @info "[$(lbl)] DADA2: Assign taxonomy starting"
         verbose = ctx.verbose
 
         isfile(ctx.ckpts["chimera"]) ||
@@ -137,15 +121,11 @@
         if isfile(checkpoint) &&
            !_section_stale(config_path, stage_sections(:dada2_assign_taxonomy), hash_file) &&
            mtime(checkpoint) > mtime(chimera_ckpt)
-            @info "DADA2: skipping assign_taxonomy - checkpoint up to date"
+            @info "[$(lbl)] DADA2: Skipping assign taxonomy - checkpoint up to date"
             return nothing
         end
 
-        # Drop all data objects accumulated from prior stages before the
-        # memory-intensive taxonomy assignment runs. Named globals in R's
-        # environment are reachable and gc() won't collect them; rm() them
-        # explicitly so they don't inflate the memory footprint.
-        # lsf.str() returns function names; setdiff keeps those intact.
+        # Free R data objects from prior stages to reduce memory before taxonomy
         R"""
         .data_objs <- setdiff(ls(), lsf.str())
         if (length(.data_objs) > 0L) rm(list = .data_objs)
@@ -162,7 +142,6 @@
         tables_dir    = ctx.dirs["Tables"]
         multithread   = get(ctx.cfg["taxonomy"], "multithread", 4)
         min_boot      = get(ctx.cfg["taxonomy"], "min_boot", 0)
-        # Read levels from databases.yml (single source of truth).
         db_key    = string(ctx.cfg["taxonomy"]["database"])
         dbs_path  = joinpath(@__DIR__, "..", "..", "..", "config", "databases.yml")
         dbs_cfg   = get(YAML.load_file(dbs_path), "databases", Dict())
@@ -173,10 +152,7 @@
         use_remote = !isnothing(remote_cfg) &&
                      !isnothing(get(remote_cfg, "host", nothing))
 
-        # Resolve the database path. Priority:
-        #   1. databases.yml dada2.remote_path - pre-existing file on remote (no transfer needed)
-        #   2. taxonomy_db argument - local file to transfer
-        #   3. _resolve_taxonomy_db - fallback local resolution
+        # Priority: remote_path > taxonomy_db arg > _resolve_taxonomy_db fallback
         db_remote_path = get(get(get(dbs_cfg, db_key, Dict()), "dada2", Dict()), "remote_path", nothing)
         if !isnothing(db_remote_path)
             db_remote_path = string(db_remote_path)
@@ -190,7 +166,7 @@
         open(log_path, "w") do io; println(io, "=== assign_taxonomy ===\nconfig: $config_path") end
 
         if skip_classification
-            @info "DADA2: taxonomy classification skipped - writing count tables without assignments"
+            @info "[$(lbl)] DADA2: Taxonomy classification skipped - writing count tables without assignments"
             R"""
             taxa_df <- data.frame(SeqName = index$SeqName, Sequence = index$Sequence,
                                   stringsAsFactors = FALSE)
@@ -202,7 +178,7 @@
                 touch(joinpath(tables_dir, suffix))
             end
         elseif !has_data
-            @info "DADA2: taxonomy assignment skipped - no ASVs in seq_table_nochim"
+            @info "[$(lbl)] DADA2: Taxonomy assignment skipped - no ASVs in seq_table_nochim"
             R"taxa_df <- data.frame()"
             R"save(seq_table_nochim, index, taxa_df, file=$checkpoint)"
             for suffix in (taxa_prefix * ".csv", taxa_prefix * "_bootstraps.csv",

@@ -32,7 +32,6 @@ export dada2, dada2_denoise, dada2_classify,
     import Downloads
     using Logging, RCall, YAML
     using ..PipelineTypes
-    using ..PipelineGraph
     using ..PipelineLog
     using ..Databases
     using ..Config
@@ -106,7 +105,7 @@ export dada2, dada2_denoise, dada2_classify,
         if isfile(chimera_ckpt) &&
            mtime(chimera_ckpt) > mtime(config_path) &&
            mtime(chimera_ckpt) > trimmed_mtime
-            @info "DADA2: skipping dada2_denoise - ckpt_chimera.RData up to date"
+            @info "[$(basename(dirname(workspace_root)))] DADA2: Skipping denoise - ckpt_chimera.RData up to date"
         else
             R"rm(list=ls())"
             prefilter_qc(config_path;    progress, input_dir=trimmed.dir, workspace_root)
@@ -146,6 +145,7 @@ export dada2, dada2_denoise, dada2_classify,
                         taxonomy_db,
                         skip_classification = skip_taxonomy)
         pipeline_log(project, "DADA2 taxonomy complete")
+        R"rm(list=ls()); gc()"
         for f in (result.fasta, result.count_table, result.taxonomy)
             isfile(f) && log_written(project, f)
         end
@@ -170,9 +170,10 @@ export dada2, dada2_denoise, dada2_classify,
         if all(isfile, (result.fasta, result.count_table, result.taxonomy)) &&
            all(f -> mtime(f) > mtime(config_path), (result.fasta, result.count_table, result.taxonomy)) &&
            all(f -> mtime(f) > trimmed_mtime, (result.fasta, result.count_table, result.taxonomy))
-            @info "DADA2: skipping - outputs up to date in $tables_dir"
+            @info "[$(basename(project.dir))] DADA2: Skipping - outputs up to date in $tables_dir"
             return result
         end
+        @info "[$(basename(project.dir))] DADA2: Starting pipeline"
         pipeline_log(project, "DADA2 pipeline started")
         denoised = dada2_denoise(project, trimmed; progress)
         result = dada2_classify(project, denoised; taxonomy_db, progress, skip_taxonomy)

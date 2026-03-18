@@ -31,10 +31,7 @@ end
     j = get_job(id)
     isnothing(j) && return json_error(404, "job_not_found", "Job '$id' not found")
 
-    # SSE: stream log lines captured from the job's task via a Channel.
-    # The job runner writes to a per-job log channel; we read and forward here.
-    # For now this is a stub - log streaming will be wired once the log
-    # capture mechanism is in place.
+    # Stub - log streaming will be wired once the capture mechanism is in place
     HTTP.Response(200,
         ["Content-Type" => "text/event-stream",
          "Cache-Control" => "no-cache",

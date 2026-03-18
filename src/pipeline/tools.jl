@@ -4,17 +4,16 @@ module Tools
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-export cutadapt, vsearch, multiqc, cdhit, tool_bin
+export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
 
     using YAML
     using Logging
     using ..PipelineTypes
-    using ..PipelineGraph
     using ..PipelineLog
     using ..Config
 
-    # Run cmd_str via bash, capturing stdout+stderr to log_path.
-    # On failure, prints the log to stderr before rethrowing so the error is visible.
+    _sq(s::AbstractString) = "'" * replace(s, "'" => "'\\''") * "'"
+
     function _run_logged(cmd_str::String, log_path::String; mode::String="w")
         try
             open(log_path, mode) do io
@@ -46,16 +45,13 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         tools
     end
 
-    # Fallback binary names for keys that differ from their PATH name.
     const _BIN_DEFAULTS = Dict("cd_hit_est" => "cd-hit-est")
     tool_bin(key) = get(_tools, key, get(_BIN_DEFAULTS, key, key))
 
     const _tools = load_tools()
 
     ## Argument builders
-    # Build the optional-args string for cutadapt from named config keys + any
-    # user-supplied optional_args. Named keys cover the options most commonly tuned
-    # for metabarcoding; optional_args accepts anything else cutadapt supports.
+
     function _cutadapt_optional_args(cfg::Dict)::String
         parts = String[]
         min_len = get(cfg, "min_length", 200)
@@ -74,7 +70,6 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         join(parts, " ")
     end
 
-    # Build the --usearch_global args for vsearch from named config keys + optional_args.
     function _vsearch_args(cfg::Dict)::String
         parts = String[]
         push!(parts, "--id $(get(cfg, "identity", 0.75))")
@@ -90,7 +85,6 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         join(parts, " ")
     end
 
-    # Build the cd-hit-est args from named config keys + optional_args.
     function _cdhit_args(cfg::Dict)::String
         parts = String[]
         push!(parts, "-c $(get(cfg, "identity", 0.97))")
@@ -101,7 +95,6 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         join(parts, " ")
     end
 
-    ## cutadapt
     function get_primers(input, primers_path, seen_fwd::Vector{String}, seen_rev::Vector{String})
         data = YAML.load_file(primers_path)
 
@@ -126,14 +119,11 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
             end
         end
 
-        path = pwd() * "/" * primers_path
-        return "Invalid input. Please specify a valid primer pair in '$path'."
+        path = abspath(primers_path)
+        error("Primer pair '$input' not found in '$path'. " *
+              "Valid pairs: $(join(collect(only(keys(p)) for p in data["Pairs"]), ", "))")
     end
 
-    # Formats cutadapt's adapter arguments for the primer sets requested.
-    # In paired mode both -g (forward) and -G (reverse) flags are emitted.
-    # In forward-only mode only -g flags are emitted; reverse-only uses -a
-    # (3' adapter on the single read, i.e. the RC of the reverse primer).
     function get_primer_args(primer_pairs, primers_path; mode="paired")
         seen_fwd = String[]
         seen_rev = String[]
@@ -161,8 +151,20 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
     end
 
     function run_cutadapt(primer_args, optional_args, fastq_in_dir, cutadapt_dir,
-                          cutadapt_bin; mode="paired")
-        samples = []
+                          cutadapt_bin; mode="paired", r1_suffix="_R1", r2_suffix="_R2")
+        entries = [FastqEntry(joinpath(fastq_in_dir, f), f)
+                   for f in readdir(fastq_in_dir) if endswith(f, ".fastq.gz")]
+        run_cutadapt(primer_args, optional_args, entries, cutadapt_dir,
+                     cutadapt_bin; mode, r1_suffix, r2_suffix)
+    end
+
+    function run_cutadapt(primer_args, optional_args, fastq_entries::Vector{FastqEntry},
+                          cutadapt_dir, cutadapt_bin;
+                          mode="paired", r1_suffix="_R1", r2_suffix="_R2")
+        samples    = String[]
+        r1_map     = Dict{String,String}()   # sample => absolute input path
+        r2_map     = Dict{String,String}()
+        out_prefix = Dict{String,String}()   # sample => output name prefix
 
         log_dir          = joinpath(cutadapt_dir, "logs")
         stats_path       = joinpath(log_dir, "cutadapt_primer_trimming_stats.txt")
@@ -172,41 +174,58 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
 
         isdir(log_dir) || mkpath(log_dir)
 
-        # Discover samples from the appropriate read file(s).
-        if mode == "paired" || mode == "forward"
-            for f in filter(x -> occursin(r"_R1.*fastq\.gz$", x), readdir(fastq_in_dir))
-                push!(samples, split(f, '_')[1])
+        # Sample name = everything before the first occurrence of the R1/R2 suffix
+        # in the *output-safe* name (which carries the sub-group prefix when pooled).
+        primary_suffix  = (mode == "reverse") ? r2_suffix : r1_suffix
+        primary_pattern = Regex(primary_suffix * raw"[^/]*\.fastq\.gz$")
+
+        for entry in sort(fastq_entries, by = e -> e.name)
+            occursin(primary_pattern, entry.name) || continue
+            parts  = split(entry.name, primary_suffix; limit=2)
+            sample = parts[1]
+            rest   = parts[2]   # e.g. ".fastq.gz" or "_001.fastq.gz"
+            if !(sample in samples)
+                push!(samples, sample)
+                out_prefix[sample] = sample
             end
-        else  # reverse
-            for f in filter(x -> occursin(r"_R2.*fastq\.gz$", x), readdir(fastq_in_dir))
-                push!(samples, split(f, '_')[1])
-            end
+            r1_map[sample] = entry.path
+            # Build the R2 input path: same source directory, swap suffix in original filename.
+            orig_dir  = dirname(entry.path)
+            orig_base = basename(entry.path)
+            r2_base   = replace(orig_base, primary_suffix => r2_suffix; count=1)
+            r2_map[sample] = joinpath(orig_dir, r2_base)
         end
 
-        @info("cutadapt: running in $mode mode with arguments: $primer_args $optional_args.")
+        @info("Cutadapt: Running in $mode mode with arguments: $primer_args $optional_args.")
 
         nsamples = length(samples)
         for (i, sample) in enumerate(samples)
-            @info("cutadapt: sample $i/$nsamples ($sample).")
+            @info("Cutadapt: Sample $i/$nsamples ($sample).")
+            pfx = out_prefix[sample]
 
             if mode == "paired"
-                inputR1  = joinpath(fastq_in_dir, sample * "_*_L001_R1_001.fastq.gz")
-                inputR2  = joinpath(fastq_in_dir, sample * "_*_L001_R2_001.fastq.gz")
-                outputR1 = joinpath(cutadapt_dir, sample * "_R1_trimmed.fastq.gz")
-                outputR2 = joinpath(cutadapt_dir, sample * "_R2_trimmed.fastq.gz")
-                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR1 -p $outputR2 $inputR1 $inputR2"
+                inputR1  = r1_map[sample]
+                inputR2  = r2_map[sample]
+                outputR1 = joinpath(cutadapt_dir, pfx * "_R1_trimmed.fastq.gz")
+                outputR2 = joinpath(cutadapt_dir, pfx * "_R2_trimmed.fastq.gz")
+                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $(_sq(outputR1)) -p $(_sq(outputR2)) $(_sq(inputR1)) $(_sq(inputR2))"
             elseif mode == "forward"
-                inputR1  = joinpath(fastq_in_dir, sample * "_*_L001_R1_001.fastq.gz")
-                outputR1 = joinpath(cutadapt_dir, sample * "_R1_trimmed.fastq.gz")
-                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR1 $inputR1"
+                inputR1  = r1_map[sample]
+                outputR1 = joinpath(cutadapt_dir, pfx * "_R1_trimmed.fastq.gz")
+                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $(_sq(outputR1)) $(_sq(inputR1))"
             else  # reverse
-                inputR2  = joinpath(fastq_in_dir, sample * "_*_L001_R2_001.fastq.gz")
-                outputR2 = joinpath(cutadapt_dir, sample * "_R2_trimmed.fastq.gz")
-                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $outputR2 $inputR2"
+                inputR2  = r2_map[sample]
+                outputR2 = joinpath(cutadapt_dir, pfx * "_R2_trimmed.fastq.gz")
+                cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $(_sq(outputR2)) $(_sq(inputR2))"
             end
 
-            open(stats_path, "a") do io
-                run(pipeline(`bash -lc $cutadapt_cmd`; stdout=io, stderr=io))
+            try
+                open(stats_path, "a") do io
+                    run(pipeline(`bash -lc $cutadapt_cmd`; stdout=io, stderr=io))
+                end
+            catch e
+                log_tail = isfile(stats_path) ? read(stats_path, String) : ""
+                error("cutadapt failed for sample '$sample':\n$log_tail\n$(sprint(showerror, e))")
             end
         end
 
@@ -220,7 +239,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
             run(pipeline(`bash -lc $cmd`))
         end
 
-        @info("cutadapt: complete. Output available in $cutadapt_dir.")
+        @info("Cutadapt: Complete. Output available in $cutadapt_dir.")
         return cutadapt_dir
     end
 
@@ -274,7 +293,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
             trimmed = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(cutadapt_dir))
             if !isempty(trimmed) &&
                all(f -> mtime(joinpath(cutadapt_dir, f)) > mtime(primers_path), trimmed)
-                @info "cutadapt: skipping - trimmed reads up to date in $cutadapt_dir"
+                @info "Cutadapt: Skipping - trimmed reads up to date in $cutadapt_dir"
                 return TrimmedReads(cutadapt_dir)
             end
         end
@@ -290,6 +309,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
 
     function cutadapt(project::ProjectCtx;
                       cutadapt_bin = tool_bin("cutadapt"))
+        lbl          = basename(project.dir)
         config_path  = write_run_config(project)
         primers_path = joinpath(project.config_dir, "primers.yml")
         cfg          = get(YAML.load_file(config_path), "cutadapt", Dict())
@@ -299,8 +319,8 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         hash_file    = joinpath(cutadapt_dir, "config.hash")
 
         # Collect mtimes of all inputs: primers config + raw FASTQs.
-        raw_fastqs    = filter(f -> endswith(f, ".fastq.gz"), readdir(project.data_dir))
-        raw_mtimes    = [mtime(joinpath(project.data_dir, f)) for f in raw_fastqs]
+        raw_entries   = find_fastqs(project)
+        raw_mtimes    = [mtime(e.path) for e in raw_entries]
         primers_mtime = mtime(primers_path)
         input_mtime   = isempty(raw_mtimes) ? primers_mtime : max(primers_mtime, maximum(raw_mtimes))
 
@@ -310,15 +330,18 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
                !_section_stale(config_path, stage_sections(:cutadapt), hash_file) &&
                all(f -> mtime(joinpath(cutadapt_dir, f)) > input_mtime, trimmed) &&
                all(f -> filesize(joinpath(cutadapt_dir, f)) > 20, trimmed)
-                @info "cutadapt: skipping - trimmed reads up to date in $cutadapt_dir"
+                @info "[$lbl] Cutadapt: Skipping - trimmed reads up to date in $cutadapt_dir"
                 return TrimmedReads(cutadapt_dir)
             end
         end
-        mode = get(get(YAML.load_file(config_path), "dada2", Dict()),
-                   "file_patterns", Dict()) |> d -> get(d, "mode", "paired")
+        full_cfg  = YAML.load_file(config_path)
+        fp_cfg    = get(get(full_cfg, "dada2", Dict()), "file_patterns", Dict())
+        mode      = get(fp_cfg, "mode", "paired")
+        r1_suffix = get(get(full_cfg, "cutadapt", Dict()), "r1_suffix", "_R1")
+        r2_suffix = get(get(full_cfg, "cutadapt", Dict()), "r2_suffix", "_R2")
         mkpath(cutadapt_dir)
         run_cutadapt(get_primer_args(primer_pairs, primers_path; mode), built_args,
-                     project.data_dir, cutadapt_dir, cutadapt_bin; mode)
+                     raw_entries, cutadapt_dir, cutadapt_bin; mode, r1_suffix, r2_suffix)
         _write_section_hash(config_path, stage_sections(:cutadapt), hash_file)
         pipeline_log(project, "cutadapt complete")
         return TrimmedReads(cutadapt_dir)
@@ -342,16 +365,28 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
     - `fastqc_bin` (optional): Path to the fastqc binary. Set via `config/tools.yml`.
     - `multiqc_bin` (optional): Path to the multiqc binary. Set via `config/tools.yml`.
     """
-    function multiqc(fastq_in_dir, qc_dir;
+    # Accept a single directory (backwards-compatible).
+    function multiqc(fastq_in_dir::AbstractString, qc_dir; kwargs...)
+        multiqc([fastq_in_dir], qc_dir; kwargs...)
+    end
+
+    function multiqc(fastq_in_dirs::Vector{<:AbstractString}, qc_dir;
                      fastqc_args  = "-t 20 --extract --delete",
                      multiqc_args = "",
                      fastqc_bin   = tool_bin("fastqc"),
-                     multiqc_bin  = tool_bin("multiqc"))
+                     multiqc_bin  = tool_bin("multiqc"),
+                     force        = false)
         report = joinpath(qc_dir, "multiqc_report.html")
-        if isfile(report)
-            fastqs = filter(f -> occursin(r"\.fastq(\.gz)?$", f), readdir(fastq_in_dir))
-            if !isempty(fastqs) && all(f -> mtime(report) > mtime(joinpath(fastq_in_dir, f)), fastqs)
-                @info "MultiQC: skipping - $report up to date"
+        if !force && isfile(report)
+            all_fresh = true
+            for d in fastq_in_dirs
+                fastqs = filter(f -> occursin(r"\.fastq(\.gz)?$", f), readdir(d))
+                if isempty(fastqs) || !all(f -> mtime(report) > mtime(joinpath(d, f)), fastqs)
+                    all_fresh = false; break
+                end
+            end
+            if all_fresh
+                @info "MultiQC: Skipping - $report up to date"
                 return
             end
         end
@@ -364,30 +399,66 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         fastqc_log  = joinpath(log_dir, "fastqc.log")
         multiqc_log = joinpath(log_dir, "multiqc.log")
 
-        @info "FastQC: running on $fastq_in_dir"
-        fqc_cmd = "$fastqc_bin $fastq_in_dir/*.fastq* -o $fastqc_dir $fastqc_args"
-        _run_logged(fqc_cmd, fastqc_log)
-        @info "FastQC: complete. Output: $fastqc_dir  Log: $fastqc_log"
+        # Collect absolute paths from all input directories.
+        all_fastqs = String[]
+        for d in fastq_in_dirs
+            for f in readdir(d)
+                occursin(r"\.fastq(\.gz)?$", f) && push!(all_fastqs, joinpath(d, f))
+            end
+        end
+        sort!(all_fastqs)
 
-        @info "MultiQC: running on $fastqc_dir"
-        mqc_cmd = "$multiqc_bin $fastqc_dir -o $qc_dir $multiqc_args"
+        nfiles = length(all_fastqs)
+        if iszero(nfiles)
+            @warn "FastQC: no FASTQ files found in $(join(fastq_in_dirs, ", "))"
+            return
+        end
+        @info "FastQC: Processing $nfiles file$(nfiles == 1 ? "" : "s") across $(length(fastq_in_dirs)) dir(s)"
+        for (i, fpath) in enumerate(all_fastqs)
+            @info "FastQC: File $i/$nfiles - $(basename(fpath))"
+            fqc_cmd = "$fastqc_bin $(_sq(fpath)) -o $(_sq(fastqc_dir)) $fastqc_args"
+            _run_logged(fqc_cmd, fastqc_log; mode = i == 1 ? "w" : "a")
+        end
+        @info "FastQC: Complete. Output: $fastqc_dir  Log: $fastqc_log"
+
+        @info "MultiQC: Aggregating $nfiles report$(nfiles == 1 ? "" : "s") in $fastqc_dir"
+        mqc_cmd = "$multiqc_bin $(_sq(fastqc_dir)) -o $(_sq(qc_dir)) $multiqc_args"
         _run_logged(mqc_cmd, multiqc_log)
-        @info "MultiQC: complete. Output: $qc_dir  Log: $multiqc_log"
+        @info "MultiQC: Complete. Output: $qc_dir  Log: $multiqc_log"
     end
 
     function multiqc(project::ProjectCtx;
                      fastqc_bin  = tool_bin("fastqc"),
                      multiqc_bin = tool_bin("multiqc"))
+        lbl          = basename(project.dir)
         config_path  = write_run_config(project)
-        fqc_cfg      = get(YAML.load_file(config_path), "fastqc",  Dict())
-        mqc_cfg      = get(YAML.load_file(config_path), "multiqc", Dict())
+        cfg          = YAML.load_file(config_path)
+        fqc_cfg      = get(cfg, "fastqc",  Dict())
+        mqc_cfg      = get(cfg, "multiqc", Dict())
         threads      = get(fqc_cfg, "threads", 20)
         fastqc_args  = "-t $threads --extract --delete"
         extra_fqc    = strip(get(fqc_cfg, "optional_args", ""))
         isempty(extra_fqc) || (fastqc_args *= " $extra_fqc")
         multiqc_args = strip(get(mqc_cfg, "optional_args", ""))
-        multiqc(project.data_dir, joinpath(project.dir, "QC");
-                fastqc_args, multiqc_args, fastqc_bin, multiqc_bin)
+        qc_dir       = joinpath(project.dir, "QC")
+        hash_file    = joinpath(qc_dir, "config.hash")
+        report       = joinpath(qc_dir, "multiqc_report.html")
+
+        # Skip if report exists, config unchanged, and report newer than all raw FASTQs.
+        if isfile(report) && !_section_stale(config_path, stage_sections(:fastqc_multiqc), hash_file)
+            raw_entries = find_fastqs(project)
+            if !isempty(raw_entries) && all(e -> mtime(report) > mtime(e.path), raw_entries)
+                @info "[$lbl] MultiQC: Skipping - $report up to date"
+                return
+            end
+        end
+
+        # Pass force=true so the lower-level mtime guard doesn't override this decision.
+        # When pooling children, run FastQC across all data_dirs.
+        multiqc(project.data_dirs, qc_dir;
+                fastqc_args, multiqc_args, fastqc_bin, multiqc_bin, force=true)
+        _write_section_hash(config_path, stage_sections(:fastqc_multiqc), hash_file)
+        pipeline_log(project, "FastQC/MultiQC complete")
     end
 
     ## vsearch
@@ -411,12 +482,12 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         mkpath(log_dir)
         outfile  = joinpath(vsearch_dir, "taxonomy.tsv")
         log_path = joinpath(log_dir, "vsearch.log")
-        @info "VSEARCH: running $fasta_in_dir against $(basename(reference_database))"
+        @info "VSEARCH: Running $fasta_in_dir against $(basename(reference_database))"
         # --userout with query+target+id captures the full FASTA header (including
         # description after the space), unlike --blast6out which truncates at the first space.
-        cmd = "$vsearch_bin --usearch_global $fasta_in_dir --db $reference_database --userout $outfile --userfields query+target+id $optional_args"
+        cmd = "$vsearch_bin --usearch_global $(_sq(fasta_in_dir)) --db $(_sq(reference_database)) --userout $(_sq(outfile)) --userfields query+target+id $optional_args"
         _run_logged(cmd, log_path)
-        @info "VSEARCH: complete. Output: $outfile  Log: $log_path"
+        @info "VSEARCH: Complete. Output: $outfile  Log: $log_path"
     end
 
     function vsearch(input::HasFasta, reference_database::String, vsearch_dir::String;
@@ -424,7 +495,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
                      vsearch_bin   = tool_bin("vsearch"))
         tsv = joinpath(vsearch_dir, "taxonomy.tsv")
         if isfile(tsv) && mtime(tsv) > mtime(input.fasta)
-            @info "VSEARCH: skipping - $tsv up to date"
+            @info "VSEARCH: Skipping - $tsv up to date"
             return TaxonomyHits(tsv)
         end
         vsearch(input.fasta, reference_database, vsearch_dir;
@@ -438,6 +509,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
 
     function vsearch(project::ProjectCtx, input::HasFasta, reference_database::String;
                      vsearch_bin = tool_bin("vsearch"))
+        lbl         = basename(project.dir)
         config_path = write_run_config(project)
         cfg         = get(YAML.load_file(config_path), "vsearch", Dict())
         built_args  = _vsearch_args(cfg)
@@ -447,7 +519,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         if isfile(tsv) &&
            !_section_stale(config_path, stage_sections(:vsearch), hash_file) &&
            mtime(tsv) > mtime(input.fasta)
-            @info "VSEARCH: skipping - $tsv up to date"
+            @info "[$lbl] VSEARCH: Skipping - $tsv up to date"
             return TaxonomyHits(tsv)
         end
         vsearch(input.fasta, reference_database, vsearch_dir; optional_args=built_args, vsearch_bin)
@@ -478,10 +550,10 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         mkpath(log_dir)
         fasta_out = joinpath(cdhit_dir, basename(fasta_in))
         log_path  = joinpath(log_dir, "cdhit.log")
-        @info "cd-hit-est: running on $fasta_in"
-        cmd = "$cdhit_bin -i $fasta_in -o $fasta_out $optional_args"
+        @info "CD-HIT: Running on $fasta_in"
+        cmd = "$cdhit_bin -i $(_sq(fasta_in)) -o $(_sq(fasta_out)) $optional_args"
         _run_logged(cmd, log_path)
-        @info "cd-hit-est: complete. Output: $fasta_out  Log: $log_path"
+        @info "CD-HIT: Complete. Output: $fasta_out  Log: $log_path"
         return fasta_out
     end
 
@@ -490,7 +562,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
                    cdhit_bin     = tool_bin("cd_hit_est"))
         new_fasta = joinpath(cdhit_dir, basename(input.fasta))
         if isfile(new_fasta) && mtime(new_fasta) > mtime(input.fasta)
-            @info "cd-hit-est: skipping - $new_fasta up to date"
+            @info "CD-HIT: Skipping - $new_fasta up to date"
             return ASVResult(new_fasta, input.count_table, input.taxonomy)
         end
         new_fasta = cdhit(input.fasta, cdhit_dir; optional_args, cdhit_bin)
@@ -499,6 +571,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
 
     function cdhit(project::ProjectCtx, input::ASVResult;
                    cdhit_bin = tool_bin("cd_hit_est"))
+        lbl         = basename(project.dir)
         config_path = write_run_config(project)
         cfg         = get(YAML.load_file(config_path), "cdhit", Dict())
         built_args  = _cdhit_args(cfg)
@@ -508,7 +581,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin
         if isfile(new_fasta) &&
            !_section_stale(config_path, stage_sections(:cdhit), hash_file) &&
            mtime(new_fasta) > mtime(input.fasta)
-            @info "cd-hit-est: skipping - $new_fasta up to date"
+            @info "[$lbl] CD-HIT: Skipping - $new_fasta up to date"
             return ASVResult(new_fasta, input.count_table, input.taxonomy)
         end
         new_fasta = cdhit(input.fasta, cdhit_dir; optional_args=built_args, cdhit_bin)

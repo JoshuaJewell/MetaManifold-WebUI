@@ -6,11 +6,10 @@ module TaxonomyTableTools
 
 using CSV, DataFrames, Logging, YAML
 using ..PipelineTypes
-using ..PipelineGraph
 using ..PipelineLog
 using ..Config
 
-export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merge_taxa_otu
+export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merge_taxa_otu, merge_taxa_dada2_only
 
     # Import vsearch taxonomy
     function import_vsearch(file::AbstractString)
@@ -111,7 +110,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         db_meta::DatabaseMeta;
         bootstraps_path=nothing)
         
-        @info("merge_taxa: merging taxonomy counts.")
+        @info("Merge taxa: Merging taxonomy counts.")
 
         # build taxonomy dataframe - FIXED VERSION
         imported = import_vsearch(taxonomy_vsearch_path)
@@ -207,7 +206,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             boot_cols = filter(c -> c == "SeqName" || endswith(c, "_boot"), names(df_boot))
             select!(df_boot, boot_cols)
             merged_df = leftjoin(merged_df, df_boot, on="SeqName")
-            @info "merge_taxa: joined $(length(boot_cols)-1) bootstrap columns from $bootstraps_path"
+            @info "Merge taxa: Joined $(length(boot_cols)-1) bootstrap columns from $bootstraps_path"
         end
 
         # Fill NA/missing values at lower ranks with parent_X convention.
@@ -251,7 +250,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             end
         end
 
-        @info "merge_taxa: merge complete. $(nrow(merged_df)) rows."
+        @info "Merge taxa: Merge complete. $(nrow(merged_df)) rows."
 
         return merged_df
     end
@@ -292,7 +291,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             ]
         elseif !isempty(m)
             missing_cols = filter(c -> c ∉ names(df), [src_col, tgt_col])
-            @warn "merge_taxa: column remapping skipped - $(join(missing_cols, ", ")) not in data. " *
+            @warn "Merge taxa: Column remapping skipped - $(join(missing_cols, ", ")) not in data. " *
                   "Available: $(join(names(df), ", "))"
         end
     end
@@ -319,7 +318,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         config = YAML.load_file(filters_yaml_path)
         df = deepcopy(merged_df)
 
-        @info "merge_taxa: filtering table using configuration from $filters_yaml_path"
+        @info "Merge taxa: Filtering table using configuration from $filters_yaml_path"
 
         # mappings (auto-detect old vs new format)
         _apply_mappings!(df, get(config, "mappings", Dict()))
@@ -342,7 +341,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
                     lowercase(strip(string(row[col]))) != "blank",
                     df)
             else
-                @warn "merge_taxa: remove_empty - column '$col' not in data. Available: $(join(names(df), ", "))"
+                @warn "Merge taxa: remove_empty - column '$col' not in data. Available: $(join(names(df), ", "))"
             end
         end
 
@@ -358,7 +357,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             use_regex = get(item, "regex", false) == true
 
             if !(colname in names(df))
-                @warn "merge_taxa: skipping filter - column '$colname' not present in data. " *
+                @warn "Merge taxa: Skipping filter - column '$colname' not present in data. " *
                       "Available: $(join(names(df), ", "))"
                 continue
             end
@@ -373,7 +372,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             end
         end
 
-        @info "merge_taxa: filtering complete. $(nrow(df))/$(nrow(merged_df)) rows retained."
+        @info "Merge taxa: Filtering complete. $(nrow(df))/$(nrow(merged_df)) rows retained."
 
         return df
     end
@@ -445,9 +444,8 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
 
     function merge_taxa(project::ProjectCtx, source::ASVResult, tax::TaxonomyHits,
                         db_meta::DatabaseMeta)
+        lbl         = basename(project.dir)
         config_path = write_run_config(project)
-        cfg         = get(YAML.load_file(config_path), stage_sections(:merge_taxa), Dict())
-        filter_list = get(cfg, "filters", [nothing])
         merge_dir   = joinpath(project.dir, "merged")
         hash_file   = joinpath(merge_dir, "config.hash")
 
@@ -460,143 +458,43 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         config_changed = _section_stale(config_path, stage_sections(:merge_taxa), hash_file)
         merged_csv     = joinpath(merge_dir, "merged.csv")
 
-        # Determine what needs to be (re-)computed.
-        need_base     = config_changed || !isfile(merged_csv) || mtime(merged_csv) <= data_mtime
-        stale_filters = Pair{String,String}[]  # stem => filter_path
-        tables        = Dict{String,String}("merged" => merged_csv)
+        tables = Dict{String,String}("merged" => merged_csv)
 
-        filter_colours = Dict{String,String}()
-        # Pre-compute applicable filter stems (respecting per-filter database restrictions).
-        filter_stems = String[]
-        for e in filter_list
-            isnothing(e) && continue
-            fp = joinpath(project.config_dir, "filters", string(e))
-            if isfile(fp)
-                allowed = get(YAML.load_file(fp), "databases", nothing)
-                isnothing(allowed) || db_meta.name ∈ string.(allowed) || continue
-            end
-            push!(filter_stems, splitext(string(e))[1])
-        end
-
-        for entry in filter_list
-            isnothing(entry) && continue
-            filter_name  = string(entry)
-            filter_path  = joinpath(project.config_dir, "filters", filter_name)
-            stem         = splitext(filter_name)[1]
-            output_csv   = joinpath(merge_dir, stem * ".csv")
-
-            # Skip filters that declare a databases list not including the active DB.
-            if isfile(filter_path)
-                fcfg = YAML.load_file(filter_path)
-                allowed_dbs = get(fcfg, "databases", nothing)
-                if !isnothing(allowed_dbs) && db_meta.name ∉ string.(allowed_dbs)
-                    @info "merge_taxa: skipping filter '$stem': not applicable to database '$(db_meta.name)'"
-                    continue
-                end
-                if haskey(fcfg, "colour")
-                    filter_colours[stem] = string(fcfg["colour"])
-                end
-            end
-
-            tables[stem] = output_csv
-            # Pre-populate the DADA2-filtered path so it is always present in the
-            # returned MergedTables, even when the function returns early via the
-            # skip guard below (the CSV may already exist from a previous run).
-            tables[stem * "_dada2"] = joinpath(merge_dir, stem * "_dada2" * ".csv")
-
-            if config_changed || !isfile(output_csv) ||
-               mtime(output_csv) <= max(data_mtime, mtime(filter_path))
-                push!(stale_filters, stem => filter_path)
-            else
-                @info "merge_taxa: skipping filter '$stem': $output_csv up to date"
-            end
-        end
-
-        if !need_base && isempty(stale_filters)
-            @info "Skipping merge_taxa: all outputs up to date in $merge_dir"
-            return MergedTables(tables, filter_stems, filter_colours)
+        if !config_changed && isfile(merged_csv) && mtime(merged_csv) > data_mtime
+            @info "[$lbl] Merge taxa: Skipping - $merged_csv up to date"
+            return MergedTables(tables)
         end
 
         mkpath(merge_dir)
         counts_path = (isfile(tax_counts_path) && filesize(tax_counts_path) > 0) ?
                       tax_counts_path : source.taxonomy
         tables_dir = dirname(source.taxonomy)
-        tax_prefix = splitext(basename(source.taxonomy))[1]   # e.g. "taxonomy"
+        tax_prefix = splitext(basename(source.taxonomy))[1]
         boot_path  = joinpath(tables_dir, tax_prefix * "_bootstraps.csv")
-        df = need_base ? merge_taxonomy_counts(tax.tsv, counts_path, db_meta;
-                             bootstraps_path=boot_path) :
-                         CSV.read(merged_csv, DataFrame)
+        df = merge_taxonomy_counts(tax.tsv, counts_path, db_meta;
+                                   bootstraps_path=boot_path)
 
-        if need_base
-            CSV.write(merged_csv, df)
-            @info "merge_taxa: written $merged_csv"
-            pipeline_log(project, "Merge complete. $(nrow(df)) ASVs.")
-            log_written(project, merged_csv)
-        end
-
-        for (stem, filter_path) in stale_filters
-            output_csv = tables[stem]
-            filtered = filter_table(df, filter_path)
-            CSV.write(output_csv, filtered)
-            @info "merge_taxa: written $output_csv"
-            pipeline_log(project, "Filter '$stem': $(nrow(filtered))/$(nrow(df)) rows retained.")
-            log_written(project, output_csv)
-        end
-
-        # DADA2 filtered CSVs (same filters, applied to _dada2 columns)
-        # Check whether any _dada2 taxonomy columns exist before attempting.
-        has_dada2 = any(endswith(c, "_dada2") for c in names(df)
-                        if any(startswith(c, t) for t in db_meta.levels))
-
-        if has_dada2
-            for entry in filter_list
-                isnothing(entry) && continue
-                filter_name  = string(entry)
-                filter_path  = joinpath(project.config_dir, "filters", filter_name)
-                stem         = splitext(filter_name)[1]
-                dada2_stem   = stem * "_dada2"
-                output_csv   = joinpath(merge_dir, dada2_stem * ".csv")
-
-                # Skip filters that declare a databases list not including the active DB.
-                if isfile(filter_path)
-                    allowed_dbs = get(YAML.load_file(filter_path), "databases", nothing)
-                    if !isnothing(allowed_dbs) && db_meta.name ∉ string.(allowed_dbs)
-                        @info "merge_taxa: skipping DADA2 filter '$stem' - not applicable to database '$(db_meta.name)'"
-                        continue
-                    end
-                end
-
-                if !config_changed && isfile(output_csv) &&
-                   mtime(output_csv) > max(data_mtime, mtime(filter_path))
-                    @info "merge_taxa: skipping DADA2 filter '$stem' - $output_csv up to date"
-                    continue
-                end
-
-                filtered = filter_table_dada2(df, filter_path, db_meta.levels)
-                CSV.write(output_csv, filtered)
-                @info "merge_taxa: written $output_csv (DADA2 filter)"
-                pipeline_log(project, "Filter '$stem' (DADA2): $(nrow(filtered))/$(nrow(df)) rows retained.")
-                log_written(project, output_csv)
-            end
-        end
+        CSV.write(merged_csv, df)
+        @info "Merge taxa: Written $merged_csv"
+        pipeline_log(project, "Merge complete. $(nrow(df)) ASVs.")
+        log_written(project, merged_csv)
 
         _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file)
-        return MergedTables(tables, filter_stems, filter_colours)
+        return MergedTables(tables)
     end
 
     """
         merge_taxa_otu(project, source, tax, db_meta) -> MergedTables
 
     OTU variant of merge_taxa. Joins vsearch taxonomy hits with the SWARM OTU count
-    table to produce `merged_otu.csv` plus per-filter `{stem}_otu.csv` files under
-    `{project.dir}/merged/`. All table keys in the returned MergedTables carry an
-    `_otu` suffix so they can be combined with ASV results without collision.
+    table to produce `merged_otu.csv` under `{project.dir}/merged/`.
+    The table key carries an `_otu` suffix so it can be combined with ASV results
+    without collision.
     """
     function merge_taxa_otu(project::ProjectCtx, source::OTUResult, tax::TaxonomyHits,
                             db_meta::DatabaseMeta)
+        lbl         = basename(project.dir)
         config_path = write_run_config(project)
-        cfg         = get(YAML.load_file(config_path), stage_sections(:merge_taxa), Dict())
-        filter_list = get(cfg, "filters", [nothing])
         merge_dir   = joinpath(project.dir, "merged")
         hash_file   = joinpath(merge_dir, "config_otu.hash")
 
@@ -604,80 +502,92 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         config_changed = _section_stale(config_path, stage_sections(:merge_taxa), hash_file)
         merged_csv     = joinpath(merge_dir, "merged_otu.csv")
 
-        need_base     = config_changed || !isfile(merged_csv) || mtime(merged_csv) <= data_mtime
-        stale_filters = Pair{String,String}[]
-        tables        = Dict{String,String}("merged_otu" => merged_csv)
+        tables = Dict{String,String}("merged_otu" => merged_csv)
 
-        filter_colours = Dict{String,String}()
-        filter_stems   = String[]
-        for e in filter_list
-            isnothing(e) && continue
-            fp = joinpath(project.config_dir, "filters", string(e))
-            if isfile(fp)
-                allowed = get(YAML.load_file(fp), "databases", nothing)
-                isnothing(allowed) || db_meta.name ∈ string.(allowed) || continue
-            end
-            push!(filter_stems, splitext(string(e))[1])
-        end
-
-        for entry in filter_list
-            isnothing(entry) && continue
-            filter_name = string(entry)
-            filter_path = joinpath(project.config_dir, "filters", filter_name)
-            stem        = splitext(filter_name)[1]
-            otu_stem    = stem * "_otu"
-            output_csv  = joinpath(merge_dir, otu_stem * ".csv")
-
-            if isfile(filter_path)
-                fcfg        = YAML.load_file(filter_path)
-                allowed_dbs = get(fcfg, "databases", nothing)
-                if !isnothing(allowed_dbs) && db_meta.name ∉ string.(allowed_dbs)
-                    @info "merge_taxa: skipping OTU filter '$stem' - not applicable to database '$(db_meta.name)'"
-                    continue
-                end
-                if haskey(fcfg, "colour")
-                    filter_colours[otu_stem] = string(fcfg["colour"])
-                end
-            end
-
-            tables[otu_stem] = output_csv
-            if config_changed || !isfile(output_csv) ||
-               mtime(output_csv) <= max(data_mtime, mtime(filter_path))
-                push!(stale_filters, otu_stem => filter_path)
-            else
-                @info "merge_taxa: skipping OTU filter '$stem' - $output_csv up to date"
-            end
-        end
-
-        otu_filter_stems = [s * "_otu" for s in filter_stems]
-
-        if !need_base && isempty(stale_filters)
-            @info "merge_taxa (OTU): skipping - all outputs up to date in $merge_dir"
-            return MergedTables(tables, otu_filter_stems, filter_colours)
+        if !config_changed && isfile(merged_csv) && mtime(merged_csv) > data_mtime
+            @info "[$lbl] Merge taxa (OTU): Skipping - $merged_csv up to date"
+            return MergedTables(tables)
         end
 
         mkpath(merge_dir)
-        df = need_base ? merge_taxonomy_counts(tax.tsv, source.count_table, db_meta) :
-                         CSV.read(merged_csv, DataFrame)
+        df = merge_taxonomy_counts(tax.tsv, source.count_table, db_meta)
 
-        if need_base
-            CSV.write(merged_csv, df)
-            @info "merge_taxa: written $merged_csv"
-            pipeline_log(project, "OTU merge complete. $(nrow(df)) OTUs.")
-            log_written(project, merged_csv)
-        end
-
-        for (otu_stem, filter_path) in stale_filters
-            output_csv = tables[otu_stem]
-            filtered   = filter_table(df, filter_path)
-            CSV.write(output_csv, filtered)
-            @info "merge_taxa: written $output_csv"
-            pipeline_log(project, "OTU filter '$(otu_stem)': $(nrow(filtered))/$(nrow(df)) rows retained.")
-            log_written(project, output_csv)
-        end
+        CSV.write(merged_csv, df)
+        @info "Merge taxa: Written $merged_csv"
+        pipeline_log(project, "OTU merge complete. $(nrow(df)) OTUs.")
+        log_written(project, merged_csv)
 
         _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file)
-        return MergedTables(tables, otu_filter_stems, filter_colours)
+        return MergedTables(tables)
+    end
+
+    """
+        merge_taxa_dada2_only(project, source, db_meta) -> MergedTables
+
+    VSEARCH-free variant of merge_taxa. Builds `merged.csv` from DADA2 output alone:
+    - If `tax_counts.csv` exists and is non-empty, it already contains taxonomy + counts.
+    - Otherwise falls back to `seqtab_nochim.csv` (counts only - classify was also disabled).
+
+    Used when `vsearch.enabled = false`.
+    """
+    function merge_taxa_dada2_only(project::ProjectCtx, source::ASVResult,
+                                   db_meta::DatabaseMeta)
+        lbl         = basename(project.dir)
+        config_path = write_run_config(project)
+        merge_dir   = joinpath(project.dir, "merged")
+        hash_file   = joinpath(merge_dir, "config.hash")
+        merged_csv  = joinpath(merge_dir, "merged.csv")
+
+        tax_counts_path = joinpath(dirname(source.taxonomy), "tax_counts.csv")
+        counts_path = (isfile(tax_counts_path) && filesize(tax_counts_path) > 0) ?
+                      tax_counts_path : source.count_table
+
+        data_mtime = max(
+            isfile(source.taxonomy)    ? mtime(source.taxonomy)    : 0.0,
+            isfile(source.count_table) ? mtime(source.count_table) : 0.0,
+            isfile(tax_counts_path)    ? mtime(tax_counts_path)    : 0.0,
+        )
+        config_changed = _section_stale(config_path,
+                                        stage_sections(:merge_taxa), hash_file)
+
+        tables = Dict{String,String}("merged" => merged_csv)
+
+        if !config_changed && isfile(merged_csv) && mtime(merged_csv) > data_mtime
+            @info "[$lbl] Merge taxa (DADA2 only): Skipping - $merged_csv up to date"
+            return MergedTables(tables)
+        end
+
+        isfile(counts_path) ||
+            error("merge_taxa_dada2_only: no DADA2 count table found at $counts_path")
+
+        mkpath(merge_dir)
+
+        df = CSV.read(counts_path, DataFrame)
+
+        # Strip FASTQ suffixes from sample column names
+        rename!(df, [
+            col => replace(col, r"_R[12]_filt\.fastq\.gz$" => "")
+            for col in names(df)
+            if occursin(r"_R[12]_filt\.fastq\.gz$", col)
+        ])
+
+        # Ensure SeqName column exists (seqtab_nochim uses the first column as seq ids)
+        if "SeqName" ∉ names(df)
+            first_col = names(df)[1]
+            if all(v -> !ismissing(v) && occursin(r"^seq\d+$", string(v)), df[!, first_col])
+                rename!(df, first_col => "SeqName")
+            end
+        end
+
+        "SeqName" in names(df) && sort!(df, "SeqName", by=seqnum)
+
+        CSV.write(merged_csv, df)
+        @info "[$lbl] Merge taxa (DADA2 only): Written $merged_csv ($(nrow(df)) rows)"
+        pipeline_log(project, "Merge complete (DADA2 only). $(nrow(df)) ASVs.")
+        log_written(project, merged_csv)
+
+        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file)
+        return MergedTables(tables)
     end
 
 end

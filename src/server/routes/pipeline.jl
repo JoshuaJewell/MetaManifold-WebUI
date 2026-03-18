@@ -7,131 +7,266 @@
 # any config changes made in the UI are picked up before execution. The
 # existing checkpoint/hash logic then skips stages whose inputs are unchanged.
 
-using JSON3
+using JSON3, RCall
 
-const _r_lock    = ReentrantLock()
-const _plot_lock = ReentrantLock()
+const _r_lock = ReentrantLock()
 
 ## Stage execution helpers
+function _with_r_lock(action::Function, run_label::String, steps::AbstractVector{<:AbstractString}=String[];
+                      reset_workspace::Bool=true)
+    suffix = isempty(steps) ? "" : " (" * join(steps, " -> ") * ")"
+    @info "[$run_label] DADA2: Waiting for R lock$suffix..."
+    lock(_r_lock) do
+        @info "[$run_label] DADA2: R lock acquired"
+        R"tryCatch({ while(sink.number() > 0) { sink(type='message'); sink() } }, error=function(e) NULL)"
+        reset_workspace && R"rm(list=ls())"
+        action()
+    end
+end
 
-function _project_ctx(study::String, run::String)
-    projects = new_project(run;
-                           data_dir     = joinpath(ServerState.data_dir(), study),
-                           projects_dir = joinpath(ServerState.projects_dir(), study),
-                           config_dir   = joinpath(dirname(ServerState.data_dir()), "config"))
-    first(projects)
+function _project_ctx(study::String, run::String,
+                      group::Union{String,Nothing}=nothing)
+    resolved  = isnothing(group) ? _run_group(study, run) : group
+    data_rel  = isnothing(resolved) ? run : joinpath(resolved, run)
+    config_dir  = joinpath(dirname(ServerState.data_dir()), "config")
+    project_dir = joinpath(ServerState.projects_dir(), study, data_rel)
+    data_dir    = joinpath(ServerState.data_dir(), study, data_rel)
+    mkpath(project_dir)
+
+    # When pool_children is set, collect child FASTQ directories.
+    if _is_pooled(data_dir)
+        child_dirs = String[]
+        for (child, _, child_files) in walkdir(data_dir; follow_symlinks=true)
+            child == data_dir && continue
+            any(f -> endswith(f, ".fastq.gz"), child_files) && push!(child_dirs, child)
+        end
+        data_dirs = isempty(child_dirs) ? [data_dir] : child_dirs
+    else
+        data_dirs = [data_dir]
+    end
+
+    ProjectCtx(project_dir, config_dir, data_dir,
+               joinpath(ServerState.projects_dir(), study),
+               joinpath(ServerState.data_dir(), study),
+               data_dirs)
 end
 
 function _run_full_pipeline(study::String, run::String, db_config::String,
-                             dbs::Dict, db_name::String)
-    project  = _project_ctx(study, run)
+                             dbs::Dict, db_name::String;
+                             group::Union{String,Nothing}=nothing)
+    project  = _project_ctx(study, run, group)
     db_meta  = make_db_meta(db_config, db_name)
     trimmed  = cutadapt(project)
 
-    dada2_task = Threads.@spawn begin
-        asvs = lock(_r_lock) do
-            dada2(project, trimmed, taxonomy_db=dbs["$(db_name)_dada2"])
-        end
-        cdhit(project, asvs)
+    run_cfg          = YAML.load_file(write_run_config(project))
+    classify_enabled = get(get(get(run_cfg, "dada2", Dict()), "taxonomy", Dict()), "enabled", true) != false
+    vsearch_enabled  = get(get(run_cfg, "vsearch", Dict()), "enabled", true) != false
+    swarm_enabled    = get(get(run_cfg, "swarm",   Dict()), "enabled", true) != false
+
+    run_label = isnothing(group) ? run : "$group/$run"
+    asvs = _with_r_lock(run_label) do
+        dada2(project, trimmed;
+              taxonomy_db=classify_enabled ? dbs["$(db_name)_dada2"] : nothing,
+              skip_taxonomy=!classify_enabled)
     end
-    swarm_task = Threads.@spawn swarm(project, trimmed)
+    @info "[$run_label] DADA2: Complete"
+    if get(get(run_cfg, "cdhit", Dict()), "enabled", false) == true
+        asvs = cdhit(project, asvs)
+    end
 
-    asvs = fetch(dada2_task)
-    otus = fetch(swarm_task)
+    otus = swarm_enabled ? swarm(project, asvs) : nothing
 
-    asv_tax_task = Threads.@spawn vsearch(project, asvs, dbs["$(db_name)_vsearch"])
-    otu_tax_task = isnothing(otus) ? nothing :
-                  Threads.@spawn vsearch(project, otus, dbs["$(db_name)_vsearch"])
+    # VSEARCH: run ASV and OTU paths concurrently when both are needed
+    asv_tax_task = vsearch_enabled ?
+        Threads.@spawn(vsearch(project, asvs, dbs["$(db_name)_vsearch"])) : nothing
+    otu_tax_task = (swarm_enabled && !isnothing(otus) && vsearch_enabled) ?
+        Threads.@spawn(vsearch(project, otus,  dbs["$(db_name)_vsearch"])) : nothing
 
-    asv_tax   = fetch(asv_tax_task)
-    asv_merged = merge_taxa(project, asvs, asv_tax, db_meta)
+    asv_tax    = isnothing(asv_tax_task) ? nothing : fetch(asv_tax_task)
+    asv_merged = _merge_taxa_routed(project, asvs, asv_tax, db_meta; vsearch_enabled)
 
-    merged = if !isnothing(otus)
+    merged = if !isnothing(otu_tax_task)
         otu_tax    = fetch(otu_tax_task)
         otu_merged = merge_taxa_otu(project, otus, otu_tax, db_meta)
-        MergedTables(merge(asv_merged.tables, otu_merged.tables),
-                     asv_merged.filter_order, asv_merged.filter_colours)
+        MergedTables(merge(asv_merged.tables, otu_merged.tables))
     else
         asv_merged
     end
 
-    analyse_run(project, merged, asvs, db_meta; plot_lock=_plot_lock)
+    # Load results into DuckDB
+    swarm_dir = joinpath(project.dir, "swarm")
+    load_results_db(joinpath(project.dir, "merged");
+                    swarm_dir = isdir(swarm_dir) ? swarm_dir : nothing)
+
+    GC.gc(false)
     merged
 end
 
-function _run_stage(study::String, run::String, stage::String,
-                    db_config::String, dbs::Dict, db_name::String)
-    project = _project_ctx(study, run)
-    db_meta = make_db_meta(db_config, db_name)
+# Canonical pipeline order. Every stage run executes from cutadapt through to
+# the target so that skip guards validate all inputs.
+const _PIPELINE_ORDER = [
+    "cutadapt",
+    "prefilter_qc", "filter_trim", "learn_errors", "denoise",
+    "filter_length", "chimera_removal",
+    "assign_taxonomy",
+    "cdhit", "swarm", "vsearch", "merge_taxa",
+]
 
-    if stage == "cutadapt"
+# Coarse UI stages map to the last sub-stage they contain
+const _STAGE_STOP = Dict(
+    "dada2_denoise"  => "chimera_removal",
+    "dada2_classify" => "assign_taxonomy",
+)
+
+function _run_stage(study::String, run::String, stage::String,
+                    db_config::String, dbs::Dict, db_name::String;
+                    group::Union{String,Nothing}=nothing)
+    project = _project_ctx(study, run, group)
+
+    # Independent stages: run directly without entering the cascade pipeline.
+    if stage == "fastqc"
+        write_run_config(project)
+        multiqc(project)
+        GC.gc(false)
+        return
+    end
+
+    db_meta     = make_db_meta(db_config, db_name)
+    run_dir     = project.dir
+    config_path = write_run_config(project)
+    input_dir   = joinpath(run_dir, "cutadapt")
+    ws_root     = joinpath(run_dir, "dada2")
+
+    target = get(_STAGE_STOP, stage, stage)
+    target_idx = findfirst(==(target), _PIPELINE_ORDER)
+    isnothing(target_idx) && error("Unknown stage: $stage")
+
+    steps = _PIPELINE_ORDER[1:target_idx]
+
+    # cutadapt (no R)
+    if "cutadapt" in steps
         cutadapt(project)
-    elseif stage == "dada2_denoise"
-        trimmed = TrimmedReads(joinpath(ServerState.projects_dir(), study, run, "cutadapt"))
-        lock(_r_lock) do
-            dada2_denoise(project, trimmed)
+    end
+
+    # DADA2 sub-stages share R state - run under a single lock
+    dada2_steps = filter(s -> s in ("prefilter_qc", "filter_trim", "learn_errors",
+                                    "denoise", "filter_length", "chimera_removal",
+                                    "assign_taxonomy"), steps)
+    if !isempty(dada2_steps)
+        _with_r_lock(basename(run_dir), dada2_steps) do
+            for step in dada2_steps
+                if step == "assign_taxonomy"
+                    assign_taxonomy(config_path; input_dir, workspace_root=ws_root,
+                                    taxonomy_db=dbs["$(db_name)_dada2"])
+                    R"rm(list=ls()); gc()"
+                else
+                    fn = getfield(DADA2, Symbol(step))
+                    fn(config_path; input_dir, workspace_root=ws_root)
+                    R"gc()"
+                end
+            end
         end
-    elseif stage == "dada2_classify"
-        trimmed  = TrimmedReads(joinpath(ServerState.projects_dir(), study, run, "cutadapt"))
-        denoised = DenoisedASVs(
-            joinpath(ServerState.projects_dir(), study, run, "dada2", "Checkpoints", "ckpt_chimera.RData"),
-            write_run_config(project),
-            joinpath(ServerState.projects_dir(), study, run, "dada2"),
-            trimmed.dir)
-        lock(_r_lock) do
-            dada2_classify(project, denoised; taxonomy_db=dbs["$(db_name)_dada2"])
+    end
+
+    # Post-DADA2 stages (no R)
+    run_cfg         = YAML.load_file(config_path)
+    vsearch_enabled = get(get(run_cfg, "vsearch", Dict()), "enabled", true) != false
+    swarm_enabled   = get(get(run_cfg, "swarm",   Dict()), "enabled", true) != false
+    for step in steps
+        if step == "cdhit"
+            if get(get(run_cfg, "cdhit", Dict()), "enabled", false) == true
+                asvs = _asvresult_from_disk(run_dir)
+                cdhit(project, asvs)
+            end
+        elseif step == "swarm"
+            if swarm_enabled
+                asvs = _asvresult_from_disk(run_dir)
+                swarm(project, asvs)
+            end
+        elseif step == "vsearch"
+            if vsearch_enabled
+                asvs = _asvresult_from_disk(run_dir)
+                vsearch(project, asvs, dbs["$(db_name)_vsearch"])
+                otus = _oturesult_from_disk(run_dir)
+                if !isnothing(otus) && swarm_enabled
+                    vsearch(project, otus, dbs["$(db_name)_vsearch"])
+                end
+            end
+            asvs = _asvresult_from_disk(run_dir)
+            otus = swarm_enabled ? _oturesult_from_disk(run_dir) : nothing
+            _run_merge_taxa(project, asvs, otus, db_meta)
+        elseif step == "merge_taxa"
+            asvs = _asvresult_from_disk(run_dir)
+            otus = swarm_enabled ? _oturesult_from_disk(run_dir) : nothing
+            _run_merge_taxa(project, asvs, otus, db_meta)
         end
-    elseif stage == "swarm"
-        trimmed = TrimmedReads(joinpath(ServerState.projects_dir(), study, run, "cutadapt"))
-        swarm(project, trimmed)
-    elseif stage == "cdhit"
-        asvs = _asvresult_from_disk(study, run)
-        cdhit(project, asvs)
-    elseif stage == "vsearch_asv"
-        asvs = _asvresult_from_disk(study, run)
-        vsearch(project, asvs, dbs["$(db_name)_vsearch"])
-    elseif stage == "vsearch_otu"
-        otus = _oturesult_from_disk(study, run)
-        isnothing(otus) && error("swarm output not found - run swarm first")
-        vsearch(project, otus, dbs["$(db_name)_vsearch"])
-    elseif stage == "merge_taxa"
-        asvs    = _asvresult_from_disk(study, run)
-        asv_tax = TaxonomyHits(joinpath(ServerState.projects_dir(), study, run, "vsearch", "asv_hits.tsv"))
+    end
+    GC.gc(false)
+end
+
+## Merge taxa helpers
+# Route to the correct merge_taxa variant based on available vsearch output.
+function _merge_taxa_routed(project, asvs, asv_tax, db_meta; vsearch_enabled::Bool=true)
+    if vsearch_enabled && !isnothing(asv_tax)
         merge_taxa(project, asvs, asv_tax, db_meta)
-    elseif stage == "analyse_run"
-        asvs   = _asvresult_from_disk(study, run)
-        merged = _mergedtables_from_disk(study, run)
-        analyse_run(project, merged, asvs, db_meta; plot_lock=_plot_lock)
     else
-        error("Unknown stage: $stage")
+        merge_taxa_dada2_only(project, asvs, db_meta)
     end
 end
 
-## Disk reconstruction helpers
+# Called after vsearch (or merge_taxa) stage runs. Reads enabled flags from
+# run_config.yml and uses whichever inputs are available.
+function _run_merge_taxa(project, asvs, otus, db_meta)
+    run_dir     = project.dir
+    config_path = joinpath(run_dir, "run_config.yml")
+    run_cfg     = isfile(config_path) ? YAML.load_file(config_path) : Dict()
+    vsearch_enabled = get(get(run_cfg, "vsearch", Dict()), "enabled", true) != false
 
-function _asvresult_from_disk(study::String, run::String)
-    t = joinpath(ServerState.projects_dir(), study, run, "dada2", "Tables")
-    ASVResult(joinpath(t, "asvs.fasta"),
+    asv_tax_path = joinpath(run_dir, "vsearch", "taxonomy.tsv")
+    asv_tax      = (vsearch_enabled && isfile(asv_tax_path)) ?
+                   TaxonomyHits(asv_tax_path) : nothing
+    asv_merged   = _merge_taxa_routed(project, asvs, asv_tax, db_meta; vsearch_enabled)
+
+    if !isnothing(otus)
+        otu_tax_path = joinpath(run_dir, "swarm", "vsearch", "taxonomy.tsv")
+        if vsearch_enabled && isfile(otu_tax_path)
+            merge_taxa_otu(project, otus, TaxonomyHits(otu_tax_path), db_meta)
+        end
+    end
+
+    swarm_dir = joinpath(run_dir, "swarm")
+    load_results_db(joinpath(run_dir, "merged");
+                    swarm_dir = isdir(swarm_dir) ? swarm_dir : nothing)
+    asv_merged
+end
+
+## Disk reconstruction helpers
+function _asvresult_from_disk(run_dir::String)
+    t = joinpath(run_dir, "dada2", "Tables")
+    # Prefer CD-HIT output if it exists (CD-HIT runs after DADA2)
+    cdhit_fasta = joinpath(run_dir, "cdhit", "asvs.fasta")
+    fasta = isfile(cdhit_fasta) ? cdhit_fasta : joinpath(t, "asvs.fasta")
+    ASVResult(fasta,
               joinpath(t, "seqtab_nochim.csv"),
               joinpath(t, "taxonomy.csv"))
 end
 
-function _oturesult_from_disk(study::String, run::String)
-    p = joinpath(ServerState.projects_dir(), study, run, "swarm", "otu_table.csv")
+function _oturesult_from_disk(run_dir::String)
+    p = joinpath(run_dir, "swarm", "otu_table.csv")
     isfile(p) || return nothing
-    f = joinpath(ServerState.projects_dir(), study, run, "swarm", "otus.fasta")
+    f = joinpath(run_dir, "swarm", "seeds.fasta")
     OTUResult(f, p)
 end
 
-function _mergedtables_from_disk(study::String, run::String)
-    merge_dir = joinpath(ServerState.projects_dir(), study, run, "merged")
+function _mergedtables_from_disk(run_dir::String)
+    merge_dir = joinpath(run_dir, "merged")
     tables    = Dict{String,String}()
     isdir(merge_dir) || error("merge_taxa output not found - run merge_taxa first")
     for f in readdir(merge_dir; join=true)
         endswith(f, ".csv") || continue
         tables[splitext(basename(f))[1]] = f
     end
-    MergedTables(tables, String[], Dict{String,String}())
+    MergedTables(tables)
 end
 
 ## Routes
@@ -152,43 +287,49 @@ end
 @post "/api/v1/studies/{study}/pipeline" function(req, study::String)
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
-    runs    = _run_names(study)
+    # Collect (group, run) pairs - preserves identity when run names are
+    # duplicated across groups (e.g. Multiplex/Caecum and Vespa/Caecum).
+    run_pairs = Tuple{Union{String,Nothing},String}[
+        [(nothing, r) for r in _run_names(study)];
+        [(g, r) for g in _group_names(study) for r in _group_run_names(study, g)]
+    ]
     db_cfg  = _db_config_path()
+    db_name, dbs = _load_dbs()
 
     job = submit_job!("pipeline"; study) do
-        db_name, dbs = _load_dbs()
-        merged_results = Vector{Any}(undef, length(runs))
-        asvs_results   = Vector{Any}(undef, length(runs))
+        merged_results = Vector{Any}(undef, length(run_pairs))
 
-        Threads.@threads for (i, run) in collect(enumerate(runs))
-            merged_results[i] = _run_full_pipeline(study, run, db_cfg, dbs, db_name)
+        Threads.@threads for i in eachindex(run_pairs)
+            grp, run = run_pairs[i]
+            try
+                merged_results[i] = _run_full_pipeline(study, run, db_cfg, dbs, db_name;
+                                                       group=grp)
+            catch e
+                @error "Pipeline failed for run '$run' (group=$(repr(grp)))" exception=(e, catch_backtrace())
+                merged_results[i] = nothing
+            end
         end
 
-        valid = count(!isnothing, merged_results)
-        if valid >= 2
-            projects = [_project_ctx(study, r) for r in runs]
-            db_meta  = make_db_meta(db_cfg, first(split(db_name, "_")))
-            analyse_study(projects, merged_results, fill(db_meta, length(projects));
-                          plot_lock=_plot_lock)
-        end
+        empty!(merged_results)
     end
 
-    json(job)
+    json(_job_to_namedtuple(job))
 end
 
 @post "/api/v1/studies/{study}/runs/{run}/pipeline" function(req, study::String, run::String)
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
-    run in _run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
-    db_cfg = _db_config_path()
+    run in _all_run_names(study) || return json_error(404, "run_not_found",
+                                                          "Run '$run' not found")
+    grp     = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
+    db_cfg  = _db_config_path()
+    db_name, dbs = _load_dbs()
 
     job = submit_job!("pipeline"; study, run) do
-        db_name, dbs = _load_dbs()
-        _run_full_pipeline(study, run, db_cfg, dbs, db_name)
+        _run_full_pipeline(study, run, db_cfg, dbs, db_name; group=grp)
     end
 
-    json(job)
+    json(_job_to_namedtuple(job))
 end
 
 @post "/api/v1/studies/{study}/runs/{run}/stages/{stage}" function(req, study::String,
@@ -196,15 +337,16 @@ end
                                                                         stage::String)
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
-    run in _run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
-    stage in STAGES || return json_error(400, "unknown_stage", "Unknown stage: $stage")
-    db_cfg = _db_config_path()
+    run in _all_run_names(study) || return json_error(404, "run_not_found",
+                                                          "Run '$run' not found")
+    stage in ALL_RUNNABLE_STAGES || return json_error(400, "unknown_stage", "Unknown stage: $stage")
+    grp     = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
+    db_cfg  = _db_config_path()
+    db_name, dbs = _load_dbs()
 
     job = submit_job!("stage"; study, run, stage) do
-        db_name, dbs = _load_dbs()
-        _run_stage(study, run, stage, db_cfg, dbs, db_name)
+        _run_stage(study, run, stage, db_cfg, dbs, db_name; group=grp)
     end
 
-    json(job)
+    json(_job_to_namedtuple(job))
 end

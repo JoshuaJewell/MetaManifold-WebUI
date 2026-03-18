@@ -11,14 +11,14 @@ module Server
     # or from a Julia session:
     #   include("src/server/server.jl"); Server.start()
 
-    using Oxygen, HTTP, JSON3, YAML
+    using Oxygen, HTTP, JSON3, YAML, Logging
 
     # Pipeline modules
     include(joinpath(@__DIR__, "..", "core",     "types.jl"))
-    include(joinpath(@__DIR__, "..", "core",     "graph.jl"))
     include(joinpath(@__DIR__, "..", "core",     "log.jl"))
     include(joinpath(@__DIR__, "..", "core",     "config.jl"))
     include(joinpath(@__DIR__, "..", "core",     "databases.jl"))
+    include(joinpath(@__DIR__, "..", "core",     "duckdb_store.jl"))
     include(joinpath(@__DIR__, "..", "core",     "validate.jl"))
     include(joinpath(@__DIR__, "..", "core",     "project.jl"))
     include(joinpath(@__DIR__, "..", "pipeline", "tools.jl"))
@@ -26,13 +26,34 @@ module Server
     include(joinpath(@__DIR__, "..", "pipeline", "dada2.jl"))
     include(joinpath(@__DIR__, "..", "pipeline", "swarm.jl"))
     include(joinpath(@__DIR__, "..", "analysis", "diversity.jl"))
-    include(joinpath(@__DIR__, "..", "analysis", "plots.jl"))
-    include(joinpath(@__DIR__, "..", "analysis", "plotly.jl"))
     include(joinpath(@__DIR__, "..", "analysis", "analysis.jl"))
 
-    using .PipelineTypes, .PipelineGraph, .PipelineLog, .Config, .Databases
+    using .PipelineTypes, .PipelineLog, .Config, .Databases, .DuckDBStore
     using .Tools, .TaxonomyTableTools, .ProjectSetup
-    using .DADA2, .OTUPipeline, .Analysis
+    using .DADA2, .OTUPipeline, .DiversityMetrics, .Analysis
+
+    ## EPIPE log filter
+    #
+    # HTTP.jl logs every broken-pipe error from SSE streams as @error
+    # "handle_connection handler error". These are harmless (client closed the
+    # connection) but very noisy. Filter them before they reach the console.
+
+    struct _SuppressEpipe{L<:AbstractLogger} <: AbstractLogger
+        inner::L
+    end
+    Logging.min_enabled_level(l::_SuppressEpipe) = Logging.min_enabled_level(l.inner)
+    Logging.shouldlog(l::_SuppressEpipe, args...) = Logging.shouldlog(l.inner, args...)
+    function Logging.handle_message(l::_SuppressEpipe, level, msg, _module, group, id, file, line; kwargs...)
+        # HTTP.jl embeds the exception as text inside the message string via
+        # current_exceptions_to_string() - it is NOT passed as kwargs[:exception].
+        # Match on the message text itself.
+        msg_str = string(msg)
+        if occursin("handle_connection handler error", msg_str) &&
+           (occursin("EPIPE", msg_str) || occursin("broken pipe", msg_str))
+            return
+        end
+        Logging.handle_message(l.inner, level, msg, _module, group, id, file, line; kwargs...)
+    end
 
     ## Server state
 
@@ -67,6 +88,33 @@ module Server
     include(joinpath(@__DIR__, "routes", "results.jl"))
     include(joinpath(@__DIR__, "routes", "databases.jl"))
     include(joinpath(@__DIR__, "routes", "events.jl"))
+    include(joinpath(@__DIR__, "routes", "analysis.jl"))
+
+    ## CORS middleware (needed when the frontend is served from a different origin)
+
+    function _cors_middleware(next)
+        function(req::HTTP.Request)
+            origin = HTTP.header(req, "Origin", "")
+            if isempty(origin)
+                # Same-origin request - no CORS headers needed
+                return next(req)
+            end
+            cors_headers = [
+                "Access-Control-Allow-Origin"  => origin,
+                "Access-Control-Allow-Methods" => "GET, POST, PATCH, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers" => "Content-Type",
+            ]
+            # Handle preflight
+            if req.method == "OPTIONS"
+                return HTTP.Response(204, cors_headers)
+            end
+            resp = next(req)
+            for (k, v) in cors_headers
+                HTTP.setheader(resp, k => v)
+            end
+            resp
+        end
+    end
 
     ## Static file serving (frontend build + on-demand PDFs)
 
@@ -81,12 +129,13 @@ module Server
     # Static file serving middleware (Oxygen middleware signature: handler -> req -> response)
     function _file_middleware(next)
         function(req::HTTP.Request)
-            uri = req.target
+            uri = first(split(req.target, '?'; limit=2))
 
-            # /files/{study}/runs/{run}/... -> serve from projects/
-            m = match(r"^/files/([^/]+)/runs/([^/]+)/(.+)$", uri)
+            # /files/{study}/runs/{rest...} -> serve from projects/{study}/{rest}
+            # rest may be {run}/... or {group}/{run}/... (group paths have an extra segment)
+            m = match(r"^/files/([^/]+)/runs/(.+)$", uri)
             if !isnothing(m)
-                full     = abspath(joinpath(ServerState.projects_dir(), m[1], m[2], m[3]))
+                full     = abspath(joinpath(ServerState.projects_dir(), HTTP.URIs.unescapeuri(m[1]), HTTP.URIs.unescapeuri(m[2])))
                 projects = abspath(ServerState.projects_dir())
                 startswith(full, projects * Base.Filesystem.path_separator) ||
                     return HTTP.Response(403, "Forbidden")
@@ -105,10 +154,19 @@ module Server
             if isfile(target)
                 ext  = last(splitext(target))
                 mime = get(_mime_map, ext, "application/octet-stream")
-                return HTTP.Response(200, ["Content-Type" => mime]; body=read(target))
+                # Content-hashed assets (js/css in assets/) are immutable.
+                # Everything else (index.html, config.json) must not be cached so
+                # the browser always loads the latest bundle after a rebuild.
+                cache = (ext in (".js", ".css") && occursin("/assets/", uri)) ?
+                    "public, max-age=31536000, immutable" : "no-store"
+                return HTTP.Response(200,
+                    ["Content-Type" => mime, "Cache-Control" => cache];
+                    body=read(target))
             end
             index = joinpath(_frontend_dir, "index.html")
-            isfile(index) && return HTTP.Response(200, ["Content-Type"=>"text/html"]; body=read(index))
+            isfile(index) && return HTTP.Response(200,
+                ["Content-Type" => "text/html", "Cache-Control" => "no-store"];
+                body=read(index))
             # No frontend build yet - fall through to Oxygen (404)
             next(req)
         end
@@ -117,6 +175,7 @@ module Server
     ## Entry point
 
     function start(; root=pwd(), host="127.0.0.1", port=8080)
+        global_logger(_SuppressEpipe(global_logger()))
         ServerState.set_root!(root)
         @info "MetaManifold server starting" root host port
 
@@ -124,7 +183,7 @@ module Server
         initialised = _ensure_all_projects()
         isempty(initialised) || @info "Initialised projects" initialised
 
-        serve(; host, port, access_log=nothing, middleware=[_file_middleware], show_errors=true)
+        serve(; host, port, access_log=nothing, middleware=[_cors_middleware, _file_middleware], show_errors=true)
     end
 
 end

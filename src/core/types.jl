@@ -5,16 +5,57 @@ module PipelineTypes
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
     export HasFasta, ProjectCtx, TrimmedReads, ASVResult, OTUResult, DenoisedASVs, TaxonomyHits, MergedTables, DatabaseMeta,
-           StageNode
+           find_fastqs, FastqEntry
 
     abstract type HasFasta end
 
+    """
+        ProjectCtx(dir, config_dir, data_dir, study_dir, data_study_dir[, data_dirs])
+
+    Execution context for a single pipeline run.
+
+    When `pool_children: true` is set in a group-level `pipeline.yml`, the group
+    directory becomes the leaf run. `data_dir` points to the group directory (used
+    for config cascade resolution) while `data_dirs` lists the child directories
+    that actually contain FASTQ files. For non-pooled runs `data_dirs == [data_dir]`.
+    """
     struct ProjectCtx
-        dir::String           # projects/{.../run}/ - stage outputs and run_config.yml live here
-        config_dir::String    # config/ - global defaults, tools.yml, primers.yml
-        data_dir::String      # data/{.../run}/ - FASTQ input files
-        study_dir::String     # projects/{study}/ - output root (logs, analysis)
+        dir::String            # projects/{.../run}/ - stage outputs and run_config.yml live here
+        config_dir::String     # config/ - global defaults, tools.yml, primers.yml
+        data_dir::String       # data/{.../run}/ - primary data dir (config cascade anchor)
+        study_dir::String      # projects/{study}/ - output root (logs, analysis)
         data_study_dir::String # data/{study}/ - top of the per-run config cascade
+        data_dirs::Vector{String} # all FASTQ source dirs; [data_dir] when not pooled
+    end
+
+    # Convenience constructor kept for backwards-compatible 5-arg call sites.
+    ProjectCtx(dir, config_dir, data_dir, study_dir, data_study_dir) =
+        ProjectCtx(dir, config_dir, data_dir, study_dir, data_study_dir, [data_dir])
+
+    struct FastqEntry
+        path::String    # absolute path to the .fastq.gz file
+        name::String    # output-safe sample filename (prefixed when pooled)
+    end
+
+    """
+        find_fastqs(project) -> Vector{FastqEntry}
+
+    Collect all `.fastq.gz` files across `project.data_dirs`. When the project
+    pools children (`length(data_dirs) > 1`), each file is prefixed with a
+    sanitised form of its subdirectory name (spaces to underscores) to prevent
+    collisions and allow downstream filtering by sub-group.
+    """
+    function find_fastqs(project::ProjectCtx)
+        entries = FastqEntry[]
+        pooled  = length(project.data_dirs) > 1
+        for d in project.data_dirs
+            prefix = pooled ? replace(basename(d), " " => "_") * "_" : ""
+            for f in readdir(d)
+                endswith(f, ".fastq.gz") || continue
+                push!(entries, FastqEntry(joinpath(d, f), prefix * f))
+            end
+        end
+        return entries
     end
 
     struct TrimmedReads
@@ -53,29 +94,6 @@ module PipelineTypes
 
     struct MergedTables
         tables::Dict{String,String}  # name => CSV path; always includes "merged" (unfiltered)
-        filter_order::Vector{String}  # filter stems in pipeline.yml order (for priority)
-        filter_colours::Dict{String,String}  # filter stem => hex colour override (from YAML "colour" key)
-    end
-
-    """
-        StageNode(name, label, inputs, output, config_sections)
-
-    Declarative description of one pipeline stage.
-
-    - `name`:            machine identifier (Symbol), e.g. `:cutadapt`
-    - `label`:           human-readable stage name
-    - `inputs`:          wire types this stage requires (excluding `ProjectCtx`, which every
-                         ProjectCtx-aware stage implicitly receives)
-    - `output`:          wire type produced; `Nothing` for side-effect-only stages
-    - `config_sections`: pipeline.yml section keys whose content controls this stage
-                         (used by skip guards and the WebUI to know what to re-hash)
-    """
-    struct StageNode
-        name::Symbol
-        label::String
-        inputs::Vector{DataType}
-        output::DataType
-        config_sections::Vector{String}
     end
 
 end
