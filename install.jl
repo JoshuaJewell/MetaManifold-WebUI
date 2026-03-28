@@ -6,10 +6,11 @@
 # required R packages. Writes resolved tool paths to config/tools.yml.
 #
 # Usage via install.sh, or directly by:
-#   julia --project=. install.jl [--update] [--sysimage]
+#   julia --project=. install.jl [--update] [--modify] [--sysimage]
 #
 # Options:
 #   --update    Re-check tool versions and update managed binaries in bin/
+#   --modify    Revisit configured tool paths instead of silently reusing them
 #   --sysimage  After installation, compile a sysimage of all Julia deps to
 #               speed up subsequent startup. Output: MetaManifold.so (.dylib on macOS)
 #               Use with: julia --sysimage MetaManifold.so --project=. ...
@@ -23,6 +24,7 @@ import Downloads
 
 ## Instantiate
 const UPDATE_MODE   = "--update"   in ARGS
+const MODIFY_MODE   = "--modify"   in ARGS
 const SYSIMAGE_MODE = "--sysimage" in ARGS
 const PROJECT_ROOT  = @__DIR__
 const BIN_DIR       = joinpath(PROJECT_ROOT, "bin")
@@ -52,18 +54,16 @@ end
 
 function write_tools_config(config::Dict)
     mkpath(CONFIG_DIR)
+    escaped = Dict{String,Any}()
+    for key in sort(collect(keys(config)))
+        val = config[key]
+        path = val isa Dict ? get(val, "path", nothing) : val
+        escaped[key] = Dict("path" => path)
+    end
+
+    yaml = YAML.write(escaped)
     open(TOOLS_CONFIG, "w") do io
-        for key in sort(collect(keys(config)))
-            val = config[key]
-            path = val isa Dict ? get(val, "path", nothing) : val
-            println(io, "$key:")
-            if path === nothing
-                println(io, "  path: null")
-            else
-                # Quote the path to handle spaces and special characters
-                println(io, "  path: \"$path\"")
-            end
-        end
+        print(io, yaml)
     end
     @info "Config written to $TOOLS_CONFIG"
 end
@@ -216,30 +216,15 @@ function download_fastqc()::String
 end
 
 function download_cdhit()::String
-    # System package manager
-    pkg_cmd = if OS_TYPE == "macos" && Sys.which("brew") !== nothing
-        `brew install cd-hit`
-    elseif OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
-        `sudo apt-get install -y cd-hit`
-    elseif OS_TYPE == "linux" && Sys.which("dnf") !== nothing
-        `sudo dnf install -y cd-hit`
-    elseif OS_TYPE == "linux" && Sys.which("pacman") !== nothing
-        `sudo pacman -S --needed --noconfirm cd-hit`
-    elseif OS_TYPE == "linux" && Sys.which("zypper") !== nothing
-        `sudo zypper install -y cd-hit`
-    else
-        nothing
-    end
-
+    pkg_cmd = package_install_cmd(["cd-hit"]; brew_pkg="cd-hit")
     if pkg_cmd !== nothing
-        label = first(split(basename(first(pkg_cmd)), ' '))
-        @info "Trying $label install cd-hit..."
+        @info "Trying package manager install for cd-hit..."
         try
             run(pkg_cmd)
             found = Sys.which("cd-hit-est")
             found !== nothing && return found
         catch
-            @warn "Package manager install failed (no sudo?), falling back to binary download."
+            @warn "Package manager install failed, falling back to source build."
         end
     end
 
@@ -274,29 +259,29 @@ function download_cdhit()::String
     dest
 end
 
+"""
+Add the user's local bin directory to ENV["PATH"] so that Sys.which() and
+subsequent Cmd calls can find freshly-installed scripts without restarting.
+"""
+function ensure_local_bin_on_path()
+    local_bin = joinpath(homedir(), ".local", "bin")
+    paths = split(get(ENV, "PATH", ""), ':')
+    if local_bin ∉ paths
+        ENV["PATH"] = local_bin * ":" * ENV["PATH"]
+    end
+end
+
 function ensure_pipx()
     Sys.which("pipx") !== nothing && return  # already present
 
     @info "pipx not found - attempting to install it..."
 
-    pkg_cmd = if OS_TYPE == "macos" && Sys.which("brew") !== nothing
-        `brew install pipx`
-    elseif OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
-        `sudo apt-get install -y pipx`
-    elseif OS_TYPE == "linux" && Sys.which("dnf") !== nothing
-        `sudo dnf install -y pipx`
-    elseif OS_TYPE == "linux" && Sys.which("pacman") !== nothing
-        `sudo pacman -S --needed --noconfirm python-pipx`
-    elseif OS_TYPE == "linux" && Sys.which("zypper") !== nothing
-        `sudo zypper install -y python3-pipx`
-    else
-        nothing
-    end
-
+    pkg_cmd = package_install_cmd(["pipx"]; brew_pkg="pipx", pacman_pkg="python-pipx", zypper_pkg="python3-pipx")
     if pkg_cmd !== nothing
         try
             run(pkg_cmd)
             run(`pipx ensurepath`)
+            ensure_local_bin_on_path()
             Sys.which("pipx") !== nothing && return
         catch
             @warn "Package manager install of pipx failed."
@@ -318,6 +303,8 @@ function ensure_pipx()
         try
             run(`$pip_cmd install --user pipx`)
             run(`python3 -m pipx ensurepath`)
+            # Update PATH in the running process so Sys.which finds pipx
+            ensure_local_bin_on_path()
             Sys.which("pipx") !== nothing && return
         catch
         end
@@ -327,11 +314,24 @@ function ensure_pipx()
           "may need to be installed manually."
 end
 
+function pipx_has_tool(name::String)::Bool
+    Sys.which("pipx") === nothing && return false
+    try
+        output = read(`pipx list --short`, String)
+        return any(strip(line) == name for line in split(output, '\n'))
+    catch
+        return false
+    end
+end
+
 function install_python_tool(name::String)::String
     # pipx (recommended on PEP 668 / Debian-managed systems)
     if Sys.which("pipx") !== nothing
-        @info "Installing $name via pipx..."
-        run(`pipx install $name`)
+        action = pipx_has_tool(name) ? "upgrade" : "install"
+
+        @info "$(uppercasefirst(action))ing $name via pipx..."
+        run(Cmd(["pipx", action, name]))
+        ensure_local_bin_on_path()
         found = find_in_path(name)
         found !== nothing && return found
         # pipx installs to ~/.local/bin by default
@@ -368,6 +368,8 @@ function install_python_tool(name::String)::String
         @warn "pip --user blocked by system policy. Retrying with --break-system-packages..."
         run(`$pip_cmd install --user --break-system-packages $name`)
     end
+
+    ensure_local_bin_on_path()
 
     # Locate the installed binary
     found = find_in_path(name)
@@ -484,13 +486,13 @@ function install_r_sysdeps()
     OS_TYPE != "linux" && return
 
     if Sys.which("apt-get") !== nothing
-        _install_sysdeps_with(`sudo apt-get install -y`, apt_deps, "apt-get")
+        _install_sysdeps_with(package_install_cmd(apt_deps; linux_manager=:apt_get), apt_deps, "apt-get")
     elseif Sys.which("dnf") !== nothing
-        _install_sysdeps_with(`sudo dnf install -y`, dnf_deps, "dnf")
+        _install_sysdeps_with(package_install_cmd(dnf_deps; linux_manager=:dnf), dnf_deps, "dnf")
     elseif Sys.which("pacman") !== nothing
-        _install_sysdeps_with(`sudo pacman -S --needed --noconfirm`, pacman_deps, "pacman")
+        _install_sysdeps_with(package_install_cmd(pacman_deps; linux_manager=:pacman), pacman_deps, "pacman")
     elseif Sys.which("zypper") !== nothing
-        _install_sysdeps_with(`sudo zypper install -y`, zypper_deps, "zypper")
+        _install_sysdeps_with(package_install_cmd(zypper_deps; linux_manager=:zypper), zypper_deps, "zypper")
     else
         @warn "Could not detect a supported package manager (apt-get, dnf, pacman, zypper). " *
               "Some R packages may fail to compile. Install the development headers for: " *
@@ -499,14 +501,18 @@ function install_r_sysdeps()
     end
 end
 
-function _install_sysdeps_with(cmd::Cmd, deps::Vector{String}, label::String)
+function _install_sysdeps_with(cmd::Union{Cmd,Nothing}, deps::Vector{String}, label::String)
+    if cmd === nothing
+        @info "Skipping automated $label install for R system dependencies because this session does not have root or passwordless sudo. " *
+              "If compilation fails, install these packages manually:\n  " * join(deps, " ")
+        return
+    end
     @info "Installing R system library dependencies via $label..."
     try
-        run(`$cmd $deps`)
+        run(cmd)
     catch
-        @warn "$label install of R system deps failed (no sudo?). " *
-              "Some R packages may not compile. Install manually:\n  " *
-              join(deps, " ")
+        @warn "$label install of R system deps failed. " *
+              "Some R packages may not compile; install these packages manually:\n  " * join(deps, " ")
     end
 end
 
@@ -558,6 +564,7 @@ function install_r_packages(packages::Vector{String}; force_reinstall::Bool=fals
         @info "R packages installed successfully."
     catch e
         @error "R package installation failed: $e"
+        rethrow()
     end
 end
 
@@ -572,20 +579,32 @@ function resolve_tool(
     existing_config::Dict,
     install_fn::Union{Function,Nothing} = nothing
 )::Union{String,Nothing}
-    println()
-    println("  --- $display_name -------------------------------------------------")
-
     bin = bin_name(key)
+    heading_printed = false
+    function show_heading()
+        if !heading_printed
+            println()
+            println("  --- $display_name -------------------------------------------------")
+            heading_printed = true
+        end
+    end
 
     # Check existing config (skip in update mode for managed installs)
     existing = get(existing_config, key, nothing)
     existing_path = existing isa Dict ? get(existing, "path", nothing) : nothing
 
     if existing_path !== nothing && !UPDATE_MODE
-        println("  Configured path: $existing_path")
         if check_tool(string(existing_path))
-            prompt_yn("  Use this?") && return string(existing_path)
+            if MODIFY_MODE
+                show_heading()
+                println("  Configured path: $existing_path")
+                prompt_yn("  Use this?") && return string(existing_path)
+            else
+                return string(existing_path)
+            end
         else
+            show_heading()
+            println("  Configured path: $existing_path")
             println("  Warning: configured path does not appear to be callable.")
         end
     end
@@ -593,11 +612,13 @@ function resolve_tool(
     # Check PATH
     path_result = find_in_path(bin)
     if path_result !== nothing
+        show_heading()
         println("  Found in PATH:   $path_result")
         prompt_yn("  Use this?") && return path_result
     end
 
     # Build option list
+    show_heading()
     options = String[]
     if install_fn !== nothing
         push!(options, "Install/download automatically to bin/")
@@ -645,16 +666,14 @@ end
 ## Sysimage creation
 const SYSIMAGE_EXT  = Sys.isapple() ? ".dylib" : ".so"
 const SYSIMAGE_PATH = joinpath(PROJECT_ROOT, "MetaManifold$(SYSIMAGE_EXT)")
+const PRECOMPILE_STATEMENTS_PATH = joinpath(PROJECT_ROOT, "precompile_statements.jl")
 
-# Packages to precompile into the sysimage.
-# StatsPlots is excluded: it pulls in Plots to GR whose native library
-# fails to load during PackageCompiler's headless subprocess.
-# The server uses Plotly JSON (via the Analysis module) instead.
-const SYSIMAGE_PACKAGES = [
-    :CSV, :CodecZlib, :DataFrames, :DBInterface, :DuckDB,
-    :HTTP, :JSON3, :OrderedCollections, :Oxygen, :RCall,
-    :StatsBase, :TimeZones, :XLSX, :YAML,
-]
+function sysimage_packages()::Vector{Symbol}
+    deps = keys(Pkg.project().dependencies)
+    names = String[name for name in deps if name != "PackageCompiler"]
+    sort!(names)
+    Symbol.(names)
+end
 
 function build_sysimage()
     @info "Installing PackageCompiler..."
@@ -663,37 +682,107 @@ function build_sysimage()
     # Import after installation so it is available in this session
     @eval using PackageCompiler
 
-    pkg_list = join(string.(SYSIMAGE_PACKAGES), ", ")
-    @info "Compiling sysimage - this may take several minutes...\n  Packages: $pkg_list\n  Output:   $SYSIMAGE_PATH"
+    isfile(PRECOMPILE_STATEMENTS_PATH) || error(
+        "Missing $(basename(PRECOMPILE_STATEMENTS_PATH)). Generate it first with generate_precompile_trace.jl."
+    )
+
+    packages = sysimage_packages()
+    pkg_list = join(string.(packages), ", ")
+    @info "Compiling sysimage from precompile trace - this may take several minutes...\n  Packages: $pkg_list\n  Trace:    $PRECOMPILE_STATEMENTS_PATH\n  Output:   $SYSIMAGE_PATH"
 
     @eval PackageCompiler.create_sysimage(
-        $SYSIMAGE_PACKAGES;
-        sysimage_path = $SYSIMAGE_PATH,
-        project       = $PROJECT_ROOT,
+        $packages;
+        sysimage_path              = $SYSIMAGE_PATH,
+        project                    = $PROJECT_ROOT,
+        precompile_statements_file = $PRECOMPILE_STATEMENTS_PATH,
     )
 
     @info "Sysimage written to $SYSIMAGE_PATH"
     println()
-    println("To use the sysimage, launch Julia with:")
-    println("  julia --sysimage $(basename(SYSIMAGE_PATH)) --project=. <script>")
+    println("Start the server with:")
+    println("  bash start.sh")
+end
+
+## Preflight checks
+
+"""Return true if the current process is running as root."""
+has_root() = try; ccall(:geteuid, Cuint, ()) == 0; catch; false; end
+
+"""Return true if sudo is available and can run non-interactively."""
+function has_passwordless_sudo()::Bool
+    Sys.which("sudo") === nothing && return false
+    try
+        run(pipeline(`sudo -n true`; stdout=devnull, stderr=devnull))
+        return true
+    catch
+        return false
+    end
+end
+
+function package_install_cmd(
+    pkgs::Vector{String};
+    brew_pkg::Union{String,Nothing}=nothing,
+    pacman_pkg::Union{String,Nothing}=nothing,
+    zypper_pkg::Union{String,Nothing}=nothing,
+    linux_manager::Union{Symbol,Nothing}=nothing,
+)
+    if OS_TYPE == "macos"
+        if Sys.which("brew") !== nothing
+            mac_pkgs = brew_pkg === nothing ? pkgs : [brew_pkg]
+            return Cmd(vcat(["brew", "install"], mac_pkgs))
+        end
+        return nothing
+    end
+
+    prefix = if has_root()
+        String[]
+    elseif has_passwordless_sudo()
+        ["sudo"]
+    else
+        return nothing
+    end
+    manager = linux_manager
+    if manager === nothing
+        manager = Sys.which("apt-get") !== nothing ? :apt_get :
+                  Sys.which("dnf") !== nothing ? :dnf :
+                  Sys.which("pacman") !== nothing ? :pacman :
+                  Sys.which("zypper") !== nothing ? :zypper :
+                  nothing
+    end
+    manager === nothing && return nothing
+
+    if manager == :apt_get
+        return Cmd(vcat(prefix, ["apt-get", "install", "-y"], pkgs))
+    elseif manager == :dnf
+        return Cmd(vcat(prefix, ["dnf", "install", "-y"], pkgs))
+    elseif manager == :pacman
+        pacman_pkgs = pacman_pkg === nothing ? pkgs : [pacman_pkg]
+        return Cmd(vcat(prefix, ["pacman", "-S", "--needed", "--noconfirm"], pacman_pkgs))
+    elseif manager == :zypper
+        zypper_pkgs = zypper_pkg === nothing ? pkgs : [zypper_pkg]
+        return Cmd(vcat(prefix, ["zypper", "install", "-y"], zypper_pkgs))
+    end
+
+    nothing
 end
 
 ## Main
 function main()
-    println()
-    println("+-------------------------------------------+")
-    println("|  MetabarcodingPipeline - Install Script   |")
-    println("+-------------------------------------------+")
-    UPDATE_MODE && println("  Mode: UPDATE")
-    println()
+    if UPDATE_MODE || MODIFY_MODE
+        println()
+        println("+-------------------------------------------+")
+        println("|  MetabarcodingPipeline - Install Script   |")
+        println("+-------------------------------------------+")
+        UPDATE_MODE && println("  Mode: UPDATE")
+        MODIFY_MODE && println("  Mode: MODIFY")
+        println()
+    end
 
     config = load_tools_config()
     resolved = Dict{String,Any}()
 
     # Ensure pipx/pip is available before resolving Python-based tools
-    println("  --- Python installer -----------------------------------------------")
     ensure_pipx()
-    println()
 
     # cutadapt
     path = resolve_tool("cutadapt", "cutadapt", config,
@@ -726,10 +815,11 @@ function main()
     resolved["swarm"] = Dict("path" => path)
 
     # R packages
-    println()
-    println("  --- R packages -----------------------------------------------------")
     r_packages = ["dada2", "tidyverse", "vegan"]
-    if prompt_yn("  Install/check R packages (dada2, tidyverse, vegan)?")
+    should_install_r = UPDATE_MODE || (MODIFY_MODE && prompt_yn("  Install/check R packages (dada2, tidyverse, vegan)?"))
+    if should_install_r
+        println()
+        println("  --- R packages -----------------------------------------------------")
         install_r_sysdeps()
         install_r_packages(r_packages; force_reinstall=UPDATE_MODE)
     end

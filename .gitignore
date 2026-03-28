@@ -238,6 +238,9 @@ vignettes/*.pdf
 docs/
 
 # translation temp files
+
+# Local Julia precompile trace used for sysimage generation
+generate_precompile_trace.jl
 po/*~
 
 # RStudio Connect folder

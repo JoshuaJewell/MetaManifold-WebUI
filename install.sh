@@ -6,10 +6,12 @@
 # then hands off to install.jl for all further dependency setup.
 #
 # Usage:
-#   bash install.sh [--update]
+#   bash install.sh [--update] [--modify] [--sysimage]
 #
 # Options:
 #   --update    Re-check tool versions and update managed binaries in bin/
+#   --modify    Revisit configured tool paths instead of silently reusing them
+#   --sysimage  Pass through to install.jl to build the Julia sysimage
 
 set -euo pipefail
 

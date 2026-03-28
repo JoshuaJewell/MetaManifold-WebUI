@@ -16,6 +16,8 @@ const RUN_SERVER      = "--server"      in ARGS
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."); io=devnull)
 
+using CSV, DataFrames, JSON3, Logging, YAML, DuckDB, DBInterface
+
 # Load only what tests need
 include(joinpath(@__DIR__, "..", "src", "core", "types.jl"))
 include(joinpath(@__DIR__, "..", "src", "core", "log.jl"))
@@ -29,7 +31,6 @@ include(joinpath(@__DIR__, "..", "src", "core", "project.jl"))
 include(joinpath(@__DIR__, "..", "src", "analysis", "diversity.jl"))
 include(joinpath(@__DIR__, "..", "src", "analysis", "analysis.jl"))
 
-using CSV, DataFrames, JSON3, Logging, YAML, DuckDB, DBInterface
 using .PipelineTypes, .PipelineLog, .Config, .Databases, .DuckDBStore, .Validation
 using .Tools, .TaxonomyTableTools, .ProjectSetup
 using .DiversityMetrics, .Analysis

@@ -10,6 +10,7 @@ module Server
     #   julia --project=. src/server/server.jl
     # or from a Julia session:
     #   include("src/server/server.jl"); Server.start()
+    # or via start.sh
 
     using Oxygen, HTTP, JSON3, YAML, Logging
 
@@ -31,6 +32,26 @@ module Server
     using .PipelineTypes, .PipelineLog, .Config, .Databases, .DuckDBStore
     using .Tools, .TaxonomyTableTools, .ProjectSetup
     using .DADA2, .OTUPipeline, .DiversityMetrics, .Analysis
+
+    macro get(path, handler)
+        esc(:(Oxygen.@get $path $handler))
+    end
+
+    macro post(path, handler)
+        esc(:(Oxygen.@post $path $handler))
+    end
+
+    macro delete(path, handler)
+        esc(:(Oxygen.@delete $path $handler))
+    end
+
+    macro patch(path, handler)
+        esc(:(Oxygen.@patch $path $handler))
+    end
+
+    macro stream(path, handler)
+        esc(:(Oxygen.@stream $path $handler))
+    end
 
     ## EPIPE log filter
     #
@@ -174,7 +195,7 @@ module Server
 
     ## Entry point
 
-    function start(; root=pwd(), host="127.0.0.1", port=8080)
+    function start(; root=pwd(), host="127.0.0.1", port=8080, listen::Bool=true)
         global_logger(_SuppressEpipe(global_logger()))
         ServerState.set_root!(root)
         @info "MetaManifold server starting" root host port
@@ -183,6 +204,7 @@ module Server
         initialised = _ensure_all_projects()
         isempty(initialised) || @info "Initialised projects" initialised
 
+        listen || return nothing
         serve(; host, port, access_log=nothing, middleware=[_cors_middleware, _file_middleware], show_errors=true)
     end
 

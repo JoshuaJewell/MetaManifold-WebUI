@@ -21,8 +21,6 @@
 
     port = 18765
     server_script = joinpath(PROJECT_ROOT, "src", "server", "server.jl")
-
-    # Start server subprocess
     proc = run(Cmd(`$(Base.julia_cmd()) --project=$PROJECT_ROOT $server_script`;
                    env=merge(ENV, Dict("JULIA_METAMANIFOLD_ROOT" => tmp_root,
                                       "JULIA_METAMANIFOLD_PORT" => string(port))));

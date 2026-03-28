@@ -108,18 +108,13 @@
         trimmed_files = filter(f -> endswith(f, "_trimmed.fastq.gz"), readdir(trimmed.dir))
         @test length(trimmed_files) == n_samples * 2
 
-        # Stage 2: DADA2 + SWARM in parallel
-        dada2_task = Threads.@spawn begin
-            result = lock(r_lock_int) do
-                dada2(project, trimmed, taxonomy_db=dbs_loaded[dada2_key],
-                      skip_taxonomy=skip_taxonomy)
-            end
-            cdhit(project, result)
+        # Stage 2: DADA2 (then cd-hit), followed by SWARM (needs ASVs as input)
+        asvs = lock(r_lock_int) do
+            dada2(project, trimmed, taxonomy_db=dbs_loaded[dada2_key],
+                  skip_taxonomy=skip_taxonomy)
         end
-        swarm_task = Threads.@spawn swarm(project, trimmed)
-
-        asvs = fetch(dada2_task)
-        otus = fetch(swarm_task)
+        asvs = cdhit(project, asvs)
+        otus = swarm(project, asvs)
 
         @test isfile(asvs.fasta) && filesize(asvs.fasta) > 0
         @test isfile(asvs.count_table) && filesize(asvs.count_table) > 0
