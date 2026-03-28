@@ -265,6 +265,10 @@ data/MiSeq_SOP/run_A/*
 data/MiSeq_SOP/run_B/*
 !data/MiSeq_SOP/run_B/*.fastq.gz
 
+### Frontend
+node_modules/
+web/dist/
+
 ### Lock files
 .~lock.*
 .csv#

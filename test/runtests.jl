@@ -29,7 +29,7 @@ include(joinpath(@__DIR__, "..", "src", "core", "project.jl"))
 include(joinpath(@__DIR__, "..", "src", "analysis", "diversity.jl"))
 include(joinpath(@__DIR__, "..", "src", "analysis", "analysis.jl"))
 
-using CSV, DataFrames, JSON3, Logging, YAML
+using CSV, DataFrames, JSON3, Logging, YAML, DuckDB, DBInterface
 using .PipelineTypes, .PipelineLog, .Config, .Databases, .DuckDBStore, .Validation
 using .Tools, .TaxonomyTableTools, .ProjectSetup
 using .DiversityMetrics, .Analysis
@@ -43,6 +43,13 @@ using .DiversityMetrics, .Analysis
     include("unit/test_validation.jl")
     include("unit/test_tools.jl")
     include("unit/test_analysis.jl")
+    include("unit/test_duckdb_store.jl")
+    include("unit/test_analysis_duckdb.jl")
+    include("unit/test_config_hashing.jl")
+    include("unit/test_project.jl")
+    include("unit/test_log.jl")
+    include("unit/test_databases.jl")
+    include("unit/test_merge_taxa_mappings.jl")
 
     ## Integration tests (opt-in)
     if RUN_INTEGRATION

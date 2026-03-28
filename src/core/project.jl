@@ -8,6 +8,7 @@ export new_project
 
     using YAML
     using ..PipelineTypes
+    using ..PipelineLog: pipeline_log
 
     const _PIPELINE_YML_HEADER = """
 # Pipeline configuration overrides
