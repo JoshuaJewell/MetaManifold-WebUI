@@ -6,61 +6,64 @@
 [![CI](https://github.com/JoshuaJewell/MetaManifold/actions/workflows/ci.yml/badge.svg)](https://github.com/JoshuaJewell/MetaManifold/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/JoshuaJewell/MetaManifold/graph/badge.svg?token=PH4BHGQOVL)](https://codecov.io/gh/JoshuaJewell/MetaManifold)
 
-A Julia pipeline for amplicon metabarcoding from raw paired-end Illumina reads to filtered, taxonomy-annotated ASV tables.
+MetaManifold wraps standard amplicon sequencing workflows into a single configurable Julia orchestrator: from raw paired-end Next Generation Sequencing reads through denoising, taxonomy assignment, and taxonomic filtering, with interactive analysis in the browser.
 
 ## Overview
 
-This project aims to wrap standard amplicon sequencing workflows into a single, configurable project. It handles multiplex primer trimming, amplicon denoising, taxonomy assignment, and taxonomic filtering.
+MetaManifold consists of a Julia backend (pipeline engine + REST API) and a TypeScript/React frontend. The pipeline runs FastQC, MultiQC, cutadapt, DADA2, SWARM, vsearch, and cd-hit under the hood; results are stored in per-run DuckDB databases and served to the frontend as interactive Plotly charts.
 
-**Pipeline**
+**Pipeline stages**
 
 ```
-Raw FASTQs  (data/{study}/[{run}/]*.fastq.gz)
+Raw FASTQs  (data/{study}/[{group}/]{run}/*.fastq.gz)
       │
-      ├─ FastQC / MultiQC
-      │
-      ▼
    cutadapt, primer trimming
       │
-      ├──────────────────────────┐
-      │                          │
-      ▼                          ▼
-   DADA2*, ASV (R);         SWARM*, OTU (vsearch + swarm);
-   filter & trim            merge pairs
-   learn error rates        dereplicate
-   denoise + merge          chimera filter
-   length filter            cluster OTUs
-   chimera removal               │
-   taxonomy assign*              │
-      │                          │
-      ▼                          │
-   cd-hit-est*, demultiplex      │
-      │                          │
-      │                          │
-      ▼                          ▼
-   vsearch*                 vsearch, global alignment
-      │                          │
-      ├──────────────────────────┘
-      ▼
+      ├────────────────────────────┐
+      │                            │
+   DADA2*, ASV;               SWARM*, OTU;
+   filter & trim              merge pairs
+   learn error rates          dereplicate
+   denoise + merge            chimera filter
+   length filter              cluster OTUs
+   chimera removal                 │
+   taxonomy assign*                │
+      │                            │
+   cd-hit-est*, demultiplex        │
+      │                            │
+   vsearch*                   vsearch, global alignment
+      │                            │
+      ├────────────────────────────┘
+      │
    merge_taxa;
    join ASV tables*
    join counts-taxonomy
    apply filters
       │
-      ▼
-   analyse_run
-      │
-      ▼ study-wide (≥2 runs)
-   analyse_study
+   DuckDB results store
 ```
 *optional
 
+**Analysis**
+
+Once a run completes, analysis is performed on request through the web UI:
+
+- Alpha diversity (richness, Shannon, Simpson) per sample
+- Taxonomic composition bar charts (relative or absolute)
+- Pipeline stage read-count summaries
+- Cross-run alpha diversity comparison (boxplots)
+- NMDS ordination (Bray-Curtis, via R/vegan)
+- PERMANOVA (via R/vegan)
+
+All analysis charts are returned as Plotly JSON and rendered interactively in the browser.
+
 ## Prerequisites
 
-- **Julia** ≥ 1.0 - installed automatically by `install.sh` if missing
-- **R** ≥ 4.0 - required for the DADA2 stage
+- **Julia** >= 1.0 - installed automatically by `install.sh` if missing
+- **R** >= 4.0 - required for the DADA2 stage and NMDS/PERMANOVA analysis
   - Ubuntu/Debian: `sudo apt install r-base`
   - macOS: `brew install r` or [CRAN package](https://cran.r-project.org/bin/macosx/)
+- **bun** or **Node.js** - for building the frontend (bun preferred)
 
 ## Installation
 
@@ -89,20 +92,35 @@ vsearch:
 When a remote SSH path is set, the pipeline routes that tool's invocations through
 `ssh`. `config/defaults/tools.yml` contains the full config format.
 
-### Creating a new project
+## Quick start
 
-```julia
-projects = new_project("MyProject")
-# Finds data/MyProject/ and creates matching output dirs under projects/MyProject/.
-# Creates a pipeline.yml stub at each level of data/MyProject/ (study, group, run)
-# if one does not already exist
+### 1. Place paired-end FASTQs under data/
+Put `.fastq.gz` files into `data/MyProject/run_A`. 
+
+### 2. Start the server (builds frontend on first run)
+`bash start.sh`
+
+### 3. Open http://localhost:8080
+
+The web UI lets you create studies, configure pipeline parameters, launch runs, and explore results interactively. All state lives in the filesystem under `data/` and `projects/`.
+
+| Environment variable      | Default           | Description   |
+| ------------------------- | ----------------- | ------------- |
+| `JULIA_METAMANIFOLD_PORT` | `8080`            | Server port   |
+| `JULIA_METAMANIFOLD_ROOT` | working directory | Project root  |
+| `JULIA_THREADS`           | `8`               | Julia threads |
+
+Or run the Julia server directly:
+
+```bash
+julia --project=. src/server/server.jl
 ```
-
-Re-running `new_project` never overwrites existing files. To reset a level to its parent's settings, delete that level's `pipeline.yml` and re-run.
 
 ## Configuration
 
 Pipeline settings use a cascade: each level overrides the one above it, and any key you omit is inherited from the nearest ancestor. The fully merged result is written to `run_config.yml` at runtime - that is the single place to see exactly what was used for a run.
+
+Settings can be edited in the web UI (per-study, per-group, or per-run) or as YAML files directly.
 
 | File | Purpose |
 |------|---------|
@@ -245,7 +263,7 @@ dada2:
 **Outputs written to `projects/{name}/{run}/dada2/Tables/`:**
 
 | File                      | Contents                                               |
-| --------------------------| -------------------------------------------------------|
+| ---------------------------| --------------------------------------------------------|
 | `seqtab_nochim.csv`       | Chimera-free ASV count table (samples x ASVs)          |
 | `asvs.fasta` / `asvs.csv` | ASV sequences with short identifiers (seq1, seq2, ...) |
 | `taxonomy.csv`            | Taxonomy assignments per ASV                           |
@@ -309,7 +327,7 @@ Each entry is a filename relative to `config/filters/`. Remove all entries (or s
 
 ### Configuring analysis (`analysis:` in `pipeline.yml`)
 
-Controls the figures produced by `analyse_run` and `analyse_study`.
+Controls the analysis charts served by the API endpoints (alpha diversity, taxa bar, NMDS, etc.).
 
 ```yaml
 analysis:
@@ -377,72 +395,17 @@ remove_empty:             # remove rows where this column is blank or "NA"
   - Domain
 ```
 
-## Usage
+## Deployment 
 
-Place FASTQ files in `data/MyProject`. For multi-run projects, use subdirectories like `data/MyProject/run_A`, `data/MyProject/run_B`. `new_project()` walks the data directory, treats every leaf containing `.fastq.gz` files as a run, and creates a matching output tree under `projects/`. Nothing in `data/` is ever overwritten. Edit `src/main.jl` to set your project name and run:
-
-```julia
-db_name  = "pr2"
-dbs      = ensure_databases(databases_config)
-db_meta  = make_db_meta(databases_config, db_name)
-projects = new_project("MyProject")
-
-const r_lock    = ReentrantLock()
-const plot_lock = ReentrantLock()
-
-merged_results = Vector{Union{MergedTables,Nothing}}(undef, length(projects))
-
-Threads.@threads for (i, project) in collect(enumerate(projects))
-    trimmed = cutadapt(project)
-
-    # DADA2 + swarm run in parallel; DADA2 R calls serialised via r_lock
-    dada2_task = Threads.@spawn begin
-        asvs = lock(r_lock) do
-            dada2(project, trimmed, taxonomy_db = dbs["$(db_name)_dada2"])
-        end
-        cdhit(project, asvs)   # optional; remove this line to skip clustering
-    end
-    swarm_task = Threads.@spawn swarm(project, trimmed)
-
-    asvs = fetch(dada2_task)
-    otus = fetch(swarm_task)
-
-    # Taxonomy assignment (ASV + OTU in parallel)
-    asv_tax_task = Threads.@spawn vsearch(project, asvs, dbs["$(db_name)_vsearch"])
-    otu_tax_task = isnothing(otus) ? nothing :
-                   Threads.@spawn vsearch(project, otus, dbs["$(db_name)_vsearch"])
-
-    asv_merged = merge_taxa(project, asvs, fetch(asv_tax_task), db_meta)
-    merged = if !isnothing(otus)
-        otu_merged = merge_taxa_otu(project, otus, fetch(otu_tax_task), db_meta)
-        MergedTables(merge(asv_merged.tables, otu_merged.tables),
-                     asv_merged.filter_order, asv_merged.filter_colours)
-    else
-        asv_merged
-    end
-
-    merged_results[i] = merged
-    analyse_run(project, merged, asvs, db_meta; plot_lock)
-end
-
-analyse_study(projects, merged_results, fill(db_meta, length(projects)); plot_lock)
-```
-
-Each stage returns a wire type (`TrimmedReads`, `ASVResult`, `OTUResult`, `TaxonomyHits`, `MergedTables`) and skips automatically if outputs are already up to date relative to their inputs (mtime-based for files, hash-based for configurations). Rerunning after a config change only re-executes the minimum necessary stages.
-
-Run from the project root:
+### Local (single machine)
 
 ```bash
-julia --project=. src/main.jl
+bash start.sh
 ```
 
-Or with threads:
+Open `http://localhost:8080`. The backend serves the frontend automatically.
 
-```bash
-julia -t 2 --project=. src/main.jl
-```
-
-### Input data
+## Input data
 
 Place paired-end FASTQ files under `data/{project_name}/` following Illumina naming:
 
@@ -451,9 +414,9 @@ data/MyProject/SampleName_*_L001_R1_001.fastq.gz
 data/MyProject/SampleName_*_L001_R2_001.fastq.gz
 ```
 
-For multi-run projects, nest runs in subdirectories - `new_project` will detect any directory containing `.fastq.gz` files as a leaf run and create a matching project directory under `projects/{project_name}/`.
+For multi-run projects, nest runs in subdirectories. The server detects any directory containing `.fastq.gz` files as a leaf run and creates a matching project directory under `projects/{project_name}/`.
 
-### Output structure
+## Output structure
 
 All outputs for a given run live under `projects/{project_name}/{run}/`:
 
@@ -461,8 +424,6 @@ All outputs for a given run live under `projects/{project_name}/{run}/`:
 projects/{project_name}/{run}/
 ├── cutadapt/                    # Trimmed FASTQ pairs and logs
 │   └── logs/
-│       ├── cutadapt_primer_trimming_stats.txt
-│       └── cutadapt_trimmed_percentage.txt
 ├── QC/
 │   ├── fastqc/                  # Per-file FastQC HTML reports
 │   ├── multiqc_report.html      # MultiQC summary across all samples
@@ -475,8 +436,8 @@ projects/{project_name}/{run}/
 │   │   ├── taxonomy.csv         # Taxonomy assignments
 │   │   ├── taxonomy_bootstraps.csv
 │   │   ├── taxonomy_combined.csv
-│   │   ├── tax_counts.csv       # Taxonomy + per-sample counts
-│   │   ├── asv_counts.csv       # Sequences + per-sample counts
+│   │   ├── tax_counts.csv       # Taxonomy ├ per-sample counts
+│   │   ├── asv_counts.csv       # Sequences ├ per-sample counts
 │   │   └── pipeline_stats.csv
 │   ├── Figures/                 # Quality profile and error rate PDFs
 │   ├── Checkpoints/             # RData checkpoints for stage resumption
@@ -491,39 +452,61 @@ projects/{project_name}/{run}/
 ├── vsearch/
 │   ├── taxonomy.tsv             # Top-hit taxonomy assignments (ASV or OTU)
 │   └── logs/
-├── merged/
-│   ├── merged.csv               # Merged taxonomy + counts (all taxa)
-│   └── protist_filter.csv       # Filtered subset (one file per entry in merge_taxa.filters)
-└── analysis/
-    ├── pipeline_summary.csv     # Read counts retained at each stage
-    └── Figures/
-        ├── taxa_bar.pdf         # Stacked bar chart of top taxa
-        ├── filter_composition.pdf
-        └── alpha_diversity.pdf  # Alpha diversity indices per sample
+└── merged/
+    ├── merged.csv               # Merged taxonomy ├ counts (all taxa)
+    ├── protist_filter.csv       # Filtered subset (one per merge_taxa.filters entry)
+    └── results.duckdb           # DuckDB database for API queries
 ```
 
-Study-level outputs are written to `projects/{project_name}/analysis/`:
+## REST API
+
+The server exposes a REST API under `/api/v1/`. Key endpoint groups:
+
+| Group     | Endpoints                                          | Description                                            |
+| --------- | -------------------------------------------------- | ------------------------------------------------------ |
+| Studies   | `GET/POST/DELETE /studies`                         | List, create, rename, delete studies                   |
+| Groups    | `POST/DELETE /studies/{study}/groups`              | Create, rename, delete groups                          |
+| Runs      | `GET/POST/DELETE /studies/{study}/runs`            | List, create, rename, delete runs                      |
+| Config    | `GET/PATCH/DELETE /studies/{study}/config`         | Read and edit pipeline config at any cascade level     |
+| Pipeline  | `POST /studies/{study}/pipeline`                   | Launch pipeline jobs (full study or individual stages) |
+| Jobs      | `GET/DELETE /jobs`                                 | Monitor and cancel running pipeline jobs               |
+| Results   | `GET/POST /studies/{study}/runs/{run}/results/...` | Query DuckDB tables, apply filter presets, export      |
+| Analysis  | `POST /studies/{study}/runs/{run}/analysis/...`    | On-demand alpha, taxa-bar, pipeline-stats charts       |
+| Cross-run | `POST /studies/{study}/analysis/...`               | Alpha comparison, NMDS, PERMANOVA across runs          |
+| Databases | `GET/POST /databases`                              | List and download taxonomy databases                   |
+
+All responses are JSON. Analysis endpoints return Plotly chart specifications.
+
+## Architecture
 
 ```
-projects/{project_name}/analysis/
-└── Figures/
-    ├── alpha_comparison.pdf     # Alpha diversity across runs/groups
-    └── nmds.pdf                 # NMDS ordination (if ≥ 2 runs)
+frontend/           TypeScript + React + Vite (SPA)
+src/
+  core/             Types, config cascade, validation, DuckDB store, logging
+  pipeline/         Pipeline stages (cutadapt, dada2, swarm, vsearch, cd-hit, merge_taxa)
+  analysis/         Diversity metrics + Plotly chart builders
+  server/           Oxygen.jl HTTP server
+    routes/         REST API route handlers
+config/             Default configs, filters, CI fixtures
+data/               Input FASTQs (user-managed)
+projects/           Pipeline outputs (generated)
 ```
+
+Each pipeline stage returns a typed result (`TrimmedReads`, `ASVResult`, `OTUResult`, `TaxonomyHits`, `MergedTables`) and skips automatically if outputs are already up to date (mtime-based for files, content-hash-based for configuration). Rerunning after a config change only re-executes the minimum necessary stages.
 
 ## Third-party tools
 
 This project orchestrates the following tools. Each is fetched from its upstream source by `install.sh` and is subject to its own license - no third-party binaries are included in this repository.
 
-| Tool | License | Source |
-|------|---------|--------|
-| [cutadapt](https://github.com/marcelm/cutadapt) | MIT | PyPI |
-| [FastQC](https://github.com/s-andrews/FastQC) | GPL v3 | Babraham Bioinformatics |
-| [MultiQC](https://github.com/MultiQC/MultiQC) | GPL v3 | PyPI |
-| [DADA2](https://benjjneb.github.io/dada2/) ([optimised fork](https://github.com/JoshuaJewell/dada2)) | LGPL v3 | Bioconductor |
-| [swarm](https://github.com/frederic-mahe/swarm) | GPL v3 | GitHub Releases |
-| [vsearch](https://github.com/torognes/vsearch) | GPL v3 | GitHub Releases |
-| [cd-hit](https://github.com/weizhongli/cdhit) | GPL v2+ | GitHub Releases / apt |
+| Tool                                                                                                 | License | Source                  |
+| ------------------------------------------------------------------------------------------------------| ---------| -------------------------|
+| [cutadapt](https://github.com/marcelm/cutadapt)                                                      | MIT     | PyPI                    |
+| [FastQC](https://github.com/s-andrews/FastQC)                                                        | GPL v3  | Babraham Bioinformatics |
+| [MultiQC](https://github.com/MultiQC/MultiQC)                                                        | GPL v3  | PyPI                    |
+| [DADA2](https://benjjneb.github.io/dada2/) ([optimised fork](https://github.com/JoshuaJewell/dada2)) | LGPL v3 | Bioconductor            |
+| [swarm](https://github.com/frederic-mahe/swarm)                                                      | GPL v3  | GitHub Releases         |
+| [vsearch](https://github.com/torognes/vsearch)                                                       | GPL v3  | GitHub Releases         |
+| [cd-hit](https://github.com/weizhongli/cdhit)                                                        | GPL v2+ | GitHub Releases / apt   |
 
 ## Acknowledgements
 
@@ -534,16 +517,12 @@ This pipeline draws on the following prior work:
 
 The following colleagues at the **Department of Parasitology, Charles University** (Faculty of Science, BIOCEV, Vestec, Czech Republic) contributed to this work:
 
-- **Mgr. Jiří Novák** (supervisor) - scripts from which several modules and configurations were adapted:
-  - `call_tools.jl`
-  - `merge_taxa.jl`
-  - `pipeline.yml`
-  - `protist_filter.pr2.yml`
+- **Mgr. Jiří Novák** (supervisor) - scripts from which several modules and configurations were adapted.
 - **doc. Mgr. Vladimír Hampl** - provided laboratory access and resources.
 
 ## License
 
-Copyright © 2026 Joshua Benjamin Jewell.
+Copyright (c) 2026 Joshua Benjamin Jewell.
 
 Source code is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 

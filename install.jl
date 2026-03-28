@@ -207,23 +207,29 @@ end
 
 function download_cdhit()::String
     # System package manager
-    if OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
-        @info "Trying apt-get install cd-hit..."
+    pkg_cmd = if OS_TYPE == "macos" && Sys.which("brew") !== nothing
+        `brew install cd-hit`
+    elseif OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
+        `sudo apt-get install -y cd-hit`
+    elseif OS_TYPE == "linux" && Sys.which("dnf") !== nothing
+        `sudo dnf install -y cd-hit`
+    elseif OS_TYPE == "linux" && Sys.which("pacman") !== nothing
+        `sudo pacman -S --needed --noconfirm cd-hit`
+    elseif OS_TYPE == "linux" && Sys.which("zypper") !== nothing
+        `sudo zypper install -y cd-hit`
+    else
+        nothing
+    end
+
+    if pkg_cmd !== nothing
+        label = first(split(basename(first(pkg_cmd)), ' '))
+        @info "Trying $label install cd-hit..."
         try
-            run(`sudo apt-get install -y cd-hit`)
+            run(pkg_cmd)
             found = Sys.which("cd-hit-est")
             found !== nothing && return found
         catch
-            @warn "apt-get install failed (no sudo?), falling back to binary download."
-        end
-    elseif OS_TYPE == "macos" && Sys.which("brew") !== nothing
-        @info "Trying brew install cd-hit..."
-        try
-            run(`brew install cd-hit`)
-            found = Sys.which("cd-hit-est")
-            found !== nothing && return found
-        catch
-            @warn "brew install failed, falling back to binary download."
+            @warn "Package manager install failed (no sudo?), falling back to binary download."
         end
     end
 
@@ -256,22 +262,29 @@ end
 function ensure_pipx()
     Sys.which("pipx") !== nothing && return  # already present
 
-    @info "pipx not found — attempting to install it..."
+    @info "pipx not found - attempting to install it..."
 
-    if OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
+    pkg_cmd = if OS_TYPE == "macos" && Sys.which("brew") !== nothing
+        `brew install pipx`
+    elseif OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
+        `sudo apt-get install -y pipx`
+    elseif OS_TYPE == "linux" && Sys.which("dnf") !== nothing
+        `sudo dnf install -y pipx`
+    elseif OS_TYPE == "linux" && Sys.which("pacman") !== nothing
+        `sudo pacman -S --needed --noconfirm python-pipx`
+    elseif OS_TYPE == "linux" && Sys.which("zypper") !== nothing
+        `sudo zypper install -y python3-pipx`
+    else
+        nothing
+    end
+
+    if pkg_cmd !== nothing
         try
-            run(`sudo apt-get install -y pipx`)
-            Sys.which("pipx") !== nothing && return
-        catch
-            @warn "apt-get install pipx failed."
-        end
-    elseif OS_TYPE == "macos" && Sys.which("brew") !== nothing
-        try
-            run(`brew install pipx`)
+            run(pkg_cmd)
             run(`pipx ensurepath`)
             Sys.which("pipx") !== nothing && return
         catch
-            @warn "brew install pipx failed."
+            @warn "Package manager install of pipx failed."
         end
     end
 
@@ -400,27 +413,85 @@ function download_swarm()::String
 end
 
 function install_r_sysdeps()
-    # System libraries required to compile Bioconductor / tidyverse packages from source
-    deps = [
-        "pkg-config",                                   # needed by all configure scripts
-        "libbz2-dev", "liblzma-dev", "zlib1g-dev",    # Rsamtools / Rhtslib
-        "libcurl4-openssl-dev", "libssl-dev",           # httr / curl / openssl
-        "libxml2-dev",                                   # xml2 / rvest
-        "libfreetype6-dev", "libpng-dev",               # ragg / systemfonts
-        "libjpeg-dev", "libtiff5-dev",                  # ragg
-        "libfontconfig1-dev",                            # systemfonts
-        "libharfbuzz-dev", "libfribidi-dev",            # textshaping
-        "libhdf5-dev",                                   # rhdf5 / HDF5Array
+    # System libraries required to compile Bioconductor / tidyverse packages from source.
+    # Package names differ across distro families; each list maps to the same underlying
+    # libraries (bzip2, xz, zlib, curl, openssl, libxml2, freetype, libpng, libjpeg,
+    # libtiff, fontconfig, harfbuzz, fribidi, hdf5).
+
+    apt_deps = [
+        "pkg-config",
+        "libbz2-dev", "liblzma-dev", "zlib1g-dev",
+        "libcurl4-openssl-dev", "libssl-dev",
+        "libxml2-dev",
+        "libfreetype6-dev", "libpng-dev",
+        "libjpeg-dev", "libtiff5-dev",
+        "libfontconfig1-dev",
+        "libharfbuzz-dev", "libfribidi-dev",
+        "libhdf5-dev",
     ]
-    if OS_TYPE == "linux" && Sys.which("apt-get") !== nothing
-        @info "Installing R system library dependencies via apt-get..."
-        try
-            run(`sudo apt-get install -y $deps`)
-        catch
-            @warn "apt-get install of R system deps failed (no sudo?). " *
-                  "Some R packages may not compile. Install manually:\n  " *
-                  join(deps, " ")
-        end
+
+    dnf_deps = [
+        "pkgconf-pkg-config",
+        "bzip2-devel", "xz-devel", "zlib-devel",
+        "libcurl-devel", "openssl-devel",
+        "libxml2-devel",
+        "freetype-devel", "libpng-devel",
+        "libjpeg-turbo-devel", "libtiff-devel",
+        "fontconfig-devel",
+        "harfbuzz-devel", "fribidi-devel",
+        "hdf5-devel",
+    ]
+
+    pacman_deps = [
+        "pkgconf",
+        "bzip2", "xz", "zlib",
+        "curl", "openssl",
+        "libxml2",
+        "freetype2", "libpng",
+        "libjpeg-turbo", "libtiff",
+        "fontconfig",
+        "harfbuzz", "fribidi",
+        "hdf5",
+    ]
+
+    zypper_deps = [
+        "pkg-config",
+        "libbz2-devel", "xz-devel", "zlib-devel",
+        "libcurl-devel", "libopenssl-devel",
+        "libxml2-devel",
+        "freetype2-devel", "libpng16-devel",
+        "libjpeg8-devel", "libtiff-devel",
+        "fontconfig-devel",
+        "harfbuzz-devel", "fribidi-devel",
+        "hdf5-devel",
+    ]
+
+    OS_TYPE != "linux" && return
+
+    if Sys.which("apt-get") !== nothing
+        _install_sysdeps_with(`sudo apt-get install -y`, apt_deps, "apt-get")
+    elseif Sys.which("dnf") !== nothing
+        _install_sysdeps_with(`sudo dnf install -y`, dnf_deps, "dnf")
+    elseif Sys.which("pacman") !== nothing
+        _install_sysdeps_with(`sudo pacman -S --needed --noconfirm`, pacman_deps, "pacman")
+    elseif Sys.which("zypper") !== nothing
+        _install_sysdeps_with(`sudo zypper install -y`, zypper_deps, "zypper")
+    else
+        @warn "Could not detect a supported package manager (apt-get, dnf, pacman, zypper). " *
+              "Some R packages may fail to compile. Install the development headers for: " *
+              "bzip2, xz, zlib, curl, openssl, libxml2, freetype, libpng, libjpeg, " *
+              "libtiff, fontconfig, harfbuzz, fribidi, hdf5"
+    end
+end
+
+function _install_sysdeps_with(cmd::Cmd, deps::Vector{String}, label::String)
+    @info "Installing R system library dependencies via $label..."
+    try
+        run(`$cmd $deps`)
+    catch
+        @warn "$label install of R system deps failed (no sudo?). " *
+              "Some R packages may not compile. Install manually:\n  " *
+              join(deps, " ")
     end
 end
 
@@ -456,7 +527,7 @@ function install_r_packages(packages::Vector{String}; force_reinstall::Bool=fals
             }
         }
 
-        # Final verification — exit non-zero so Julia can detect failures
+        # Final verification. Exit non-zero so Julia can detect failures.
         failed <- pkgs[!sapply(pkgs, function(p) {
             tryCatch({ library(p, character.only = TRUE); TRUE },
                      error = function(e) FALSE)
@@ -560,10 +631,14 @@ end
 const SYSIMAGE_EXT  = Sys.isapple() ? ".dylib" : ".so"
 const SYSIMAGE_PATH = joinpath(PROJECT_ROOT, "MetaManifold$(SYSIMAGE_EXT)")
 
-# All non-stdlib packages listed in Project.toml
+# Packages to precompile into the sysimage.
+# StatsPlots is excluded: it pulls in Plots to GR whose native library
+# fails to load during PackageCompiler's headless subprocess.
+# The server uses Plotly JSON (via the Analysis module) instead.
 const SYSIMAGE_PACKAGES = [
-    :CSV, :CairoMakie, :CodecZlib, :DataFrames, :HTTP, :JSON3,
-    :Oxygen, :RCall, :StatsBase, :StatsPlots, :TimeZones, :YAML,
+    :CSV, :CodecZlib, :DataFrames, :DBInterface, :DuckDB,
+    :HTTP, :JSON3, :OrderedCollections, :Oxygen, :RCall,
+    :StatsBase, :TimeZones, :XLSX, :YAML,
 ]
 
 function build_sysimage()
@@ -574,7 +649,7 @@ function build_sysimage()
     @eval using PackageCompiler
 
     pkg_list = join(string.(SYSIMAGE_PACKAGES), ", ")
-    @info "Compiling sysimage — this may take several minutes...\n  Packages: $pkg_list\n  Output:   $SYSIMAGE_PATH"
+    @info "Compiling sysimage - this may take several minutes...\n  Packages: $pkg_list\n  Output:   $SYSIMAGE_PATH"
 
     @eval PackageCompiler.create_sysimage(
         $SYSIMAGE_PACKAGES;

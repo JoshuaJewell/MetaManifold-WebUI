@@ -4,7 +4,7 @@ databases: [pr2]
 # Excludes: Bacteria, Archaea, organellar sequences, chromista sensu stricto,
 #           Metazoa, Fungi, Rhodophyta, Embryophyta (land plants).
 #
-# PR2 Division→Supergroup corrections are applied globally during
+# PR2 Division to Supergroup corrections are applied globally during
 # merge_taxonomy_counts, so no mappings are needed here.
 
 filters:

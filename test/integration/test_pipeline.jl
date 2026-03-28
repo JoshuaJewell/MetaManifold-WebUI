@@ -9,8 +9,7 @@
 #
 # Coverage:
 #   - All pipeline stages through merge_taxa (both runs)
-#   - analyse_run  for each run
-#   - analyse_study across both runs
+#   - DuckDB results loading and query helpers
 #
 # Requirements:
 #   - External tools installed (cutadapt, vsearch, swarm, cd-hit-est)
@@ -24,7 +23,7 @@
     PROJECT_ROOT = joinpath(@__DIR__, "..", "..")
     PROJECT_NAME = "MiSeq_SOP"
 
-    ## Check prerequisites — fall back to committed CI configs if real ones absent
+    ## Check prerequisites -- fall back to committed CI configs if real ones absent
     ci_config_dir = joinpath(PROJECT_ROOT, "config", "ci")
     tools_config = let p = joinpath(PROJECT_ROOT, "config", "tools.yml")
         isfile(p) ? p : joinpath(ci_config_dir, "tools.yml")
@@ -52,13 +51,11 @@
     if isdir(test_study_dir)
         for entry in readdir(test_study_dir; join=true)
             isdir(entry) || continue
-            for subdir in ("cutadapt", "dada2", "swarm", "vsearch", "merged", "analysis")
+            for subdir in ("cutadapt", "dada2", "swarm", "vsearch", "merged")
                 d = joinpath(entry, subdir)
                 isdir(d) && rm(d; recursive=true)
             end
         end
-        study_analysis = joinpath(test_study_dir, "analysis")
-        isdir(study_analysis) && rm(study_analysis; recursive=true)
     end
 
     local projects
@@ -90,7 +87,6 @@
 
     db_meta       = make_db_meta(db_config, db_name)
     r_lock_int    = ReentrantLock()
-    plot_lock     = ReentrantLock()
     skip_taxonomy = haskey(ENV, "CI_SKIP_TAXONOMY")
 
     merged_results = Vector{Union{MergedTables,Nothing}}(undef, length(projects))
@@ -102,7 +98,7 @@
 
         errors = validate_project(project, db_config)
         if !isempty(errors)
-            @warn "Integration test: run $run_name skipped - validation failed"
+            @warn "Integration test: run $(basename(project.dir)) skipped - validation failed"
             continue
         end
 
@@ -141,8 +137,7 @@
         merged = if !isnothing(otus)
             otu_tax    = fetch(otu_tax_task)
             otu_merged = merge_taxa_otu(project, otus, otu_tax, db_meta)
-            MergedTables(merge(asv_merged.tables, otu_merged.tables),
-                         asv_merged.filter_order, asv_merged.filter_colours)
+            MergedTables(merge(asv_merged.tables, otu_merged.tables))
         else
             asv_merged
         end
@@ -155,11 +150,16 @@
         @test nrow(df) > 0
         @test "SeqName" in DataFrames.names(df)
 
-        sample_cols = Analysis._sample_cols(df, db_meta)
+        # Verify sample columns exist by checking non-taxonomy numeric columns
+        non_count = Set(["SeqName", "Pident", "Accession", "rRNA", "Organellum", "specimen",
+                         "sequence", "OTU", "ASV",
+                         "Domain", "Supergroup", "Division", "Subdivision",
+                         "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"])
+        sample_cols = [c for c in DataFrames.names(df)
+                       if !(c in non_count) && !endswith(c, "_dada2") &&
+                          !endswith(c, "_boot") && !endswith(c, "_vsearch") &&
+                          eltype(df[!, c]) <: Union{Missing, Number}]
         @test length(sample_cols) == n_samples
-        for col in sample_cols
-            @test !occursin("_filt.fastq.gz", col)
-        end
         total = sum(sum(skipmissing(df[!, c])) for c in sample_cols)
         @test total > 0
 
@@ -168,48 +168,22 @@
 
         @info "Pipeline [$(basename(project.dir))]: $(nrow(df)) ASVs, $total reads across $n_samples samples"
 
-        ## Stage 5: analyse_run
-        analyse_run(project, merged, asvs, db_meta; plot_lock)
+        ## Stage 5: DuckDB results loading
+        merge_dir = joinpath(project.dir, "merged")
+        swarm_dir = joinpath(project.dir, "swarm")
+        db_path = load_results_db(merge_dir;
+            swarm_dir = isdir(swarm_dir) ? swarm_dir : nothing)
+        @test isfile(db_path)
 
-        analysis_dir = joinpath(project.dir, "analysis")
-        plots_dir    = joinpath(analysis_dir, "Plots")
-        @test isdir(analysis_dir)
-        @test isfile(joinpath(analysis_dir, "pipeline_summary.csv"))
-        @test isdir(plots_dir)
-        @test isfile(joinpath(plots_dir, "alpha_diversity.json"))
-        @test isfile(joinpath(plots_dir, "pipeline_stages.json"))
-        let fig = JSON3.read(read(joinpath(plots_dir, "alpha_diversity.json"), String))
-            @test haskey(fig, :data) && haskey(fig, :layout)
+        # Verify DuckDB query helpers work
+        with_results_db(merge_dir) do con
+            scols = Analysis.sample_columns(con, "merged")
+            @test length(scols) == n_samples
+
+            levels = Analysis.taxonomy_levels(con, "merged")
+            @test !isempty(levels)
+            @test "Domain" in levels
         end
-
-        ## Skip-guard: re-running analyse_run should not overwrite any outputs
-        mtime_alpha  = mtime(joinpath(plots_dir, "alpha_diversity.json"))
-        mtime_stages = mtime(joinpath(plots_dir, "pipeline_stages.json"))
-        mtime_csv    = mtime(joinpath(analysis_dir, "pipeline_summary.csv"))
-        analyse_run(project, merged, asvs, db_meta; plot_lock)
-        @test mtime(joinpath(plots_dir, "alpha_diversity.json"))    == mtime_alpha
-        @test mtime(joinpath(plots_dir, "pipeline_stages.json"))    == mtime_stages
-        @test mtime(joinpath(analysis_dir, "pipeline_summary.csv")) == mtime_csv
-    end
-
-    ## Stage 6: analyse_study (both runs together)
-    valid = count(!isnothing, merged_results)
-    if valid >= 2
-        analyse_study(projects, merged_results, fill(db_meta, length(projects)); plot_lock)
-
-        study_analysis_dir = joinpath(test_study_dir, "analysis")
-        study_plots_dir    = joinpath(study_analysis_dir, "Plots")
-        @test isdir(study_analysis_dir)
-        @test isdir(study_plots_dir)
-        @test isfile(joinpath(study_plots_dir, "nmds.json")) ||
-              isfile(joinpath(study_plots_dir, "alpha_comparison.json"))
-        let candidate = joinpath(study_plots_dir, "alpha_comparison.json")
-            if isfile(candidate)
-                fig = JSON3.read(read(candidate, String))
-                @test haskey(fig, :data) && haskey(fig, :layout)
-            end
-        end
-        @info "Study analysis complete"
     end
 
 end

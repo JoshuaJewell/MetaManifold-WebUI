@@ -1,0 +1,114 @@
+@testset "Analysis chart builders" begin
+
+    @testset "_palette_hex" begin
+        c3 = Analysis._palette_hex(3)
+        @test length(c3) == 3
+        @test all(s -> startswith(s, "#") && length(s) == 7, c3)
+
+        c10 = Analysis._palette_hex(10)
+        @test length(c10) == 10
+        @test allunique(c10)
+
+        # Base palette returned unchanged for small n
+        c7 = Analysis._palette_hex(7)
+        @test c7[1] == "#E69F00"
+    end
+
+    @testset "alpha_chart" begin
+        samples = ["s1", "s2", "s3"]
+        r = [10, 20, 30]
+        h = [1.0, 2.0, 2.5]
+        s = [0.7, 0.8, 0.9]
+
+        fig = Analysis.alpha_chart(samples, r, h, s)
+        @test haskey(fig, "data") && haskey(fig, "layout")
+        @test length(fig["data"]) == 3  # one trace per metric
+        # 3-panel layout keys
+        @test haskey(fig["layout"], "yaxis2") && haskey(fig["layout"], "yaxis3")
+
+        # Empty inputs produce a valid (but empty-data) chart
+        fig_empty = Analysis.alpha_chart(String[], Int[], Float64[], Float64[])
+        @test haskey(fig_empty, "data")
+    end
+
+    @testset "taxa_bar_chart" begin
+        labels = ["Eukaryota", "Bacteria"]
+        samples = ["s1", "s2"]
+        counts = [100.0 30.0; 50.0 20.0]  # 2 taxa x 2 samples
+
+        fig = Analysis.taxa_bar_chart(labels, samples, counts)
+        @test haskey(fig, "data") && haskey(fig, "layout")
+        @test fig["layout"]["barmode"] == "stack"
+        # 2 taxa -> 2 traces
+        @test length(fig["data"]) == 2
+
+        # Absolute mode
+        fig_abs = Analysis.taxa_bar_chart(labels, samples, counts; relative=false)
+        @test !haskey(fig_abs["layout"]["yaxis"], "range")
+
+        # Relative mode has range [0, 1]
+        fig_rel = Analysis.taxa_bar_chart(labels, samples, counts; relative=true)
+        @test fig_rel["layout"]["yaxis"]["range"] == [0, 1]
+    end
+
+    @testset "taxa_bar_chart top_n collapsing" begin
+        # More taxa than top_n -> extras collapsed into "Other"
+        labels = ["T$i" for i in 1:20]
+        samples = ["s1"]
+        counts = Float64[i for i in 1:20] |> c -> reshape(c, 20, 1)
+
+        fig = Analysis.taxa_bar_chart(labels, samples, counts; top_n=5)
+        trace_names = [t["name"] for t in fig["data"]]
+        @test "Other" in trace_names
+        @test length(trace_names) == 6  # top 5 + Other
+    end
+
+    @testset "pipeline_stats_chart" begin
+        sdf = DataFrame(sample=["s1", "s2"],
+                        input=[1000, 800], filtered=[900, 700], nochim=[850, 650])
+        fig = Analysis.pipeline_stats_chart(sdf)
+        @test !isnothing(fig)
+        @test haskey(fig, "data") && haskey(fig, "layout")
+        @test fig["layout"]["barmode"] == "group"
+        @test length(fig["data"]) == 2  # one bar series per sample
+
+        # Empty df -> nothing
+        @test isnothing(Analysis.pipeline_stats_chart(DataFrame(sample=String[])))
+    end
+
+    @testset "nmds_chart" begin
+        coords = [0.1 0.2; -0.3 0.4; 0.5 -0.1]
+        labels = ["s1", "s2", "s3"]
+
+        fig = Analysis.nmds_chart(coords, labels;
+            colour_by=["A", "B", "A"], stress=0.12)
+        @test haskey(fig, "data") && haskey(fig, "layout")
+        @test length(fig["data"]) == 2  # 2 colour groups: A, B
+        # Stress annotation present
+        @test !isempty(fig["layout"]["annotations"])
+        @test occursin("stress", fig["layout"]["annotations"][1]["text"])
+
+        # No colour_by -> single trace
+        fig2 = Analysis.nmds_chart(coords, labels)
+        @test length(fig2["data"]) == 1
+
+        # Empty -> valid structure
+        fig3 = Analysis.nmds_chart(zeros(0, 2), String[])
+        @test haskey(fig3, "data")
+    end
+
+    @testset "alpha_boxplot" begin
+        groups = [
+            ("GroupA", [10, 20], [1.0, 2.0], [0.7, 0.8]),
+            ("GroupB", [5, 15],  [0.8, 1.8], [0.6, 0.75]),
+        ]
+
+        fig = Analysis.alpha_boxplot(groups)
+        @test haskey(fig, "data") && haskey(fig, "layout")
+        @test length(fig["data"]) == 6  # 3 panels * 2 groups
+        # Only first panel traces show legend
+        legend_traces = [t for t in fig["data"] if get(t, "showlegend", false)]
+        @test length(legend_traces) == 2
+    end
+
+end

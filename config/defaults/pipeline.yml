@@ -1,118 +1,87 @@
-fastqc:
-  threads: 20           # number of parallel FastQC threads
-  optional_args: ""     # additional flags passed verbatim to fastqc
-
-multiqc:
-  optional_args: ""     # additional flags passed verbatim to multiqc
-
-cutadapt:
-  # Primer pair names to apply. Must match keys in the Pairs section of config/primers.yml.
-  primer_pairs:
-    - PrimerPair1
-  min_length: 200           # discard reads shorter than this after trimming (-m)
-  discard_untrimmed: true   # drop reads where no adapter was found (--discard-untrimmed)
-  cores: 0                  # parallel cores; 0 = auto-detect (-j)
-  quality_cutoff: ~         # 3' quality trimming cutoff, null to disable (-q)
-  error_rate: ~             # max adapter mismatch rate, null = cutadapt default (-e)
-  overlap: ~                # min adapter overlap length, null = cutadapt default (-O)
-  optional_args: ""         # additional flags passed verbatim to cutadapt
-
+pool_children: false
 dada2:
-  file_patterns:
-    mode: "paired"              # paired | forward | reverse
-
+  merge:
+    max_mismatch: 0
+    min_overlap: 20
+    trim_overhang: true
+  asv:
+    denovo_method: "consensus"
+    band_size_max: 430
+    band_size_min: 200
+  output:
+    taxa_prefix: "taxonomy"
+    fasta_prefix: "asvs"
+    seq_table_prefix: "seqtab_nochim"
+  verbose: true
   filter_trim:
-    trunc_q: 2
-    trunc_len: [220, 220]       # [forward, reverse]; first value used for single-end
-    max_ee: [3, 3]
     min_len: 175
     max_n: 0
     match_ids: true
     rm_phix: true
-
-  dada:
-    seed: 123
-    nbases: 200000000
-    max_consist: 15
-    pool_method: "pseudo"       # none | pseudo | true
-
-  merge:
-    min_overlap: 20
-    max_mismatch: 0
-    trim_overhang: true
-
-  asv:
-    band_size_min: 200          # null to skip length filtering
-    band_size_max: 430
-    denovo_method: "consensus"
-
+    trunc_q: 2
+    trunc_len:
+      - 220
+      - 220
+    max_ee:
+      - 3
+      - 3
+  file_patterns:
+    mode: "paired"
   taxonomy:
-    database: pr2               # key into config/databases.yml
-    multithread: 4              # higher values increase memory use significantly
-    # DISCLAIMER: Configuring a remote host causes this pipeline to connect via SSH,
-    # transfer files, execute Rscript, and delete the staging directory on the remote
-    # server. You are solely responsible for ensuring you have authorisation to use
-    # the configured host and that staging_dir is a safe path to write to and delete.
-    # The authors accept no liability for data loss or misuse arising from this feature.
-    remote:                     # omit or set host to null to run locally
-      host: ~                   # user@hostname
-      identity_file: ~          # path to SSH private key; null to use password auth
-      rscript: "Rscript"        # path to Rscript on the server
+    remote:
+      host: ~
+      rscript: "Rscript"
       staging_dir: "/absolute/path/on/server"
+      identity_file: ~
     min_boot: 0
-
-  output:
-    seq_table_prefix: "seqtab_nochim"
-    fasta_prefix: "asvs"
-    taxa_prefix: "taxonomy"
-
-  verbose: true
-
-vsearch:
-  identity: 0.75        # minimum identity threshold (--id)
-  query_cov: 0.8        # minimum fraction of query covered (--query_cov)
-  maxaccepts: ~         # stop after this many hits per query, null = vsearch default (--maxaccepts)
-  maxrejects: ~         # max rejected candidates per query, null = vsearch default (--maxrejects)
-  strand: ~             # "plus" or "both"; null = vsearch default (--strand)
-  optional_args: ""     # additional flags passed verbatim to vsearch
-
-cdhit:
-  identity: 0.97        # sequence identity threshold (-c); use 1.0 to deduplicate only
-  threads: 0            # worker threads; 0 = all available (-T)
-  optional_args: ""     # additional flags passed verbatim to cd-hit-est
-
-swarm:
-  differences: 1          # -d: max differences between sequences in the same cluster
-  threads: 0              # -t: worker threads; 0 = all available
-  chimera_check: true     # run vsearch --uchime_denovo before clustering
-  min_abundance: 2        # --minsize: discard singleton dereps before clustering
-  fastq_minovlen: 20      # --fastq_minovlen: min overlap for paired-end merging
-  identity: 0.97          # --id: threshold for mapping reads back to OTU seeds
-  optional_args: ""       # additional flags passed verbatim to swarm
-
-merge_taxa:
-  # List of filter configs to apply, each relative to config/filters/.
-  # Each entry produces a separate filtered CSV in the project's merged/ directory.
-  # The unfiltered merged.csv is always written regardless of this list.
-  # Set to [] or omit entries to produce merged.csv only.
-  filters:
-  - "parasitic_protozoa.pr2.yml"
-  - "environmental_protozoa.pr2.yml"
-  - "protist.pr2.yml"
-  - "helminths.pr2.yml"
-  - "bacteria_archaea.pr2.yml"
-  - "fungi.pr2.yml"
-  - "plants_invertebrates.pr2.yml"
-  - "vertebrates.pr2.yml"
-    
+    enabled: true
+    multithread: 4
+    database: "pr2"
+  dada:
+    max_consist: 15
+    pool_method: "pseudo"
+    nbases: 200000000
+    seed: 123
+merge_taxa: ~
+fastqc:
+  threads: 20
+  optional_args: ""
 analysis:
-  taxa_bar:
-    top_n: 15                  # collapse below this rank to "Other"
-    rank: ~                    # null = lowest assigned rank; or specify e.g. "Class"
-    ranks: ~                   # null = auto: [asv/lowest, penultimate level, antepenultimate level]
-    report_ranks: ~            # null = auto: last 3 levels
-  alpha:
-    metrics: ["richness", "shannon", "simpson"]
   nmds:
-    distance: "bray_curtis"    # only option for now
-    max_stress: 0.2            # warn if NMDS stress exceeds this value
+    max_stress: 0.2
+cutadapt:
+  r1_suffix: "_R1"
+  r2_suffix: "_R2"
+  error_rate: ~
+  primer_pairs:
+    - "EMP"
+  discard_untrimmed: true
+  cores: 0
+  min_length: 200
+  optional_args: ""
+  overlap: ~
+  quality_cutoff: ~
+swarm:
+  threads: 0
+  chimera_check: true
+  differences: 1
+  fastq_minovlen: 20
+  enabled: true
+  min_abundance: 2
+  identity: 0.97
+  optional_args: ""
+vsearch:
+  query_cov: 0.8
+  maxrejects: ~
+  maxaccepts: ~
+  enabled: true
+  identity: 0.75
+  strand: ~
+  optional_args: ""
+cdhit:
+  threads: 0
+  enabled: false
+  identity: 0.97
+  optional_args: ""
+multiqc:
+  optional_args: ""
