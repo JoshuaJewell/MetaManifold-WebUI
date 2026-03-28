@@ -463,7 +463,7 @@ projects/{project_name}/{run}/
 The server exposes a REST API under `/api/v1/`. Key endpoint groups:
 
 | Group     | Endpoints                                          | Description                                            |
-| --------- | -------------------------------------------------- | ------------------------------------------------------ |
+| -----------| ----------------------------------------------------| --------------------------------------------------------|
 | Studies   | `GET/POST/DELETE /studies`                         | List, create, rename, delete studies                   |
 | Groups    | `POST/DELETE /studies/{study}/groups`              | Create, rename, delete groups                          |
 | Runs      | `GET/POST/DELETE /studies/{study}/runs`            | List, create, rename, delete runs                      |
@@ -522,7 +522,7 @@ The following colleagues at the **Department of Parasitology, Charles University
 
 ## License
 
-Copyright (c) 2026 Joshua Benjamin Jewell.
+Copyright © 2026 Joshua Benjamin Jewell.
 
 Source code is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 

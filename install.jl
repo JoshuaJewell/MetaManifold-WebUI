@@ -190,12 +190,22 @@ end
 
 
 function download_fastqc()::String
-    # Pin to a known-good version; update periodically.
+    # Pin to a known-good version. Babraham doesn't provide a releases API,
+    # so we can't auto-detect the latest. Update this version periodically.
     version = "0.12.1"
     url = "https://www.bioinformatics.babraham.ac.uk/projects/fastqc/fastqc_v$(version).zip"
 
     zipfile = joinpath(BIN_DIR, "fastqc.zip")
-    download_to(url, zipfile)
+    try
+        download_to(url, zipfile)
+    catch e
+        error(
+            "Failed to download FastQC v$version - the URL may have changed.\n" *
+            "Download manually from https://www.bioinformatics.babraham.ac.uk/projects/fastqc/\n" *
+            "and place the fastqc binary in bin/.\n" *
+            "Original error: $e"
+        )
+    end
     run(`unzip -q -o $zipfile -d $BIN_DIR`)
     rm(zipfile)
 
@@ -233,28 +243,33 @@ function download_cdhit()::String
         end
     end
 
-    # Fallback to download precompiled binary.
-    if OS_TYPE == "linux"
-        url = "https://github.com/weizhongli/cdhit/releases/download/V4.8.1/cd-hit-v4.8.1-2019-0228-Linux.tar.gz"
-    else
-        error(
-            "No managed cd-hit download available for macOS.\n" *
-            "Install via:  brew install cd-hit\n" *
-            "Then enter the path to cd-hit-est when prompted."
-        )
-    end
+    # Fallback: build from source tarball (no precompiled Linux binary on GitHub).
+    Sys.which("make") === nothing && error(
+        "cd-hit could not be installed via package manager and 'make' is not available to build from source.\n" *
+        "Install cd-hit manually and enter the path to cd-hit-est when prompted."
+    )
 
-    @info "Downloading cd-hit v4.8.1 precompiled binary..."
+    url = "https://github.com/weizhongli/cdhit/releases/download/V4.8.1/cd-hit-v4.8.1-2019-0228.tar.gz"
+    @info "Downloading cd-hit v4.8.1 source and building from source..."
     tarball = joinpath(BIN_DIR, "cdhit_download.tar.gz")
     download_to(url, tarball)
     run(`tar -xzf $tarball -C $BIN_DIR --warning=no-unknown-keyword`)
     rm(tarball)
 
-    bin = find_file_in_dir(BIN_DIR, "cd-hit-est")
-    bin === nothing && error("cd-hit-est binary not found after extraction.")
+    # Find the extracted source directory
+    src_dir = nothing
+    for entry in readdir(BIN_DIR; join=true)
+        isdir(entry) && startswith(basename(entry), "cd-hit") && (src_dir = entry; break)
+    end
+    src_dir === nothing && error("cd-hit source directory not found after extraction.")
+
+    run(Cmd(`make -j$(Sys.CPU_THREADS)`; dir=src_dir))
+
+    bin = joinpath(src_dir, "cd-hit-est")
+    isfile(bin) || error("cd-hit-est binary not found after building. Check that a C++ compiler is installed.")
 
     dest = joinpath(BIN_DIR, "cd-hit-est")
-    bin != dest && mv(bin, dest; force=true)
+    cp(bin, dest; force=true)
     chmod(dest, 0o755)
     dest
 end

@@ -59,15 +59,23 @@ jobs:
       - name: Install cd-hit
         run: sudo apt-get install -y cd-hit
 
-      - name: Install vsearch
+      - name: Install vsearch (latest release)
         run: |
-          curl -sSL https://github.com/torognes/vsearch/releases/download/v2.30.4/vsearch-2.30.4-linux-x86_64.tar.gz | tar xz
-          sudo mv vsearch-2.30.4-linux-x86_64/bin/vsearch /usr/local/bin/vsearch
+          URL=$(curl -s https://api.github.com/repos/torognes/vsearch/releases/latest \
+            | grep -oP '"browser_download_url":\s*"\K[^"]*linux-x86_64\.tar\.gz(?!.*ubi)' | head -1)
+          echo "Downloading $URL"
+          curl -sSL "$URL" | tar xz
+          sudo mv vsearch-*/bin/vsearch /usr/local/bin/vsearch
+          vsearch --version
 
-      - name: Install swarm
+      - name: Install swarm (latest release)
         run: |
-          curl -sSL https://github.com/torognes/swarm/releases/download/v3.1.6/swarm-3.1.6-linux-x86_64.tar.gz | tar xz
-          sudo mv swarm-3.1.6-linux-x86_64/bin/swarm /usr/local/bin/swarm
+          URL=$(curl -s https://api.github.com/repos/torognes/swarm/releases/latest \
+            | grep -oP '"browser_download_url":\s*"\K[^"]*linux-x86_64[^"]*' | head -1)
+          echo "Downloading $URL"
+          curl -sSL "$URL" | tar xz
+          sudo mv swarm-*/bin/swarm /usr/local/bin/swarm
+          swarm --version
 
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
@@ -87,7 +95,7 @@ jobs:
         uses: julia-actions/julia-processcoverage@v1
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         with:
           file: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
