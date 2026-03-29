@@ -12,28 +12,13 @@ using Test
 const RUN_INTEGRATION = "--integration" in ARGS
 const RUN_SERVER      = "--server"      in ARGS
 
-## Bootstrap: load the pipeline modules without running server.jl
-import Pkg
-Pkg.activate(joinpath(@__DIR__, ".."); io=devnull)
-
+using MetaManifold
 using CSV, DataFrames, JSON3, Logging, YAML, DuckDB, DBInterface
 
-# Load only what tests need
-include(joinpath(@__DIR__, "..", "src", "core", "types.jl"))
-include(joinpath(@__DIR__, "..", "src", "core", "log.jl"))
-include(joinpath(@__DIR__, "..", "src", "core", "config.jl"))
-include(joinpath(@__DIR__, "..", "src", "core", "databases.jl"))
-include(joinpath(@__DIR__, "..", "src", "core", "duckdb_store.jl"))
-include(joinpath(@__DIR__, "..", "src", "core", "validate.jl"))
-include(joinpath(@__DIR__, "..", "src", "pipeline", "tools.jl"))
-include(joinpath(@__DIR__, "..", "src", "pipeline", "merge_taxa.jl"))
-include(joinpath(@__DIR__, "..", "src", "core", "project.jl"))
-include(joinpath(@__DIR__, "..", "src", "analysis", "diversity.jl"))
-include(joinpath(@__DIR__, "..", "src", "analysis", "analysis.jl"))
-
-using .PipelineTypes, .PipelineLog, .Config, .Databases, .DuckDBStore, .Validation
-using .Tools, .TaxonomyTableTools, .ProjectSetup
-using .DiversityMetrics, .Analysis
+using MetaManifold.PipelineTypes, MetaManifold.PipelineLog, MetaManifold.Config
+using MetaManifold.Databases, MetaManifold.DuckDBStore, MetaManifold.Validation
+using MetaManifold.Tools, MetaManifold.TaxonomyTableTools, MetaManifold.ProjectSetup
+using MetaManifold.DiversityMetrics, MetaManifold.Analysis
 
 ## Unit tests (always run)
 @testset "MetabarcodingPipeline" begin
@@ -54,9 +39,7 @@ using .DiversityMetrics, .Analysis
 
     ## Integration tests (opt-in)
     if RUN_INTEGRATION
-        include(joinpath(@__DIR__, "..", "src", "pipeline", "dada2.jl"))
-        include(joinpath(@__DIR__, "..", "src", "pipeline", "swarm.jl"))
-        using .DADA2, .OTUPipeline
+        using MetaManifold.DADA2, MetaManifold.OTUPipeline
         include("integration/test_pipeline.jl")
     else
         @info "Skipping integration tests (pass --integration to enable)"

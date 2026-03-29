@@ -12,46 +12,14 @@ module Server
     #   include("src/server/server.jl"); Server.start()
     # or via start.sh
 
+    using MetaManifold
     using Oxygen, HTTP, JSON3, YAML, Logging
 
-    # Pipeline modules
-    include(joinpath(@__DIR__, "..", "core",     "types.jl"))
-    include(joinpath(@__DIR__, "..", "core",     "log.jl"))
-    include(joinpath(@__DIR__, "..", "core",     "config.jl"))
-    include(joinpath(@__DIR__, "..", "core",     "databases.jl"))
-    include(joinpath(@__DIR__, "..", "core",     "duckdb_store.jl"))
-    include(joinpath(@__DIR__, "..", "core",     "validate.jl"))
-    include(joinpath(@__DIR__, "..", "core",     "project.jl"))
-    include(joinpath(@__DIR__, "..", "pipeline", "tools.jl"))
-    include(joinpath(@__DIR__, "..", "pipeline", "merge_taxa.jl"))
-    include(joinpath(@__DIR__, "..", "pipeline", "dada2.jl"))
-    include(joinpath(@__DIR__, "..", "pipeline", "swarm.jl"))
-    include(joinpath(@__DIR__, "..", "analysis", "diversity.jl"))
-    include(joinpath(@__DIR__, "..", "analysis", "analysis.jl"))
-
-    using .PipelineTypes, .PipelineLog, .Config, .Databases, .DuckDBStore
-    using .Tools, .TaxonomyTableTools, .ProjectSetup
-    using .DADA2, .OTUPipeline, .DiversityMetrics, .Analysis
-
-    macro get(path, handler)
-        esc(:(Oxygen.@get $path $handler))
-    end
-
-    macro post(path, handler)
-        esc(:(Oxygen.@post $path $handler))
-    end
-
-    macro delete(path, handler)
-        esc(:(Oxygen.@delete $path $handler))
-    end
-
-    macro patch(path, handler)
-        esc(:(Oxygen.@patch $path $handler))
-    end
-
-    macro stream(path, handler)
-        esc(:(Oxygen.@stream $path $handler))
-    end
+    using MetaManifold.PipelineTypes, MetaManifold.PipelineLog, MetaManifold.Config
+    using MetaManifold.Databases, MetaManifold.DuckDBStore
+    using MetaManifold.Tools, MetaManifold.TaxonomyTableTools, MetaManifold.ProjectSetup
+    using MetaManifold.DADA2, MetaManifold.OTUPipeline
+    using MetaManifold.DiversityMetrics, MetaManifold.Analysis
 
     ## EPIPE log filter
     #

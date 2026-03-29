@@ -666,14 +666,7 @@ end
 ## Sysimage creation
 const SYSIMAGE_EXT  = Sys.isapple() ? ".dylib" : ".so"
 const SYSIMAGE_PATH = joinpath(PROJECT_ROOT, "MetaManifold$(SYSIMAGE_EXT)")
-const PRECOMPILE_STATEMENTS_PATH = joinpath(PROJECT_ROOT, "precompile_statements.jl")
-
-function sysimage_packages()::Vector{Symbol}
-    deps = keys(Pkg.project().dependencies)
-    names = String[name for name in deps if name != "PackageCompiler"]
-    sort!(names)
-    Symbol.(names)
-end
+const PRECOMPILE_EXEC_PATH = joinpath(PROJECT_ROOT, "precompile_exec.jl")
 
 function build_sysimage()
     @info "Installing PackageCompiler..."
@@ -682,19 +675,16 @@ function build_sysimage()
     # Import after installation so it is available in this session
     @eval using PackageCompiler
 
-    isfile(PRECOMPILE_STATEMENTS_PATH) || error(
-        "Missing $(basename(PRECOMPILE_STATEMENTS_PATH)). Generate it first with generate_precompile_trace.jl."
-    )
+    precompile_kw = isfile(PRECOMPILE_EXEC_PATH) ?
+        Dict(:precompile_execution_file => [PRECOMPILE_EXEC_PATH]) : Dict()
 
-    packages = sysimage_packages()
-    pkg_list = join(string.(packages), ", ")
-    @info "Compiling sysimage from precompile trace - this may take several minutes...\n  Packages: $pkg_list\n  Trace:    $PRECOMPILE_STATEMENTS_PATH\n  Output:   $SYSIMAGE_PATH"
+    @info "Compiling sysimage - this may take several minutes...\n  Package: MetaManifold\n  Output:  $SYSIMAGE_PATH"
 
     @eval PackageCompiler.create_sysimage(
-        $packages;
-        sysimage_path              = $SYSIMAGE_PATH,
-        project                    = $PROJECT_ROOT,
-        precompile_statements_file = $PRECOMPILE_STATEMENTS_PATH,
+        [:MetaManifold];
+        sysimage_path = $SYSIMAGE_PATH,
+        project       = $PROJECT_ROOT,
+        $precompile_kw...,
     )
 
     @info "Sysimage written to $SYSIMAGE_PATH"

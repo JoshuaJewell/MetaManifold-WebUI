@@ -5,10 +5,10 @@
 
 using CSV, DataFrames
 
-using .Analysis: alpha_chart, taxa_bar_chart, pipeline_stats_chart,
-                 sample_columns, taxonomy_levels, filtered_counts,
-                 aggregate_by_taxon, combined_counts_across_runs,
-                 alpha_boxplot, nmds_chart, run_nmds, run_permanova, r_available
+using MetaManifold.Analysis: alpha_chart, taxa_bar_chart, pipeline_stats_chart,
+                             sample_columns, taxonomy_levels, filtered_counts,
+                             aggregate_by_taxon, combined_counts_across_runs,
+                             alpha_boxplot, nmds_chart, run_nmds, run_permanova, r_available
 
 function _validate_run_request(study::String, run::String)
     study in _study_names() || return json_error(404, "study_not_found",

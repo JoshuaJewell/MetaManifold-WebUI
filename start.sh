@@ -4,6 +4,10 @@ cd "$(dirname "$0")"
 
 ## Frontend build
 
+has_bundled_frontend() {
+  [ -f web/dist/index.html ] && [ -f web/dist/config.json ]
+}
+
 build_frontend() {
   if command -v bun >/dev/null 2>&1; then
     (cd frontend && bun install --frozen-lockfile && bun run build)
@@ -19,8 +23,13 @@ build_frontend() {
   exit 1
 }
 
-if [ ! -d web/dist ] || [ "${BUILD:-0}" = "1" ]; then
+if [ "${BUILD:-0}" = "1" ]; then
   echo "Building frontend..."
+  build_frontend
+elif has_bundled_frontend; then
+  echo "Using bundled frontend from web/dist"
+else
+  echo "Bundled frontend not found. Building frontend..."
   build_frontend
 fi
 
