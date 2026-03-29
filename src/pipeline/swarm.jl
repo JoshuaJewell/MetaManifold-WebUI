@@ -10,14 +10,14 @@ export swarm
     using ..PipelineTypes
     using ..PipelineLog
     using ..Config
-    using ..Tools: tool_bin, _sq, _run_logged
+    using ..Tools: tool_bin, _sq, _run_logged, _safe_optional_args
 
     function _swarm_args(cfg::Dict)::String
         parts = String[]
         push!(parts, "-d $(get(cfg, "differences", 1))")
         threads = get(cfg, "threads", 0)
         threads > 0 && push!(parts, "-t $threads")
-        extra = strip(get(cfg, "optional_args", ""))
+        extra = _safe_optional_args(cfg)
         isempty(extra) || push!(parts, extra)
         join(parts, " ")
     end
@@ -86,14 +86,58 @@ export swarm
         return noN
     end
 
+    function _write_seed_fasta_from_uclust!(input_fasta::String, swarm_txt::String, seeds_raw::String)
+        seed_ids = String[]
+        open(swarm_txt, "r") do io
+            for line in eachline(io)
+                fields = split(line, '\t')
+                length(fields) < 9 && continue
+                fields[1] == "S" || continue
+                push!(seed_ids, fields[9])
+            end
+        end
+
+        wanted = Set(seed_ids)
+        seqs = Dict{String,String}()
+        open(input_fasta, "r") do io
+            current_id = nothing
+            current_seq = IOBuffer()
+            for line in eachline(io)
+                if startswith(line, ">")
+                    if !isnothing(current_id) && (current_id in wanted)
+                        seqs[current_id] = String(take!(current_seq))
+                    else
+                        truncate(current_seq, 0)
+                    end
+                    current_id = strip(line[2:end])
+                else
+                    write(current_seq, strip(line))
+                end
+            end
+            if !isnothing(current_id) && (current_id in wanted)
+                seqs[current_id] = String(take!(current_seq))
+            end
+        end
+
+        open(seeds_raw, "w") do io
+            for seed_id in seed_ids
+                seq = get(seqs, seed_id, nothing)
+                isnothing(seq) && error("SWARM: Seed '$seed_id' not found in $input_fasta")
+                println(io, ">$seed_id")
+                println(io, seq)
+            end
+        end
+    end
+
     ## Step 3: SWARM clustering. Seeds are renamed otu1, otu2, ... for clean IDs.
     function _cluster!(input_fasta::String, swarm_dir::String, args::String,
                        swarm_bin::String, log_dir::String)
         seeds_raw = joinpath(swarm_dir, "seeds_raw.fasta")
         seeds     = joinpath(swarm_dir, "seeds.fasta")
         swarm_txt = joinpath(swarm_dir, "swarm.txt")
-        _run_logged("$(swarm_bin) -z $(args) $(_sq(input_fasta)) --seeds $(_sq(seeds_raw)) --uclust-file $(_sq(swarm_txt))",
+        _run_logged("$(swarm_bin) -z $(args) $(_sq(input_fasta)) --uclust-file $(_sq(swarm_txt))",
                     joinpath(log_dir, "swarm.log"))
+        _write_seed_fasta_from_uclust!(input_fasta, swarm_txt, seeds_raw)
         # Rename to otu1, otu2, ... for consistent IDs across count table and taxonomy search.
         _run_logged("awk 'BEGIN{n=0}/^>/{printf \">otu%d\\n\",++n;next}{print}' $(_sq(seeds_raw)) > $(_sq(seeds))",
                     joinpath(log_dir, "rename.log"))

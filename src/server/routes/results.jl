@@ -268,8 +268,8 @@ end
 
     body     = JSON3.read(String(req.body))
     params   = _body_filter_params(body)
-    page     = get(body, :page, 1)
-    per_page = get(body, :perPage, 100)
+    page     = max(1, Int(get(body, :page, 1)))
+    per_page = clamp(Int(get(body, :perPage, 100)), 1, 10_000)
     sort_by  = get(params, "sort",     nothing)
     sort_dir = get(params, "sort_dir", "asc")
 
@@ -345,8 +345,11 @@ end
     body = JSON3.read(String(req.body))
     preset_file = get(body, :preset, nothing)
     isnothing(preset_file) && return json_error(400, "missing_preset", "Body must include 'preset'")
+    preset_file = string(preset_file)
+    occursin(r"^[a-zA-Z0-9._-]+$", preset_file) || return json_error(400, "invalid_preset",
+        "Preset name must contain only letters, numbers, dots, hyphens, and underscores")
 
-    filter_path = joinpath(_filters_dir(), string(preset_file))
+    filter_path = joinpath(_filters_dir(), preset_file)
     isfile(filter_path) || return json_error(404, "preset_not_found",
                                                   "Preset '$preset_file' not found")
 
@@ -604,7 +607,8 @@ end
     try
         XLSX.writetable(tmp, df)
         data = read(tmp)
-        filename = get(body, :filename, "$(study)_$(run)_filtered.xlsx")
+        filename = string(get(body, :filename, "$(study)_$(run)_filtered.xlsx"))
+        filename = replace(filename, r"[^\w._-]" => "_")  # strip unsafe chars
         HTTP.Response(200, [
             "Content-Type" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "Content-Disposition" => "attachment; filename=\"$filename\"",

@@ -4,7 +4,7 @@ module Tools
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
+export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_optional_args
 
     using YAML
     using Logging
@@ -50,6 +50,17 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
 
     const _tools = load_tools()
 
+    ## Argument sanitisation
+    # optional_args are interpolated into shell commands; reject shell metacharacters.
+    const _SAFE_ARGS_RE = r"^[A-Za-z0-9\s\-_\.=,/:+]+$"
+    function _safe_optional_args(cfg::Dict, key::String="optional_args")::String
+        raw = strip(get(cfg, key, ""))
+        isempty(raw) && return ""
+        occursin(_SAFE_ARGS_RE, raw) ||
+            error("optional_args contains unsafe characters: $(repr(raw))")
+        raw
+    end
+
     ## Argument builders
 
     function _cutadapt_version(cutadapt_bin::AbstractString)
@@ -86,7 +97,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
         isnothing(error_rate) || push!(parts, "-e $error_rate")
         overlap = get(cfg, "overlap", nothing)
         isnothing(overlap) || push!(parts, "-O $overlap")
-        extra = strip(get(cfg, "optional_args", ""))
+        extra = _safe_optional_args(cfg)
         isempty(extra) || push!(parts, extra)
         join(parts, " ")
     end
@@ -101,7 +112,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
         isnothing(maxrejects) || push!(parts, "--maxrejects $maxrejects")
         strand = get(cfg, "strand", nothing)
         isnothing(strand) || push!(parts, "--strand $strand")
-        extra = strip(get(cfg, "optional_args", ""))
+        extra = _safe_optional_args(cfg)
         isempty(extra) || push!(parts, extra)
         join(parts, " ")
     end
@@ -111,7 +122,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
         push!(parts, "-c $(get(cfg, "identity", 0.97))")
         threads = get(cfg, "threads", 0)
         push!(parts, "-T $threads")
-        extra = strip(get(cfg, "optional_args", ""))
+        extra = _safe_optional_args(cfg)
         isempty(extra) || push!(parts, extra)
         join(parts, " ")
     end
@@ -250,11 +261,11 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
             end
         end
 
-        samples_str = join(samples, " ")
+        samples_str = join((_sq(s) for s in samples), " ")
         cmd = "paste <(printf \"%s\\n\" $samples_str) " *
-            "<(grep \"passing\" $stats_basename | cut -f3 -d \"(\" | tr -d \")\") " *
-            "<(grep \"filtered\" $stats_basename | cut -f3 -d \"(\" | tr -d \")\") " *
-            "> $summary_basename"
+            "<(grep \"passing\" $(_sq(stats_basename)) | cut -f3 -d \"(\" | tr -d \")\") " *
+            "<(grep \"filtered\" $(_sq(stats_basename)) | cut -f3 -d \"(\" | tr -d \")\") " *
+            "> $(_sq(summary_basename))"
 
         cd(log_dir) do
             run(pipeline(`bash -lc $cmd`))
@@ -458,9 +469,9 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
         mqc_cfg      = get(cfg, "multiqc", Dict())
         threads      = get(fqc_cfg, "threads", 20)
         fastqc_args  = "-t $threads --extract --delete"
-        extra_fqc    = strip(get(fqc_cfg, "optional_args", ""))
+        extra_fqc    = _safe_optional_args(fqc_cfg)
         isempty(extra_fqc) || (fastqc_args *= " $extra_fqc")
-        multiqc_args = strip(get(mqc_cfg, "optional_args", ""))
+        multiqc_args = _safe_optional_args(mqc_cfg)
         qc_dir       = joinpath(project.dir, "QC")
         hash_file    = joinpath(qc_dir, "config.hash")
         report       = joinpath(qc_dir, "multiqc_report.html")

@@ -129,11 +129,12 @@ module Server
             # rest may be {run}/... or {group}/{run}/... (group paths have an extra segment)
             m = match(r"^/files/([^/]+)/runs/(.+)$", uri)
             if !isnothing(m)
-                full     = abspath(joinpath(ServerState.projects_dir(), HTTP.URIs.unescapeuri(m[1]), HTTP.URIs.unescapeuri(m[2])))
-                projects = abspath(ServerState.projects_dir())
+                candidate = abspath(joinpath(ServerState.projects_dir(), HTTP.URIs.unescapeuri(m[1]), HTTP.URIs.unescapeuri(m[2])))
+                isfile(candidate) || return HTTP.Response(404, "File not found")
+                full     = realpath(candidate)
+                projects = realpath(ServerState.projects_dir())
                 startswith(full, projects * Base.Filesystem.path_separator) ||
                     return HTTP.Response(403, "Forbidden")
-                isfile(full) || return HTTP.Response(404, "File not found")
                 ext  = last(splitext(full))
                 mime = get(_mime_map, ext, "application/octet-stream")
                 return HTTP.Response(200, ["Content-Type" => mime]; body=read(full))
@@ -178,7 +179,7 @@ module Server
         isempty(initialised) || @info "Initialised projects" initialised
 
         listen || return nothing
-        serve(; host, port, access_log=nothing, middleware=[_cors_middleware, _file_middleware], show_errors=true)
+        serve(; host, port, access_log=nothing, middleware=[_cors_middleware, _file_middleware], show_errors=false)
     end
 
 end

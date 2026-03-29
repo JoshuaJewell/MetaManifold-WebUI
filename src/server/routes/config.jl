@@ -119,6 +119,10 @@ end
     root      = dirname(ServerState.data_dir())
     user_path = joinpath(root, "config", "pipeline.yml")
     body = JSON3.read(req.body)
+    for (k, _) in body
+        string(k) in _ALLOWED_CONFIG_KEYS || return json_error(400, "invalid_config_key",
+            "Config key '$(string(k))' is not a recognised pipeline option")
+    end
     for (k, v) in body
         _write_override(user_path, string(k), v)
     end
@@ -161,6 +165,10 @@ end
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
     body = JSON3.read(req.body)
+    for (k, _) in body
+        string(k) in _ALLOWED_CONFIG_KEYS || return json_error(400, "invalid_config_key",
+            "Config key '$(string(k))' is not a recognised pipeline option")
+    end
     path = joinpath(ServerState.data_dir(), study, "pipeline.yml")
     for (k, v) in body
         _write_override(path, string(k), v)
@@ -241,6 +249,10 @@ end
     group in _group_names(study) || return json_error(404, "group_not_found",
                                                           "Group '$group' not found")
     body = JSON3.read(req.body)
+    for (k, _) in body
+        string(k) in _ALLOWED_CONFIG_KEYS || return json_error(400, "invalid_config_key",
+            "Config key '$(string(k))' is not a recognised pipeline option")
+    end
     path = joinpath(ServerState.data_dir(), study, group, "pipeline.yml")
     for (k, v) in body
         _write_override(path, string(k), v)
@@ -287,6 +299,10 @@ end
     group = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
     run_path = isnothing(group) ? run : joinpath(group, run)
     body = JSON3.read(req.body)
+    for (k, _) in body
+        string(k) in _ALLOWED_CONFIG_KEYS || return json_error(400, "invalid_config_key",
+            "Config key '$(string(k))' is not a recognised pipeline option")
+    end
     path = joinpath(ServerState.data_dir(), study, run_path, "pipeline.yml")
     for (k, v) in body
         _write_override(path, string(k), v)

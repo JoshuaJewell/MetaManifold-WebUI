@@ -99,5 +99,5 @@ jobs:
         with:
           file: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: JoshuaJewell/MetaManifold
+          slug: JoshuaJewell/MetaManifold-WebUI
           fail_ci_if_error: false

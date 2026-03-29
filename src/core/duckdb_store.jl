@@ -24,12 +24,15 @@ function load_results_db(merge_dir::String; swarm_dir::Union{String,Nothing}=not
     db  = DuckDB.DB(db_path)
     con = DBInterface.connect(db)
     try
+        _esc_id(s) = "\"" * replace(s, "\"" => "\"\"") * "\""
+        _esc_str(s) = "'" * replace(s, "'" => "''") * "'"
+
         for f in readdir(merge_dir)
             endswith(f, ".csv") || continue
             table_name = splitext(f)[1]
             csv_path   = joinpath(merge_dir, f)
             DBInterface.execute(con,
-                "CREATE TABLE \"$(table_name)\" AS SELECT * FROM read_csv_auto('$(csv_path)', auto_detect=true)")
+                "CREATE TABLE $(_esc_id(table_name)) AS SELECT * FROM read_csv_auto($(_esc_str(csv_path)), auto_detect=true)")
             @info "DuckDB: loaded $f as table '$table_name'"
         end
 
@@ -37,7 +40,7 @@ function load_results_db(merge_dir::String; swarm_dir::Union{String,Nothing}=not
             membership_csv = joinpath(swarm_dir, "cluster_membership.csv")
             if isfile(membership_csv)
                 DBInterface.execute(con,
-                    "CREATE TABLE cluster_membership AS SELECT * FROM read_csv_auto('$(membership_csv)', auto_detect=true)")
+                    "CREATE TABLE cluster_membership AS SELECT * FROM read_csv_auto($(_esc_str(membership_csv)), auto_detect=true)")
                 @info "DuckDB: loaded cluster_membership from $membership_csv"
             end
         end

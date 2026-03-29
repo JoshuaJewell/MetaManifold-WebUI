@@ -533,7 +533,7 @@ function install_r_packages(packages::Vector{String}; force_reinstall::Bool=fals
         pkgs <- c($pkgs_r)
 
         if ($force_r) {
-            message("Reinstalling all packages (--update mode)...")
+            message("Reinstalling all packages...")
             BiocManager::install(pkgs, ask = FALSE, force = TRUE, dependencies = NA)
         } else {
             broken <- pkgs[!sapply(pkgs, function(p) {
@@ -811,7 +811,9 @@ function main()
         println()
         println("  --- R packages -----------------------------------------------------")
         install_r_sysdeps()
-        install_r_packages(r_packages; force_reinstall=UPDATE_MODE)
+        force_reinstall_r = UPDATE_MODE &&
+            prompt_yn("  Reinstall all R packages (dada2, tidyverse, vegan)?", false)
+        install_r_packages(r_packages; force_reinstall=force_reinstall_r)
     end
 
     # Write config

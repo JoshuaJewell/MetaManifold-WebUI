@@ -60,7 +60,6 @@ update_checkout() {
     git merge --abort >/dev/null 2>&1 || true
     git fetch origin
     git reset --hard origin/main
-    rm -rf web/dist
     echo ""
 }
 
