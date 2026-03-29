@@ -9,11 +9,21 @@
 #   bash install.sh [--update] [--modify] [--sysimage]
 #
 # Options:
-#   --update    Re-check tool versions and update managed binaries in bin/
+#   --update    Abort any in-progress merge, sync tracked files to origin/main,
+#               clean generated build artifacts, then update managed binaries
+#               in bin/
 #   --modify    Revisit configured tool paths instead of silently reusing them
 #   --sysimage  Pass through to install.jl to build the Julia sysimage
 
 set -euo pipefail
+
+UPDATE_MODE=false
+for arg in "$@"; do
+    if [ "$arg" = "--update" ]; then
+        UPDATE_MODE=true
+        break
+    fi
+done
 
 # OS detection
 
@@ -30,6 +40,33 @@ esac
 
 echo "Detected OS: $OS_TYPE"
 echo ""
+
+update_checkout() {
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "--update requested, but this directory is not a Git worktree."
+        echo "Skipping checkout sync."
+        echo ""
+        return
+    fi
+
+    if ! git remote get-url origin >/dev/null 2>&1; then
+        echo "--update requested, but no 'origin' remote is configured."
+        echo "Skipping checkout sync."
+        echo ""
+        return
+    fi
+
+    echo "Syncing checkout to origin/main..."
+    git merge --abort >/dev/null 2>&1 || true
+    git fetch origin
+    git reset --hard origin/main
+    rm -rf web/dist
+    echo ""
+}
+
+if [ "$UPDATE_MODE" = true ]; then
+    update_checkout
+fi
 
 # Julia check and install
 

@@ -52,13 +52,34 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
 
     ## Argument builders
 
-    function _cutadapt_optional_args(cfg::Dict)::String
+    function _cutadapt_version(cutadapt_bin::AbstractString)
+        try
+            version = readchomp(`bash -lc $(cutadapt_bin * " --version")`)
+            return VersionNumber(strip(split(version, '\n')[1]))
+        catch
+            return nothing
+        end
+    end
+
+    function _cutadapt_supports_threads(cutadapt_bin::AbstractString)::Bool
+        version = _cutadapt_version(cutadapt_bin)
+        isnothing(version) && return true
+        return version >= v"1.15.0"
+    end
+
+    function _cutadapt_optional_args(cfg::Dict; cutadapt_bin = tool_bin("cutadapt"))::String
         parts = String[]
         min_len = get(cfg, "min_length", 200)
         push!(parts, "-m $min_len")
         get(cfg, "discard_untrimmed", true) && push!(parts, "--discard-untrimmed")
         cores = get(cfg, "cores", 0)
-        cores != 1 && push!(parts, "-j $cores")   # -j 1 is default; 0 = auto
+        if cores != 1
+            if _cutadapt_supports_threads(cutadapt_bin)
+                push!(parts, "-j $cores")   # -j 1 is default; 0 = auto
+            else
+                @warn "Cutadapt: '$cutadapt_bin' does not support -j; running single-threaded."
+            end
+        end
         quality_cutoff = get(cfg, "quality_cutoff", nothing)
         isnothing(quality_cutoff) || push!(parts, "-q $quality_cutoff")
         error_rate = get(cfg, "error_rate", nothing)
@@ -314,7 +335,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged
         primers_path = joinpath(project.config_dir, "primers.yml")
         cfg          = get(YAML.load_file(config_path), "cutadapt", Dict())
         primer_pairs = cfg["primer_pairs"]
-        built_args   = _cutadapt_optional_args(cfg)
+        built_args   = _cutadapt_optional_args(cfg; cutadapt_bin)
         cutadapt_dir = joinpath(project.dir, "cutadapt")
         hash_file    = joinpath(cutadapt_dir, "config.hash")
 
