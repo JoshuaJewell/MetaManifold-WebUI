@@ -148,14 +148,14 @@ end
 end
 
 ## Cross-run helpers
+_opt_string(spec, key) = let v = get(spec, key, nothing)
+    isnothing(v) || isempty(string(v)) ? nothing : string(v)
+end
+
 function _resolve_run_duckdb(study::String, run_spec)
     run_name = string(get(run_spec, :run, ""))
-    group = let g = get(run_spec, :group, nothing)
-        isnothing(g) || isempty(string(g)) ? nothing : string(g)
-    end
-    prefix = let p = get(run_spec, :prefix, nothing)
-        isnothing(p) || isempty(string(p)) ? nothing : string(p)
-    end
+    group  = _opt_string(run_spec, :group)
+    prefix = _opt_string(run_spec, :prefix)
     dir = _require_duckdb(study, run_name; group)
     isnothing(dir) && return nothing
     label = if !isnothing(prefix)
@@ -185,12 +185,88 @@ function _resolved_group_label(resolved)
     end
 end
 
+function _resolved_run_label(resolved)
+    if !isnothing(resolved.group)
+        "$(resolved.group)/$(resolved.run)"
+    else
+        resolved.run
+    end
+end
+
+function _study_seed(study::String)
+    resolved = _resolve_config(study)
+    Int(get(get(resolved, "seed", (; value=DEFAULT_SEED, source="default")), :value, DEFAULT_SEED))
+end
+
+function _study_alpha_plot_config(study::String)
+    resolved = _resolve_config(study)
+    get_value(key, default) = get(get(resolved, key, (; value=default, source="default")), :value, default)
+    (;
+        show_points = Bool(get_value("analysis.alpha.show_points", true)),
+        annotate_significance = Bool(get_value("analysis.alpha.annotate_significance", false)),
+        pairwise_brackets = Bool(get_value("analysis.alpha.pairwise_brackets", false)),
+        paired_samples = Bool(get_value("analysis.alpha.paired_samples", false)),
+        significance_test = String(get_value("analysis.alpha.significance_test", "kruskal_wallis")),
+    )
+end
+
+function _comparison_sample_id(sample_col::String, resolved)
+    sample_id = sample_col
+    if !isnothing(resolved.prefix)
+        prefix = resolved.prefix * "_"
+        startswith(sample_id, prefix) && (sample_id = sample_id[length(prefix)+1:end])
+    end
+    # Normalise common naming schemes so paired alpha tests can match the same
+    # biological sample across tissues/runs, e.g. 12c_v vs 12l_v -> 12.
+    sample_id = replace(sample_id, r"_[^_]+$" => "")
+    sample_id = replace(sample_id, r"([0-9])[A-Za-z]$" => s"\1")
+    sample_id
+end
+
+function _comparison_pair_key(sample_col::String, resolved; mode::Symbol)
+    if mode == :run
+        # Study/group-level run comparison: preserve subgroup+tissue identity,
+        # drop only the run/method suffix so Caecum_12c_m pairs with Caecum_12c_v.
+        return replace(sample_col, r"_[^_]+$" => "")
+    else
+        # Within-run subgroup comparison: pair by the underlying animal/sample id,
+        # ignoring subgroup prefix, run/method suffix, and tissue suffix.
+        return _comparison_sample_id(sample_col, resolved)
+    end
+end
+
+function _expand_comparison_run_specs(study::String, runs_spec)
+    expanded = NamedTuple[]
+    for spec in runs_spec
+        run_name = string(get(spec, :run, ""))
+        isempty(run_name) && continue
+        group  = _opt_string(spec, :group)
+        prefix = _opt_string(spec, :prefix)
+
+        if !isnothing(prefix)
+            push!(expanded, (; run=run_name, group, prefix))
+            continue
+        end
+
+        data_rel = isnothing(group) ? run_name : joinpath(group, run_name)
+        data_dir = joinpath(ServerState.data_dir(), study, data_rel)
+        if _is_pooled(data_dir)
+            for subgroup in _subgroup_names(data_dir)
+                push!(expanded, (; run=run_name, group, prefix=subgroup))
+            end
+        else
+            push!(expanded, (; run=run_name, group, prefix=nothing))
+        end
+    end
+    expanded
+end
+
 function _collect_cross_run_taxa(study::String, runs_spec, table, params)
     run_data = Tuple{String, Vector{String}, DataFrame}[]
     group_labels = String[]
     run_labels = String[]
 
-    for spec in runs_spec
+    for spec in _expand_comparison_run_specs(study, runs_spec)
         resolved = _resolve_run_duckdb(study, spec)
         isnothing(resolved) && continue
         with_results_db(resolved.dir) do con
@@ -208,12 +284,22 @@ function _collect_cross_run_taxa(study::String, runs_spec, table, params)
 
             push!(run_data, (resolved.label, scols, agg))
             group_label = _resolved_group_label(resolved)
+            run_label = _resolved_run_label(resolved)
             append!(group_labels, fill(group_label, length(scols)))
-            append!(run_labels, fill(resolved.label, length(scols)))
+            append!(run_labels, fill(run_label, length(scols)))
         end
     end
 
     run_data, group_labels, run_labels
+end
+
+function _drop_empty_samples(mat::Matrix{Float64}, aligned::AbstractVector...)
+    keep = vec(sum(mat; dims=2) .> 0)
+    filtered = Any[mat[keep, :]]
+    for values in aligned
+        push!(filtered, values[keep])
+    end
+    Tuple(filtered), count(keep), length(keep)
 end
 
 ## Cross-run alpha comparison
@@ -226,11 +312,14 @@ end
     table = get(body, :table, "merged")
     params = _body_filter_params(body)
 
-    groups = Tuple{String, Vector{Int}, Vector{Float64}, Vector{Float64}}[]
+    expanded_specs = _expand_comparison_run_specs(study, runs_spec)
+    resolved_specs = filter(!isnothing, [_resolve_run_duckdb(study, spec) for spec in expanded_specs])
+    isempty(resolved_specs) && return json_error(400, "no_data", "No data found for any run")
 
-    for spec in runs_spec
-        resolved = _resolve_run_duckdb(study, spec)
-        isnothing(resolved) && continue
+    compare_mode = length(unique(_resolved_run_label(r) for r in resolved_specs)) > 1 ? :run : :subgroup
+    groups = Dict{String, NamedTuple{(:sample_ids, :richness, :shannon, :simpson), Tuple{Vector{String}, Vector{Int}, Vector{Float64}, Vector{Float64}}}}()
+
+    for resolved in resolved_specs
         with_results_db(resolved.dir) do con
             scols = _filter_by_prefix(sample_columns(con, table), resolved.prefix)
             isempty(scols) && return
@@ -244,12 +333,26 @@ end
                 push!(sh, shannon(counts))
                 push!(si, simpson(counts))
             end
-            push!(groups, (resolved.label, r, sh, si))
+            sample_ids = [_comparison_pair_key(s, resolved; mode=compare_mode) for s in scols]
+            label = compare_mode == :run ? _resolved_run_label(resolved) : _resolved_group_label(resolved)
+            bucket = get!(groups, label, (; sample_ids=String[], richness=Int[], shannon=Float64[], simpson=Float64[]))
+            append!(bucket.sample_ids, sample_ids)
+            append!(bucket.richness, r)
+            append!(bucket.shannon, sh)
+            append!(bucket.simpson, si)
         end
     end
 
     isempty(groups) && return json_error(400, "no_data", "No data found for any run")
-    fig = alpha_boxplot(groups)
+    ordered = [(label, vals.sample_ids, vals.richness, vals.shannon, vals.simpson)
+               for (label, vals) in sort(collect(groups); by = first)]
+    alpha_cfg = _study_alpha_plot_config(study)
+    fig = alpha_boxplot(ordered;
+                        show_points=alpha_cfg.show_points,
+                        annotate_significance=alpha_cfg.annotate_significance,
+                        pairwise_brackets=alpha_cfg.pairwise_brackets,
+                        paired_samples=alpha_cfg.paired_samples,
+                        significance_test=alpha_cfg.significance_test)
     HTTP.Response(200, ["Content-Type" => "application/json"],
                   body=JSON3.write(fig))
 end
@@ -272,17 +375,31 @@ end
     length(run_data) < 2 && return json_error(400, "too_few_runs",
                                                    "Need data from at least 2 runs for NMDS")
     mat, all_samples, _, _ = combined_counts_across_runs(run_data)
+    (filtered, kept, total) = _drop_empty_samples(mat, all_samples, group_labels, run_name_labels)
+    mat, all_samples, group_labels, run_name_labels = filtered
+    kept < total && @info "NMDS: dropped $(total - kept) empty samples before ordination"
     size(mat, 1) < 3 && return json_error(400, "too_few_samples",
-                                               "Need at least 3 samples for NMDS")
+                                               "Need at least 3 non-empty samples for NMDS")
 
-    coords, stress = run_nmds(mat)
+    coords, stress = run_nmds(mat; seed=_study_seed(study))
     any(isnan, coords) && return json_error(500, "nmds_failed", "NMDS computation failed")
 
-    # Colour by run name (same name = same colour), shape by group when multiple groups present
-    has_groups = length(unique(group_labels)) > 1
+    # Use a single visual dimension when only one factor varies; otherwise encode
+    # run by colour and subgroup/group by shape.
+    unique_groups = unique(group_labels)
+    unique_runs = unique(run_name_labels)
+    colour_by = if length(unique_runs) <= 1
+        group_labels
+    else
+        run_name_labels
+    end
+    shape_by = if length(unique_runs) <= 1 || length(unique_groups) <= 1
+        nothing
+    else
+        group_labels
+    end
     fig = nmds_chart(coords, all_samples;
-                     colour_by=run_name_labels, stress,
-                     shape_by=has_groups ? group_labels : nothing)
+                     colour_by=colour_by, stress, shape_by=shape_by)
     HTTP.Response(200, ["Content-Type" => "application/json"],
                   body=JSON3.write(fig))
 end
@@ -305,11 +422,14 @@ end
     length(run_data) < 2 && return json_error(400, "too_few_runs",
                                                    "Need data from at least 2 runs")
     mat, all_samples, _, _ = combined_counts_across_runs(run_data)
+    (filtered, kept, total) = _drop_empty_samples(mat, all_samples, group_labels, run_labels)
+    mat, all_samples, group_labels, run_labels = filtered
+    kept < total && @info "PERMANOVA: dropped $(total - kept) empty samples before analysis"
     size(mat, 1) < 3 && return json_error(400, "too_few_samples",
-                                               "Need at least 3 samples for PERMANOVA")
+                                               "Need at least 3 non-empty samples for PERMANOVA")
 
     metadata = DataFrame(sample=all_samples, group=group_labels, run=run_labels)
-    result = run_permanova(mat, metadata)
+    result = run_permanova(mat, metadata; seed=_study_seed(study))
     isnothing(result) && return json_error(500, "permanova_failed", "PERMANOVA computation failed")
     json(result)
 end

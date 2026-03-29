@@ -3,7 +3,7 @@ module Analysis
 # © 2026 Joshua Benjamin Jewell. All rights reserved.
 # Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-using DataFrames, JSON3, DuckDB, DBInterface
+using DataFrames, JSON3, DuckDB, DBInterface, RCall
 using ..DiversityMetrics: richness, shannon, simpson
 
 export sample_columns, filtered_counts, filtered_df, taxonomy_levels,
@@ -329,35 +329,304 @@ end
 Three-panel boxplot comparing alpha diversity across groups.
 `groups` is a vector of `(label, richness, shannon, simpson)` tuples.
 """
-function alpha_boxplot(groups::Vector{Tuple{String, Vector{Int}, Vector{Float64}, Vector{Float64}}})
+function _significance_stars(p::Union{Float64,Nothing})
+    isnothing(p) && return "n/a"
+    isnan(p) && return "n/a"
+    p <= 0.001 && return "***"
+    p <= 0.01  && return "**"
+    p <= 0.05  && return "*"
+    return "ns"
+end
+
+function _format_p_value(p::Union{Float64,Nothing})
+    isnothing(p) && return "p = n/a"
+    isnan(p) && return "p = n/a"
+    p < 0.001 && return "p < 0.001"
+    "p = $(round(p; digits=3))"
+end
+
+function _hex_to_rgba(hex::String, alpha::Float64)::String
+    length(hex) == 7 || return hex
+    r = parse(Int, hex[2:3]; base=16)
+    g = parse(Int, hex[4:5]; base=16)
+    b = parse(Int, hex[6:7]; base=16)
+    "rgba($r,$g,$b,$alpha)"
+end
+
+function _paired_metric_map(sample_ids::Vector{String}, values::Vector{Float64})
+    buckets = Dict{String, Vector{Float64}}()
+    for (sid, value) in zip(sample_ids, values)
+        push!(get!(buckets, sid, Float64[]), value)
+    end
+    Dict(k => sum(v) / length(v) for (k, v) in buckets)
+end
+
+function _alpha_significance(values::Vector{Float64},
+                             labels::Vector{String},
+                             sample_ids::Vector{String};
+                             pairwise::Bool=false,
+                             paired_samples::Bool=false)
+    _ensure_r() || return nothing, DataFrame(group1=String[], group2=String[], p=Float64[])
+    lock(_r_lock) do
+        if paired_samples
+            groups_u = unique(labels)
+            paired_maps = Dict(label => _paired_metric_map(
+                [sample_ids[i] for i in eachindex(labels) if labels[i] == label],
+                [values[i] for i in eachindex(labels) if labels[i] == label],
+            ) for label in groups_u)
+            common_ids = reduce(intersect, [Set(keys(m)) for m in Base.values(paired_maps)])
+            isempty(common_ids) && return nothing, DataFrame(group1=String[], group2=String[], p=Float64[])
+            common = sort(collect(common_ids))
+
+            RCall.globalEnv[:paired_groups] = groups_u
+            RCall.globalEnv[:paired_mat] = hcat([
+                [paired_maps[label][sid] for sid in common] for label in groups_u
+            ]...)
+            RCall.globalEnv[:do_pairwise] = pairwise
+            RCall.reval("""
+                overall_p <- tryCatch({
+                    if (ncol(paired_mat) == 2) {
+                        wilcox.test(paired_mat[,1], paired_mat[,2], paired = TRUE, exact = FALSE)\$p.value
+                    } else {
+                        suppressWarnings(friedman.test(paired_mat)\$p.value)
+                    }
+                }, error = function(e) NA_real_)
+                pairwise_df <- data.frame(group1=character(), group2=character(), p=double(),
+                                          stringsAsFactors=FALSE)
+                if (do_pairwise && ncol(paired_mat) >= 2) {
+                    rows <- list()
+                    pvals <- c()
+                    for (i in seq_len(ncol(paired_mat) - 1)) {
+                        for (j in (i + 1):ncol(paired_mat)) {
+                            p <- tryCatch(
+                                wilcox.test(paired_mat[,i], paired_mat[,j], paired = TRUE, exact = FALSE)\$p.value,
+                                error = function(e) NA_real_
+                            )
+                            rows[[length(rows) + 1]] <- c(as.character(paired_groups[i]), as.character(paired_groups[j]))
+                            pvals <- c(pvals, p)
+                        }
+                    }
+                    if (length(rows) > 0) {
+                        pairwise_df <- data.frame(
+                            group1 = vapply(rows, `[`, character(1), 1),
+                            group2 = vapply(rows, `[`, character(1), 2),
+                            p = p.adjust(pvals, method = "BH"),
+                            stringsAsFactors = FALSE
+                        )
+                    }
+                }
+            """)
+            p_value = RCall.rcopy(RCall.reval("overall_p"))
+            pairwise_df = DataFrame(RCall.rcopy(RCall.reval("pairwise_df")))
+            RCall.reval("rm(paired_groups, paired_mat, do_pairwise, overall_p, pairwise_df); gc()")
+        else
+            RCall.globalEnv[:values] = values
+            RCall.globalEnv[:groups] = labels
+            RCall.globalEnv[:do_pairwise] = pairwise
+            RCall.reval("""
+                groups_f <- factor(groups, levels = unique(groups))
+                overall_p <- tryCatch(
+                    kruskal.test(values ~ groups_f)\$p.value,
+                    error = function(e) NA_real_
+                )
+                pairwise_df <- data.frame(group1=character(), group2=character(), p=double(),
+                                          stringsAsFactors=FALSE)
+                if (do_pairwise && length(unique(groups_f)) >= 2) {
+                    pw <- tryCatch(
+                        pairwise.wilcox.test(values, groups_f, p.adjust.method = "BH", exact = FALSE),
+                        error = function(e) NULL
+                    )
+                    if (!is.null(pw) && !is.null(pw\$p.value)) {
+                        tbl <- as.data.frame(as.table(pw\$p.value), stringsAsFactors = FALSE)
+                        names(tbl) <- c("group1", "group2", "p")
+                        pairwise_df <- tbl[!is.na(tbl\$p), , drop = FALSE]
+                    }
+                }
+            """)
+            p_value = RCall.rcopy(RCall.reval("overall_p"))
+            pairwise_df = DataFrame(RCall.rcopy(RCall.reval("pairwise_df")))
+            RCall.reval("rm(values, groups, do_pairwise, groups_f, overall_p, pairwise_df); gc()")
+        end
+        overall_p = ismissing(p_value) ? nothing : Float64(p_value)
+        overall_p, pairwise_df
+    end
+end
+
+function _add_pairwise_annotations!(layout::Dict{String,Any},
+                                    xaxis_key::String,
+                                    yaxis_ref::String,
+                                    yaxis_layout_key::String,
+                                    group_labels::Vector{String},
+                                    values_by_label::Dict{String, Vector{Float64}},
+                                    pairwise_df::DataFrame)
+    nrow(pairwise_df) == 0 && return
+
+    all_vals = reduce(vcat, values(values_by_label); init=Float64[])
+    isempty(all_vals) && return
+    min_val = minimum(all_vals)
+    max_val = maximum(all_vals)
+    span = max(max_val - min_val, 1.0)
+    step = 0.08 * span
+    y = max_val + 0.12 * span
+
+    shapes = get!(layout, "shapes", Any[])
+    annotations = get!(layout, "annotations", Any[])
+    label_positions = Dict(label => idx for (idx, label) in enumerate(group_labels))
+    n_groups = max(length(group_labels), 1)
+    for row in eachrow(pairwise_df)
+        ismissing(row.p) && continue
+        g1 = String(row.group1)
+        g2 = String(row.group2)
+        g1 in group_labels || continue
+        g2 in group_labels || continue
+        p = Float64(row.p)
+        for (x0, x1, y0, y1) in (
+            (g1, g1, y - 0.02 * span, y),
+            (g2, g2, y - 0.02 * span, y),
+            (g1, g2, y, y),
+        )
+            push!(shapes, Dict{String,Any}(
+                "type" => "line",
+                "xref" => xaxis_key, "yref" => yaxis_ref,
+                "x0" => x0, "x1" => x1,
+                "y0" => y0, "y1" => y1,
+                "line" => Dict("color" => "#333333", "width" => 1),
+            ))
+        end
+        x1 = label_positions[g1]
+        x2 = label_positions[g2]
+        center = n_groups == 1 ? 0.5 : ((x1 + x2) / 2 - 1) / (n_groups - 1)
+        push!(annotations, Dict{String,Any}(
+            "xref" => "$xaxis_key domain", "yref" => yaxis_ref,
+            "x" => center, "xanchor" => "center",
+            "y" => y + 0.015 * span,
+            "text" => "<b>$(_significance_stars(p))</b>",
+            "showarrow" => false,
+            "font" => Dict("size" => 12),
+        ))
+        y += step
+    end
+
+    lower = min_val >= 0 ? 0.0 : min_val - 0.05 * span
+    axis = Dict{String,Any}(pairs(get(layout, yaxis_layout_key, Dict{String,Any}())))
+    axis["range"] = [lower, y + 0.1 * span]
+    layout[yaxis_layout_key] = axis
+end
+
+function alpha_boxplot(groups::Vector{Tuple{String, Vector{String}, Vector{Int}, Vector{Float64}, Vector{Float64}}};
+                       show_points::Bool=true,
+                       annotate_significance::Bool=false,
+                       pairwise_brackets::Bool=false,
+                       paired_samples::Bool=false,
+                       significance_test::String="kruskal_wallis")
     colours = _palette_hex(length(groups))
     panels = [
-        ("y",  "Richness (observed ASVs)", 1),
-        ("y2", "Shannon index",            2),
-        ("y3", "Simpson index",            3),
+        ("y", "x", "yaxis", "y",  "Richness (observed ASVs)", 1),
+        ("y2", "x2", "yaxis2", "y2", "Shannon index",          2),
+        ("y3", "x3", "yaxis3", "y3", "Simpson index",          3),
     ]
     traces = Any[]
-    for (pi, (yax, _, panel_idx)) in enumerate(panels)
-        for (gi, (label, richness_values, shannon_values, simpson_values)) in enumerate(groups)
+    panel_annotations = Dict{Int, Vector{Dict{String,Any}}}()
+    panel_pairwise = Dict{Int, DataFrame}()
+    for (pi, (yax, xax, _, _, _, panel_idx)) in enumerate(panels)
+        panel_labels = String[]
+        panel_values = Float64[]
+        panel_sample_ids = String[]
+        values_by_label = Dict{String, Vector{Float64}}()
+        for (gi, (label, sample_ids, richness_values, shannon_values, simpson_values)) in enumerate(groups)
             vals = pi == 1 ? Float64.(richness_values) : pi == 2 ? shannon_values : simpson_values
+            append!(panel_labels, fill(label, length(vals)))
+            append!(panel_values, vals)
+            append!(panel_sample_ids, sample_ids)
+            values_by_label[label] = vals
+            line_colour = colours[gi]
+            fill_colour = _hex_to_rgba(colours[gi], show_points ? 0.28 : 0.75)
+            customdata = Any[
+                [sample_ids[i], richness_values[i], shannon_values[i], simpson_values[i]]
+                for i in eachindex(sample_ids)
+            ]
             push!(traces, Dict{String,Any}(
                 "type" => "box", "name" => label,
-                "y" => vals, "yaxis" => yax,
-                "xaxis" => panel_idx == 1 ? "x" : "x$panel_idx",
-                "marker" => Dict("colour" => colours[gi]),
+                "x" => fill(label, length(vals)), "y" => vals, "yaxis" => yax,
+                "xaxis" => xax,
+                "customdata" => customdata,
+                "hovertemplate" => "Group: %{x}<br>Sample: %{customdata[0]}<br>Richness: %{customdata[1]}<br>Shannon: %{customdata[2]:.4f}<br>Simpson: %{customdata[3]:.4f}<extra></extra>",
+                "line" => Dict("color" => line_colour, "width" => 2),
+                "fillcolor" => fill_colour,
+                "boxpoints" => show_points ? "all" : false,
+                "jitter" => show_points ? 0.35 : 0.0,
+                "pointpos" => show_points ? 0.0 : 0.0,
+                "marker" => Dict(
+                    "color" => show_points ? _hex_to_rgba(line_colour, 0.65) : line_colour,
+                    "size" => show_points ? 7 : 8,
+                    "opacity" => 1.0,
+                    "line" => Dict("color" => "#ffffff", "width" => show_points ? 0.75 : 0.0),
+                ),
                 "showlegend" => pi == 1,
                 "legendgroup" => label,
             ))
+        end
+        if length(unique(panel_labels)) >= 2 && significance_test == "kruskal_wallis"
+            need_pairwise = pairwise_brackets
+            p_value, pairwise_df = _alpha_significance(panel_values, panel_labels, panel_sample_ids;
+                                                       pairwise=need_pairwise,
+                                                       paired_samples=paired_samples)
+            if annotate_significance
+            anns = get!(panel_annotations, panel_idx, Dict{String,Any}[])
+            push!(anns, Dict{String,Any}(
+                "xref" => "paper", "yref" => "paper",
+                "x" => 0.98,
+                "y" => panel_idx == 1 ? 0.98 : panel_idx == 2 ? 0.64 : 0.30,
+                "xanchor" => "right", "yanchor" => "top",
+                "text" => "$(paired_samples ? (length(unique(panel_labels)) == 2 ? "Paired Wilcoxon" : "Friedman") : "KW") $(_significance_stars(p_value))<br>$(_format_p_value(p_value))",
+                "showarrow" => false,
+                "align" => "right",
+                "font" => Dict("size" => 11),
+            ))
+            end
+            pairwise_brackets && (panel_pairwise[panel_idx] = pairwise_df)
         end
     end
     layout = Dict{String,Any}(
         "title" => Dict("text" => "Alpha diversity comparison"),
         "grid" => Dict("rows" => 3, "columns" => 1, "pattern" => "independent"),
+        "xaxis"  => Dict("type" => "category"),
+        "xaxis2" => Dict("type" => "category"),
+        "xaxis3" => Dict("type" => "category"),
         "yaxis"  => Dict("title" => "Richness (observed ASVs)"),
         "yaxis2" => Dict("title" => "Shannon index"),
         "yaxis3" => Dict("title" => "Simpson index"),
+        "annotations" => reduce(vcat, values(panel_annotations); init=Any[]),
     )
+    if pairwise_brackets
+        for (pi, (_, _, yaxis_layout_key, yaxis_ref, _, panel_idx)) in enumerate(panels)
+            haskey(panel_pairwise, panel_idx) || continue
+            values_by_label = Dict{String, Vector{Float64}}(
+                label => (pi == 1 ? Float64.(richness_values) : pi == 2 ? shannon_values : simpson_values)
+                for (label, _, richness_values, shannon_values, simpson_values) in groups
+            )
+            _add_pairwise_annotations!(layout,
+                                       panel_idx == 1 ? "x" : "x$panel_idx",
+                                       yaxis_ref,
+                                       yaxis_layout_key,
+                                       [label for (label, _, _, _, _) in groups],
+                                       values_by_label,
+                                       panel_pairwise[panel_idx])
+        end
+    end
     Dict("data" => traces, "layout" => layout)
+end
+
+function alpha_boxplot(groups::Vector{Tuple{String, Vector{Int}, Vector{Float64}, Vector{Float64}}}; kwargs...)
+    expanded = [
+        (label,
+         ["sample_$i" for i in eachindex(richness_values)],
+         richness_values,
+         shannon_values,
+         simpson_values)
+        for (label, richness_values, shannon_values, simpson_values) in groups
+    ]
+    alpha_boxplot(expanded; kwargs...)
 end
 
 ## NMDS
@@ -387,14 +656,15 @@ function nmds_chart(coords::Matrix{Float64}, labels::Vector{String};
         for (si, sg) in enumerate(sgroups)
             mask = (cb .== cg) .& (sb .== sg)
             any(mask) || continue
-            name = length(sgroups) <= 1 ? cg : "$cg ($sg)"
+            same_label = cg == sg
+            name = length(sgroups) <= 1 ? cg : same_label ? cg : "$cg / $sg"
             sym = _MARKER_SYMBOLS[mod1(si, length(_MARKER_SYMBOLS))]
             push!(traces, Dict{String,Any}(
                 "type" => "scatter", "mode" => "markers", "name" => name,
                 "x" => coords[mask, 1], "y" => coords[mask, 2],
                 "text" => labels[mask],
-                "legendgroup" => cg,
-                "marker" => Dict("colour" => colours[ci], "size" => 10,
+                "legendgroup" => name,
+                "marker" => Dict("color" => colours[ci], "size" => 10,
                                  "symbol" => sym),
             ))
         end
@@ -429,8 +699,7 @@ function _ensure_r()
     lock(_r_lock) do
         _r_loaded[] && return true
         try
-            @eval using RCall
-            getfield(@__MODULE__, :RCall).reval("suppressPackageStartupMessages(library(vegan))")
+            RCall.reval("suppressPackageStartupMessages(library(vegan))")
             _r_loaded[] = true
             return true
         catch e
@@ -443,18 +712,18 @@ end
 r_available() = _ensure_r()
 
 """
-    run_nmds(mat) -> (coords::Matrix{Float64}, stress::Float64)
+    run_nmds(mat; seed=123) -> (coords::Matrix{Float64}, stress::Float64)
 
 NMDS via vegan::metaMDS with Bray-Curtis distance.
 `mat` is samples-by-features. Returns NaN-filled results on failure.
 """
-function run_nmds(mat::Matrix{Float64})
+function run_nmds(mat::Matrix{Float64}; seed::Integer=123)
     _ensure_r() || return (fill(NaN, size(mat, 1), 2), NaN)
     lock(_r_lock) do
-        rcall = getfield(@__MODULE__, :RCall)
-        rcall.globalEnv[:mat] = mat
-        rcall.reval("""
-            set.seed(42)
+        RCall.globalEnv[:mat] = mat
+        RCall.globalEnv[:seed] = Int(seed)
+        RCall.reval("""
+            set.seed(seed)
             nmds_res <- tryCatch(
                 metaMDS(mat, distance = "bray", k = 2, trymax = 200,
                         autotransform = FALSE, trace = 0),
@@ -468,33 +737,33 @@ function run_nmds(mat::Matrix{Float64})
                 nmds_stress <- NA_real_
             }
         """)
-        coords = rcall.rcopy(rcall.reval("nmds_coords"))::Matrix{Float64}
-        stress = rcall.rcopy(rcall.reval("nmds_stress"))::Float64
-        rcall.reval("rm(mat, nmds_res, nmds_coords, nmds_stress); gc()")
+        coords = RCall.rcopy(RCall.reval("nmds_coords"))::Matrix{Float64}
+        stress = RCall.rcopy(RCall.reval("nmds_stress"))::Float64
+        RCall.reval("rm(mat, seed, nmds_res, nmds_coords, nmds_stress); gc()")
         coords, stress
     end
 end
 
 """
-    run_permanova(mat, metadata) -> Union{NamedTuple, Nothing}
+    run_permanova(mat, metadata; seed=123) -> Union{NamedTuple, Nothing}
 
 PERMANOVA via vegan::adonis2.
 `metadata` is a DataFrame with one row per sample and covariate columns.
 """
-function run_permanova(mat::Matrix{Float64}, metadata::DataFrame)
+function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=123)
     _ensure_r() || return nothing
     covariates = [c for c in names(metadata) if lowercase(c) != "sample"]
     isempty(covariates) && return nothing
     formula_rhs = join(covariates, " + ")
 
     lock(_r_lock) do
-        rcall = getfield(@__MODULE__, :RCall)
         meta_r = copy(metadata)
-        rcall.globalEnv[:mat] = mat
-        rcall.globalEnv[:meta_r] = meta_r
-        rcall.globalEnv[:formula_rhs] = formula_rhs
-        rcall.reval("""
-            set.seed(42)
+        RCall.globalEnv[:mat] = mat
+        RCall.globalEnv[:meta_r] = meta_r
+        RCall.globalEnv[:formula_rhs] = formula_rhs
+        RCall.globalEnv[:seed] = Int(seed)
+        RCall.reval("""
+            set.seed(seed)
             dist_mat <- vegdist(mat, method = "bray")
             form <- as.formula(paste("dist_mat ~", formula_rhs))
             perm_res <- tryCatch(
@@ -513,11 +782,11 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame)
                 perm_p <- NA_real_
             }
         """)
-        txt = rcall.rcopy(rcall.reval("perm_text"))
-        r2 = rcall.rcopy(rcall.reval("perm_r2"))
-        f_stat = rcall.rcopy(rcall.reval("perm_f"))
-        p_val = rcall.rcopy(rcall.reval("perm_p"))
-        rcall.reval("rm(mat, meta_r, formula_rhs, dist_mat, form, perm_res, perm_text, perm_r2, perm_f, perm_p); gc()")
+        txt = RCall.rcopy(RCall.reval("perm_text"))
+        r2 = RCall.rcopy(RCall.reval("perm_r2"))
+        f_stat = RCall.rcopy(RCall.reval("perm_f"))
+        p_val = RCall.rcopy(RCall.reval("perm_p"))
+        RCall.reval("rm(mat, meta_r, formula_rhs, seed, dist_mat, form, perm_res, perm_text, perm_r2, perm_f, perm_p); gc()")
 
         (ismissing(txt) || txt == "NA") && return nothing
         (; text=txt,

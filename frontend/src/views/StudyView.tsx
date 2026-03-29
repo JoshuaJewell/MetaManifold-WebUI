@@ -7,7 +7,8 @@ import { Skeleton } from '../components/Skeleton'
 import { NameDialog } from '../components/NameDialog'
 import { useToast } from '../components/Toast'
 import { ComparisonPanel } from '../components/ComparisonPanel'
-import type { ComparisonRunSpec } from '../api/types'
+import type { ComparisonRunSpec, Run } from '../api/types'
+import { expandRunSpecs } from '../api/types'
 import {
   STAGE_CONFIG_PREFIXES,
   STAGE_LABELS,
@@ -15,6 +16,7 @@ import {
 } from '../components/PipelineStages'
 
 const VISIBLE_STAGES = Object.keys(STAGE_CONFIG_PREFIXES) as (keyof typeof STAGE_CONFIG_PREFIXES)[]
+type GroupedRun = Run & { group?: string | null }
 
 type Dialog =
   | { mode: 'rename-study' }
@@ -55,14 +57,14 @@ export function StudyView() {
   )
 
   // Fetch runs from each group for the comparison panel
-  const [groupRuns, setGroupRuns] = useState<ComparisonRunSpec[]>([])
+  const [groupRuns, setGroupRuns] = useState<GroupedRun[]>([])
   useEffect(() => {
     if (!detail?.groups?.length) { setGroupRuns([]); return }
     let cancelled = false
     Promise.all(
       detail.groups.map(async (g: string) => {
         const gRuns = await api.runs.listGroup(study!, g)
-        return gRuns.map(r => ({ run: r.name, group: g }))
+        return gRuns.map(r => ({ ...r, group: g }))
       })
     ).then(results => {
       if (!cancelled) setGroupRuns(results.flat())
@@ -71,8 +73,9 @@ export function StudyView() {
   }, [detail?.groups, study])
 
   const allComparisonRuns = useMemo<ComparisonRunSpec[]>(() => {
-    const ungrouped = (runs ?? []).map(r => ({ run: r.name }))
-    return [...ungrouped, ...groupRuns]
+    const ungrouped = expandRunSpecs(runs ?? [])
+    const grouped = groupRuns.flatMap(r => expandRunSpecs([r], r.group))
+    return [...ungrouped, ...grouped]
   }, [runs, groupRuns])
 
   const jobFilter = useMemo(() => ({ study: study! }), [study])

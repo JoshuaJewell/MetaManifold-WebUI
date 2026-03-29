@@ -765,9 +765,6 @@ end
         for key in ("file_patterns", "filter_trim", "dada", "merge", "asv", "taxonomy")
             haskey(d2, key) && (config[key] = d2[key])
         end
-        if haskey(config, "dada")
-            delete!(config["dada"], "seed")
-        end
         if haskey(config, "taxonomy")
             delete!(config["taxonomy"], "multithread")
             delete!(config["taxonomy"], "remote")

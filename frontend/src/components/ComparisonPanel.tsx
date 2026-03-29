@@ -66,10 +66,10 @@ export function ComparisonPanel({ study, runs }: {
   return (
     <div style={{ marginTop: 24 }}>
       <h2 style={{ fontSize: '1rem', marginBottom: 8 }}>
-        {isSubgroupMode ? 'Sub-group Comparison' : 'Cross-Run Comparison'}
+        {isSubgroupMode ? 'Cross-Group Comparison' : 'Cross-Run Comparison'}
       </h2>
       <p style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)', marginBottom: 12 }}>
-        Comparing {runs.length} {isSubgroupMode ? 'sub-groups' : 'runs'} on the{' '}
+        Comparing {runs.length} {isSubgroupMode ? 'groups' : 'runs'} on the{' '}
         {tables.length > 1 ? (
           <select
             value={table}

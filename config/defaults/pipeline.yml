@@ -1,3 +1,5 @@
+seed: 123
+subsample_n: 0
 pool_children: false
 dada2:
   merge:
@@ -41,12 +43,21 @@ dada2:
     max_consist: 15
     pool_method: "pseudo"
     nbases: 200000000
-    seed: 123
 merge_taxa: ~
 fastqc:
   threads: 20
   optional_args: ""
 analysis:
+  alpha:
+    annotate_significance: false
+    metrics:
+      - "richness"
+      - "shannon"
+      - "simpson"
+    pairwise_brackets: false
+    paired_samples: false
+    show_points: true
+    significance_test: "kruskal_wallis"
   nmds:
     max_stress: 0.2
 cutadapt:

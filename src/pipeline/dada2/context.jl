@@ -114,7 +114,8 @@
     #   input_dir      - overrides cfg["workspace"]["input_dir"]
     #   workspace_root - overrides cfg["workspace"]["root"]
     function _pipeline_context(config_path::String; input_dir=nothing, workspace_root=nothing)
-        cfg = get(YAML.load_file(config_path), "dada2", Dict{String,Any}())
+        full_cfg = YAML.load_file(config_path)
+        cfg = get(full_cfg, "dada2", Dict{String,Any}())
 
         isnothing(input_dir)      && error("input_dir must be provided")
         isnothing(workspace_root) && error("workspace_root must be provided")
@@ -122,6 +123,7 @@
 
         validate_config(cfg)
         verbose = get(cfg, "verbose", true)
+        seed    = Int(get(full_cfg, "seed", DEFAULT_SEED))
         mode    = get(cfg["file_patterns"], "mode", "paired")
         root    = workspace_root
         dirs    = setup_workspace(root)
@@ -169,8 +171,7 @@
         # Run label for logging: last path component before /dada2
         run_label = basename(dirname(root))
 
-        (; cfg, verbose, mode, dirs, sample_names, single_sample,
+        (; cfg, verbose, seed, mode, dirs, sample_names, single_sample,
         fwd_files, rev_files, fwd_out, rev_out,
         in_fwd, out_fwd, in_rev_arg, out_rev_arg, ckpts, run_label)
     end
-

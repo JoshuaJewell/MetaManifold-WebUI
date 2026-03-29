@@ -31,7 +31,7 @@
 
         R"rm(list=ls())"
         _source_r_functions(ctx)
-        seed    = get(ctx.cfg["dada"], "seed", 123)
+        seed    = ctx.seed
         nbases  = ctx.cfg["dada"]["nbases"]
         max_con = ctx.cfg["dada"]["max_consist"]
         verbose = ctx.verbose
@@ -113,6 +113,7 @@
             R"load($errors_ckpt)"
 
             emit("Denoising reads")
+            R"set.seed($(ctx.seed))"
             pool_method = ctx.cfg["dada"]["pool_method"]
 
             ctx.mode != "reverse" ?

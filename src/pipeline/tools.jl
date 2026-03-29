@@ -7,6 +7,7 @@ module Tools
 export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_optional_args
 
     using YAML
+    using SHA
     using Logging
     using ..PipelineTypes
     using ..PipelineLog
@@ -344,7 +345,12 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         lbl          = basename(project.dir)
         config_path  = write_run_config(project)
         primers_path = joinpath(project.config_dir, "primers.yml")
-        cfg          = get(YAML.load_file(config_path), "cutadapt", Dict())
+        full_cfg     = YAML.load_file(config_path)
+        cfg          = get(full_cfg, "cutadapt", Dict())
+        fp_cfg       = get(get(full_cfg, "dada2", Dict()), "file_patterns", Dict())
+        mode         = get(fp_cfg, "mode", "paired")
+        r1_suffix    = get(cfg, "r1_suffix", "_R1")
+        r2_suffix    = get(cfg, "r2_suffix", "_R2")
         primer_pairs = cfg["primer_pairs"]
         built_args   = _cutadapt_optional_args(cfg; cutadapt_bin)
         cutadapt_dir = joinpath(project.dir, "cutadapt")
@@ -352,7 +358,36 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
 
         # Collect mtimes of all inputs: primers config + raw FASTQs.
         raw_entries   = find_fastqs(project)
-        raw_mtimes    = [mtime(e.path) for e in raw_entries]
+        subsample_n   = Int(get(full_cfg, "subsample_n", 0))
+        seed          = Int(get(full_cfg, "seed", DEFAULT_SEED))
+
+        primary_suffix  = mode == "reverse" ? r2_suffix : r1_suffix
+        primary_pattern = Regex(primary_suffix * raw"[^/]*\.fastq\.gz$")
+        selected_entries = raw_entries
+        if subsample_n > 0
+            primary_entries = [e for e in raw_entries if occursin(primary_pattern, e.name)]
+            if length(primary_entries) > subsample_n
+                ranked_entries = sort(primary_entries;
+                                      by = e -> bytes2hex(sha256("$(seed):$(e.name)")))
+                selected_entries = sort(ranked_entries[1:subsample_n], by = e -> e.name)
+                @info "[$lbl] Cutadapt: Subsampling $(length(selected_entries)) samples with seed=$seed"
+            else
+                selected_entries = sort(primary_entries, by = e -> e.name)
+            end
+        end
+
+        raw_mtimes = if mode == "paired"
+            sample_mtimes = Float64[]
+            for entry in selected_entries
+                push!(sample_mtimes, mtime(entry.path))
+                mate_base = replace(basename(entry.path), r1_suffix => r2_suffix; count=1)
+                mate_path = joinpath(dirname(entry.path), mate_base)
+                isfile(mate_path) && push!(sample_mtimes, mtime(mate_path))
+            end
+            sample_mtimes
+        else
+            [mtime(e.path) for e in selected_entries]
+        end
         primers_mtime = mtime(primers_path)
         input_mtime   = isempty(raw_mtimes) ? primers_mtime : max(primers_mtime, maximum(raw_mtimes))
 
@@ -366,14 +401,18 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
                 return TrimmedReads(cutadapt_dir)
             end
         end
-        full_cfg  = YAML.load_file(config_path)
-        fp_cfg    = get(get(full_cfg, "dada2", Dict()), "file_patterns", Dict())
-        mode      = get(fp_cfg, "mode", "paired")
-        r1_suffix = get(get(full_cfg, "cutadapt", Dict()), "r1_suffix", "_R1")
-        r2_suffix = get(get(full_cfg, "cutadapt", Dict()), "r2_suffix", "_R2")
+
+        if isdir(cutadapt_dir)
+            for f in readdir(cutadapt_dir)
+                path = joinpath(cutadapt_dir, f)
+                if endswith(f, "_trimmed.fastq.gz") || f == "logs" || f == "config.hash" || f == "config.hash.values"
+                    rm(path; recursive=true, force=true)
+                end
+            end
+        end
         mkpath(cutadapt_dir)
         run_cutadapt(get_primer_args(primer_pairs, primers_path; mode), built_args,
-                     raw_entries, cutadapt_dir, cutadapt_bin; mode, r1_suffix, r2_suffix)
+                     selected_entries, cutadapt_dir, cutadapt_bin; mode, r1_suffix, r2_suffix)
         _write_section_hash(config_path, stage_sections(:cutadapt), hash_file)
         pipeline_log(project, "cutadapt complete")
         return TrimmedReads(cutadapt_dir)

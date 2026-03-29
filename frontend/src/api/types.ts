@@ -170,6 +170,18 @@ export interface ComparisonRunSpec {
   prefix?: string | null
 }
 
+/** Expand pooled runs into per-subgroup ComparisonRunSpecs. */
+export function expandRunSpecs(
+  items: Pick<Run, 'name' | 'pooled' | 'subgroups'>[],
+  group?: string | null,
+): ComparisonRunSpec[] {
+  return items.flatMap(item =>
+    item.pooled && item.subgroups.length > 0
+      ? item.subgroups.map(prefix => ({ run: item.name, group: group ?? null, prefix }))
+      : [{ run: item.name, group: group ?? null }]
+  )
+}
+
 export interface ComparisonRequest extends AnalysisRequest {
   runs: ComparisonRunSpec[]
 }

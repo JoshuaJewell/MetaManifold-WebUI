@@ -10,10 +10,11 @@ const VISIBLE_STAGES = ['cutadapt', 'dada2_denoise', 'dada2_classify', 'swarm', 
 type VisibleStage = typeof VISIBLE_STAGES[number]
 
 // Config sections include pipeline stages plus non-stage sections like study_design
-export type ConfigSection = VisibleStage | 'study_design'
+export type ConfigSection = VisibleStage | 'study_design' | 'analysis'
 
 export const STAGE_LABELS: Record<ConfigSection, string> = {
   study_design:   'Study Design',
+  analysis:       'Analysis',
   cutadapt:       'Primer Trimming',
   dada2_denoise:  'DADA2 Denoising',
   dada2_classify: 'Taxonomy Assignment (DADA2)',
@@ -22,7 +23,8 @@ export const STAGE_LABELS: Record<ConfigSection, string> = {
 }
 
 export const STAGE_CONFIG_PREFIXES: Record<ConfigSection, string[]> = {
-  study_design:   ['pool_children'],
+  study_design:   ['seed', 'subsample_n', 'pool_children'],
+  analysis:       ['analysis.alpha.', 'analysis.nmds.', 'analysis.taxa_bar.'],
   cutadapt:       ['cutadapt.'],
   dada2_denoise:  ['dada2.file_patterns.', 'dada2.filter_trim.', 'dada2.dada.', 'dada2.merge.', 'dada2.asv.', 'cdhit.'],
   dada2_classify: ['dada2.taxonomy.', 'dada2.output.'],
@@ -34,6 +36,8 @@ const STAGE_ORDER = [...VISIBLE_STAGES]
 
 export const CONFIG_DESCRIPTIONS: Record<string, string> = {
   'pool_children':                  'Pool FASTQ files from child directories into a single run. Each child directory becomes a sub-group identified by a prefix.',
+  'seed':                           'Global random seed used by stages that require randomness.',
+  'subsample_n':                    'Number of samples to randomly select per run for quick config iteration (0 = all). 3 is recommended for testing DADA2 parameters.',
   'cutadapt.primer_pairs':        'Primer pair names to apply. Must match keys in config/primers.yml.',
   'cutadapt.min_length':          'Discard reads shorter than this after trimming (-m).',
   'cutadapt.discard_untrimmed':   'Drop reads where no adapter was found (--discard-untrimmed).',
@@ -52,7 +56,6 @@ export const CONFIG_DESCRIPTIONS: Record<string, string> = {
   'dada2.filter_trim.max_n':      'Max number of ambiguous (N) bases allowed; 0 = none.',
   'dada2.filter_trim.match_ids':  'Require forward/reverse read IDs to match.',
   'dada2.filter_trim.rm_phix':    'Remove reads matching the PhiX genome.',
-  'dada2.dada.seed':              'Random seed for reproducibility.',
   'dada2.dada.nbases':            'Number of bases used for error model learning.',
   'dada2.dada.max_consist':       'Max iterations for error model convergence.',
   'dada2.dada.pool_method':       'Sample pooling: none, pseudo (recommended), or true (memory-intensive).',
@@ -98,6 +101,11 @@ export const CONFIG_DESCRIPTIONS: Record<string, string> = {
   'analysis.taxa_bar.ranks':      'Rank levels to plot; null = auto (last 3 levels).',
   'analysis.taxa_bar.report_ranks':'Ranks to include in the report; null = auto (last 3 levels).',
   'analysis.alpha.metrics':       'Alpha diversity metrics to compute.',
+  'analysis.alpha.show_points':   'Show individual samples overlaid on alpha comparison boxplots.',
+  'analysis.alpha.annotate_significance': 'Annotate alpha comparison panels with Kruskal-Wallis significance.',
+  'analysis.alpha.pairwise_brackets': 'Run BH-adjusted pairwise Wilcoxon rank-sum tests between every group pair and draw brackets, including n.s. results.',
+  'analysis.alpha.paired_samples': 'Use paired-sample tests by matching sample IDs across groups. Uses paired Wilcoxon for 2 groups and Friedman for 3+ groups.',
+  'analysis.alpha.significance_test': 'Overall significance test used for alpha comparison annotations.',
   'analysis.nmds.distance':       'Distance metric for NMDS ordination.',
   'analysis.nmds.max_stress':     'Warn if NMDS stress exceeds this value.',
 }
@@ -112,6 +120,8 @@ export type ConfigType =
 /** Explicit type hints for config keys that aren't plain strings or arrays. */
 export const CONFIG_TYPES: Record<string, ConfigType> = {
   'pool_children':                  { kind: 'boolean' },
+  'seed':                           { kind: 'int' },
+  'subsample_n':                    { kind: 'int' },
   'cutadapt.primer_pairs':        { kind: 'multiselect', optionsFrom: 'primers' },
   'cutadapt.min_length':          { kind: 'int' },
   'cutadapt.discard_untrimmed':   { kind: 'boolean' },
@@ -125,7 +135,6 @@ export const CONFIG_TYPES: Record<string, ConfigType> = {
   'dada2.filter_trim.max_n':      { kind: 'int' },
   'dada2.filter_trim.match_ids':  { kind: 'boolean' },
   'dada2.filter_trim.rm_phix':    { kind: 'boolean' },
-  'dada2.dada.seed':              { kind: 'int' },
   'dada2.dada.nbases':            { kind: 'int' },
   'dada2.dada.max_consist':       { kind: 'int' },
   'dada2.dada.pool_method':       { kind: 'enum', options: ['none', 'pseudo', 'true'] },
@@ -156,6 +165,11 @@ export const CONFIG_TYPES: Record<string, ConfigType> = {
   'swarm.fastq_minovlen':         { kind: 'int' },
   'swarm.identity':               { kind: 'float', min: 0, max: 1, step: 0.01 },
   'analysis.taxa_bar.top_n':      { kind: 'int' },
+  'analysis.alpha.show_points':   { kind: 'boolean' },
+  'analysis.alpha.annotate_significance': { kind: 'boolean' },
+  'analysis.alpha.pairwise_brackets': { kind: 'boolean' },
+  'analysis.alpha.paired_samples': { kind: 'boolean' },
+  'analysis.alpha.significance_test': { kind: 'enum', options: ['kruskal_wallis'] },
   'analysis.nmds.max_stress':     { kind: 'float', min: 0, max: 1, step: 0.01 },
   'analysis.nmds.distance':       { kind: 'enum', options: ['bray_curtis'] },
 }
@@ -271,17 +285,25 @@ export function StageConfig({ configMap, prefixes, study, run, group, onConfigCh
   overrides?: Record<string, string[]> | null
 }) {
   // Group entries by section prefix for nice headers
-  const sections: { label: string; entries: { dottedKey: string; leafKey: string; value: unknown; source: ConfigSource }[] }[] = []
+  const sections: { label: string | null; entries: { dottedKey: string; leafKey: string; value: unknown; source: ConfigSource }[] }[] = []
 
   for (const prefix of prefixes) {
+    const isSectionPrefix = prefix.endsWith('.')
     const sectionEntries = Object.entries(configMap)
-      .filter(([k]) => k.startsWith(prefix))
-      .map(([k, { value, source }]) => ({ dottedKey: k, leafKey: k.slice(prefix.length), value, source }))
+      .filter(([k]) => isSectionPrefix ? k.startsWith(prefix) : k === prefix)
+      .map(([k, { value, source }]) => ({
+        dottedKey: k,
+        leafKey: isSectionPrefix ? k.slice(prefix.length) : k,
+        value,
+        source,
+      }))
       .sort((a, b) => a.leafKey.localeCompare(b.leafKey))
     if (sectionEntries.length > 0) {
-      // Pretty-print the prefix as a label: "dada2.filter_trim." -> "Filter Trim"
-      const rawLabel = prefix.replace(/\.$/, '').split('.').pop() ?? prefix
-      const label = rawLabel.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+      const label = isSectionPrefix
+        ? (prefix.replace(/\.$/, '').split('.').pop() ?? prefix)
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, c => c.toUpperCase())
+        : null
       sections.push({ label, entries: sectionEntries })
     }
   }
@@ -291,8 +313,8 @@ export function StageConfig({ configMap, prefixes, study, run, group, onConfigCh
   return (
     <div className={styles.configPanel}>
       {sections.map(section => (
-        <div key={section.label}>
-          {sections.length > 1 && (
+        <div key={section.label ?? section.entries.map(e => e.dottedKey).join('|')}>
+          {section.label && (
             <div style={{ fontWeight: 600, fontSize: '.78rem', marginBottom: 2, marginTop: 4 }}>{section.label}</div>
           )}
           {section.entries.map(e => (

@@ -7,7 +7,7 @@ interface PlotlySpec {
 }
 
 interface Props {
-  figure: unknown   // Plotly JSON spec from the backend
+  figure: unknown
   className?: string
 }
 

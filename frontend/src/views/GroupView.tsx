@@ -6,6 +6,7 @@ import { Skeleton } from '../components/Skeleton'
 import { NameDialog } from '../components/NameDialog'
 import { useToast } from '../components/Toast'
 import { ComparisonPanel } from '../components/ComparisonPanel'
+import { expandRunSpecs } from '../api/types'
 import {
   STAGE_CONFIG_PREFIXES,
   STAGE_LABELS,
@@ -179,7 +180,7 @@ export function GroupView({ groupName }: { groupName?: string } = {}) {
       {runs && runs.length >= 2 && (
         <ComparisonPanel
           study={study!}
-          runs={runs.map(r => ({ run: r.name, group: group ?? null }))}
+          runs={expandRunSpecs(runs, group)}
         />
       )}
 

@@ -26,17 +26,20 @@ module Config
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 export _section_stale, _write_section_hash, _stale_keys,
-       load_merged_config, write_run_config, stage_sections
+       load_merged_config, write_run_config, stage_sections,
+       DEFAULT_SEED
 
     using SHA, YAML
     using ..PipelineTypes
 
+    const DEFAULT_SEED = 123
+
     const _STAGE_SECTIONS = Dict(
         :fastqc_multiqc => ["fastqc", "multiqc"],
-        :cutadapt => ["cutadapt"],
+        :cutadapt => ["seed", "subsample_n", "cutadapt"],
         :dada2_filter_trim => ["dada2.file_patterns", "dada2.filter_trim"],
-        :dada2_learn_errors => ["dada2.dada"],
-        :dada2_denoise => ["dada2.dada", "dada2.merge"],
+        :dada2_learn_errors => ["seed", "dada2.dada"],
+        :dada2_denoise => ["seed", "dada2.dada", "dada2.merge"],
         :dada2_filter_length => ["dada2.asv"],
         :dada2_chimera_removal => ["dada2.asv", "dada2.output"],
         :dada2_assign_taxonomy => ["dada2.taxonomy", "dada2.output"],

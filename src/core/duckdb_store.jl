@@ -62,7 +62,7 @@ Ensures the connection and DB are closed after use.
 function with_results_db(f::Function, merge_dir::String)
     db_path = joinpath(merge_dir, "results.duckdb")
     isfile(db_path) || error("DuckDB file not found: $db_path")
-    db  = DuckDB.DB(db_path)
+    db  = DuckDB.DB(db_path; readonly=true)
     con = DBInterface.connect(db)
     try
         return f(con)
