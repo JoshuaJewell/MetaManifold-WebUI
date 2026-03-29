@@ -492,41 +492,33 @@ end
     isnothing(filters) && return json_error(400, "missing_filters", "Body must include 'filters'")
     description = get(body, :description, "Saved from WebUI")
 
-    lines = String["# $description", ""]
-    filter_entries = collect(pairs(filters))
-    if isempty(filter_entries)
-        lines = vcat(lines, ["filters: []"])
-    else
-        push!(lines, "filters:")
-        for (col, f) in filter_entries
-            col_str = string(col)
-            include_vals = get(f, :include, nothing)
-            min_val = get(f, :min, nothing)
-            max_val = get(f, :max, nothing)
+    filter_list = OrderedDict{String,Any}[]
+    for (col, f) in pairs(filters)
+        col_str = string(col)
+        include_vals = get(f, :include, nothing)
+        min_val = get(f, :min, nothing)
+        max_val = get(f, :max, nothing)
 
-            if !isnothing(include_vals) && include_vals isa AbstractVector
-                push!(lines, "  - column: \"$col_str\"")
-                push!(lines, "    type: include")
-                push!(lines, "    values:")
-                for v in include_vals
-                    push!(lines, "      - \"$(string(v))\"")
-                end
-            end
-            if !isnothing(min_val)
-                push!(lines, "  - column: \"$col_str\"")
-                push!(lines, "    type: min")
-                push!(lines, "    value: $(string(min_val))")
-            end
-            if !isnothing(max_val)
-                push!(lines, "  - column: \"$col_str\"")
-                push!(lines, "    type: max")
-                push!(lines, "    value: $(string(max_val))")
-            end
+        if !isnothing(include_vals) && include_vals isa AbstractVector
+            push!(filter_list, OrderedDict{String,Any}(
+                "column" => col_str, "type" => "include",
+                "values" => [string(v) for v in include_vals]))
+        end
+        if !isnothing(min_val)
+            push!(filter_list, OrderedDict{String,Any}(
+                "column" => col_str, "type" => "min",
+                "value" => min_val))
+        end
+        if !isnothing(max_val)
+            push!(filter_list, OrderedDict{String,Any}(
+                "column" => col_str, "type" => "max",
+                "value" => max_val))
         end
     end
 
     open(path, "w") do io
-        println(io, join(lines, "\n"))
+        println(io, "# ", replace(string(description), '\n' => ' '))
+        YAML.write(io, Dict("filters" => filter_list))
     end
 
     stem = splitext(filename)[1]
@@ -625,6 +617,8 @@ end
 ## Delete a filter preset
 
 @delete "/api/v1/filter-presets/{name}" function(req, name::String)
+    occursin(r"^[a-zA-Z0-9._-]+$", name) || return json_error(400, "invalid_name",
+        "Filter name must contain only letters, numbers, dots, hyphens, and underscores")
     filename = endswith(name, ".yml") ? name : name * ".yml"
     path = joinpath(_filters_dir(), filename)
     isfile(path) || return json_error(404, "preset_not_found",

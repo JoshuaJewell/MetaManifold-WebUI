@@ -66,7 +66,20 @@ function _resolve_config(study::String, run::Union{String,Nothing}=nothing,
     end for k in all_keys)
 end
 
+## Allowed config keys - derived from defaults/pipeline.yml at load time.
+## Only keys present in the factory defaults can be set via the API.
+const _ALLOWED_CONFIG_KEYS = let
+    factory_path = joinpath(@__DIR__, "..", "..", "..", "config", "defaults", "pipeline.yml")
+    isfile(factory_path) ? Set(keys(_flatten(_load_yml(factory_path)))) : Set{String}()
+end
+
+function _validate_config_key(dotted_key::String)
+    dotted_key in _ALLOWED_CONFIG_KEYS || error(
+        "Config key '$dotted_key' is not a recognised pipeline option")
+end
+
 function _write_override(path::String, dotted_key::String, value)
+    _validate_config_key(dotted_key)
     cfg = _load_yml(path)
     parts = split(dotted_key, ".")
     d = cfg

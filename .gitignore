@@ -270,7 +270,6 @@ data/MiSeq_SOP/run_B/*
 
 ### Frontend
 node_modules/
-web/dist/
 
 ### Lock files
 .~lock.*

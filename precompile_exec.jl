@@ -2,7 +2,7 @@
 #
 # Exercises MetaManifold code paths so all method specializations are
 # traced and compiled to native code. Only covers the MetaManifold package
-# (core, pipeline, analysis) — NOT the Server module, which is loaded at
+# (core, pipeline, analysis) - NOT the Server module, which is loaded at
 # runtime via include().
 
 using MetaManifold

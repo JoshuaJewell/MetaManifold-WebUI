@@ -88,6 +88,11 @@ module Server
                 # Same-origin request - no CORS headers needed
                 return next(req)
             end
+            # Only allow localhost origins
+            origin_url = try HTTP.URIs.URI(origin) catch; nothing end
+            if isnothing(origin_url) || !(lowercase(origin_url.host) in ("localhost", "127.0.0.1", "::1"))
+                return HTTP.Response(403, "Forbidden: non-localhost origin")
+            end
             cors_headers = [
                 "Access-Control-Allow-Origin"  => origin,
                 "Access-Control-Allow-Methods" => "GET, POST, PATCH, DELETE, OPTIONS",
