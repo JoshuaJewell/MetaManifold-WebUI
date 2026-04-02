@@ -159,6 +159,17 @@ export _section_stale, _write_section_hash, _stale_keys,
         end
     end
 
+    # Recursively collect all leaf (non-Dict) values into `out` as dotted-key => canonical-string pairs.
+    function _collect_leaf_values!(out::Dict{String,String}, prefix::AbstractString, val)
+        if val isa Dict
+            for (k, v) in val
+                _collect_leaf_values!(out, prefix == "" ? string(k) : "$prefix.$k", v)
+            end
+        else
+            out[prefix] = _canonical(val)
+        end
+    end
+
     # Walk a dotted key path ("dada2.filter_trim") into a nested Dict.
     # Returns nothing if any key is missing or a non-Dict is encountered mid-path.
     function _get_nested(cfg, path::AbstractString)
@@ -224,18 +235,12 @@ export _section_stale, _write_section_hash, _stale_keys,
         values_file = hash_file * ".values"
         sections = [strip(s) for s in split(section, ",")]
 
-        # Collect current leaf keys
+        # Collect current leaf keys (recursive)
         current = Dict{String,String}()
         for sec in sections
             val = _get_nested(cfg, sec)
             isnothing(val) && continue
-            if val isa Dict
-                for (k, v) in val
-                    current["$sec.$k"] = _canonical(v)
-                end
-            else
-                current[sec] = _canonical(val)
-            end
+            _collect_leaf_values!(current, sec, val)
         end
 
         # Read stored values from companion file
@@ -270,17 +275,15 @@ export _section_stale, _write_section_hash, _stale_keys,
         cfg isa Dict || return
         sections = [strip(s) for s in split(section, ",")]
         values_file = hash_file * ".values"
+        leaves = Dict{String,String}()
+        for sec in sections
+            val = _get_nested(cfg, sec)
+            isnothing(val) && continue
+            _collect_leaf_values!(leaves, sec, val)
+        end
         open(values_file, "w") do io
-            for sec in sections
-                val = _get_nested(cfg, sec)
-                isnothing(val) && continue
-                if val isa Dict
-                    for (k, v) in sort(collect(val); by=first)
-                        println(io, "$sec.$k=", _canonical(v))
-                    end
-                else
-                    println(io, "$sec=", _canonical(val))
-                end
+            for (k, v) in sort(collect(leaves); by=first)
+                println(io, "$k=$v")
             end
         end
     end

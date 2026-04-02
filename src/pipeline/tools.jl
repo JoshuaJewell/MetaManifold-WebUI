@@ -75,7 +75,10 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
 
     function _cutadapt_supports_threads(cutadapt_bin::AbstractString)::Bool
         version = _cutadapt_version(cutadapt_bin)
-        isnothing(version) && return true
+        if isnothing(version)
+            @warn "Cutadapt: could not determine version of '$cutadapt_bin'; disabling threaded mode."
+            return false
+        end
         return version >= v"1.15.0"
     end
 
@@ -180,7 +183,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
             end
         end
 
-        return chop(args)
+        return rstrip(args)
     end
 
     function run_cutadapt(primer_args, optional_args, fastq_in_dir, cutadapt_dir,

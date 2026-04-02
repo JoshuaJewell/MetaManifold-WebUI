@@ -13,12 +13,13 @@ const RUN_INTEGRATION = "--integration" in ARGS
 const RUN_SERVER      = "--server"      in ARGS
 
 using MetaManifold
-using CSV, DataFrames, JSON3, Logging, YAML, DuckDB, DBInterface
+using CSV, DataFrames, JSON3, Logging, YAML, DuckDB, DBInterface, Dates
 
 using MetaManifold.PipelineTypes, MetaManifold.PipelineLog, MetaManifold.Config
 using MetaManifold.Databases, MetaManifold.DuckDBStore, MetaManifold.Validation
 using MetaManifold.Tools, MetaManifold.TaxonomyTableTools, MetaManifold.ProjectSetup
 using MetaManifold.DiversityMetrics, MetaManifold.Analysis
+using MetaManifold.FuncDBAnnotation
 
 ## Unit tests (always run)
 @testset "MetabarcodingPipeline" begin
@@ -36,6 +37,7 @@ using MetaManifold.DiversityMetrics, MetaManifold.Analysis
     include("unit/test_log.jl")
     include("unit/test_databases.jl")
     include("unit/test_merge_taxa_mappings.jl")
+    include("unit/test_funcdb.jl")
 
     ## Integration tests (opt-in)
     if RUN_INTEGRATION

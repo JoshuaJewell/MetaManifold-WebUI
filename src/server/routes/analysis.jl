@@ -261,10 +261,11 @@ function _expand_comparison_run_specs(study::String, runs_spec)
     expanded
 end
 
-function _collect_cross_run_taxa(study::String, runs_spec, table, params)
+function _collect_cross_run_asvs(study::String, runs_spec, table, params)
     run_data = Tuple{String, Vector{String}, DataFrame}[]
     group_labels = String[]
     run_labels = String[]
+    missing_seq = false
 
     for spec in _expand_comparison_run_specs(study, runs_spec)
         resolved = _resolve_run_duckdb(study, spec)
@@ -274,15 +275,26 @@ function _collect_cross_run_taxa(study::String, runs_spec, table, params)
             isempty(scols) && return
 
             columns = _duckdb_columns(con, table)
+            if !("sequence" in columns)
+                missing_seq = true
+                return
+            end
+
             where_clause, where_params = _build_where(params, columns)
-            levels = taxonomy_levels(con, table)
-            isempty(levels) && return
+            seq_filter = isempty(where_clause) ?
+                "WHERE \"sequence\" IS NOT NULL AND TRIM(\"sequence\") != ''" :
+                "$where_clause AND \"sequence\" IS NOT NULL AND TRIM(\"sequence\") != ''"
 
-            rank = last(levels)
-            agg = aggregate_by_taxon(con, table, scols, rank, where_clause, where_params)
-            nrow(agg) == 0 && return
+            sum_exprs = join(["SUM(COALESCE(\"$c\", 0)) AS \"$c\"" for c in scols], ", ")
+            sql = """
+                SELECT "sequence", $sum_exprs
+                FROM "$table" $seq_filter
+                GROUP BY "sequence"
+            """
+            df = DataFrame(DBInterface.execute(con, sql, where_params))
+            nrow(df) == 0 && return
 
-            push!(run_data, (resolved.label, scols, agg))
+            push!(run_data, (resolved.label, scols, df))
             group_label = _resolved_group_label(resolved)
             run_label = _resolved_run_label(resolved)
             append!(group_labels, fill(group_label, length(scols)))
@@ -290,7 +302,7 @@ function _collect_cross_run_taxa(study::String, runs_spec, table, params)
         end
     end
 
-    run_data, group_labels, run_labels
+    run_data, group_labels, run_labels, missing_seq
 end
 
 function _drop_empty_samples(mat::Matrix{Float64}, aligned::AbstractVector...)
@@ -357,6 +369,11 @@ end
                   body=JSON3.write(fig))
 end
 
+## Server capabilities
+@get "/api/v1/capabilities" function(req)
+    json((; r_available=r_available()))
+end
+
 ## Cross-run NMDS
 @post "/api/v1/studies/{study}/analysis/nmds" function(req, study::String)
     study in _study_names() || return json_error(404, "study_not_found",
@@ -370,11 +387,13 @@ end
     table = get(body, :table, "merged")
     params = _body_filter_params(body)
 
-    run_data, group_labels, run_name_labels = _collect_cross_run_taxa(study, runs_spec, table, params)
+    run_data, group_labels, run_name_labels, missing_seq = _collect_cross_run_asvs(study, runs_spec, table, params)
 
+    missing_seq && return json_error(400, "no_sequence_data",
+                                         "Table '$table' does not contain sequence data — select an ASV-level table (e.g. merged or asv_counts)")
     length(run_data) < 2 && return json_error(400, "too_few_runs",
                                                    "Need data from at least 2 runs for NMDS")
-    mat, all_samples, _, _ = combined_counts_across_runs(run_data)
+    mat, all_samples, _, _ = combined_asv_counts_across_runs(run_data)
     (filtered, kept, total) = _drop_empty_samples(mat, all_samples, group_labels, run_name_labels)
     mat, all_samples, group_labels, run_name_labels = filtered
     kept < total && @info "NMDS: dropped $(total - kept) empty samples before ordination"
@@ -417,11 +436,13 @@ end
     table = get(body, :table, "merged")
     params = _body_filter_params(body)
 
-    run_data, group_labels, run_labels = _collect_cross_run_taxa(study, runs_spec, table, params)
+    run_data, group_labels, run_labels, missing_seq = _collect_cross_run_asvs(study, runs_spec, table, params)
 
+    missing_seq && return json_error(400, "no_sequence_data",
+                                         "Table '$table' does not contain sequence data — select an ASV-level table (e.g. merged or asv_counts)")
     length(run_data) < 2 && return json_error(400, "too_few_runs",
                                                    "Need data from at least 2 runs")
-    mat, all_samples, _, _ = combined_counts_across_runs(run_data)
+    mat, all_samples, _, _ = combined_asv_counts_across_runs(run_data)
     (filtered, kept, total) = _drop_empty_samples(mat, all_samples, group_labels, run_labels)
     mat, all_samples, group_labels, run_labels = filtered
     kept < total && @info "PERMANOVA: dropped $(total - kept) empty samples before analysis"
@@ -431,5 +452,7 @@ end
     metadata = DataFrame(sample=all_samples, group=group_labels, run=run_labels)
     result = run_permanova(mat, metadata; seed=_study_seed(study))
     isnothing(result) && return json_error(500, "permanova_failed", "PERMANOVA computation failed")
+    hasproperty(result, :message) && return json_error(500, "permanova_failed",
+                                                           "PERMANOVA computation failed: $(result.message)")
     json(result)
 end

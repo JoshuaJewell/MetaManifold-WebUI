@@ -14,8 +14,8 @@ export function timeAgo(dateStr: string | null | undefined): string {
   if (isNaN(date.getTime())) return dateStr
 
   let seconds = Math.floor((Date.now() - date.getTime()) / 1000)
-  if (seconds < 5) return 'just now'
   if (seconds < 0) return 'just now'
+  if (seconds < 5) return 'just now'
 
   for (const [divisor, singular, plural] of UNITS) {
     if (seconds < divisor) {

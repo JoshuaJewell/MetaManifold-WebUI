@@ -1,25 +1,34 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet, useParams } from 'react-router-dom'
-import { useCallback, useMemo, useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useSSE } from '../hooks/useSSE'
 import { api } from '../api/client'
 import { createJobEventBus, JobEventContext } from '../hooks/useJobEvents'
 import { Breadcrumb } from '../components/Breadcrumb'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import type { Job, StudySummary } from '../api/types'
 
 export function Layout() {
   const { study, group: groupParam, slug } = useParams<{ study?: string; group?: string; slug?: string }>()
   const { data: studies } = useApi(api.studies.list)
-  const [activeJobs, setActiveJobs] = useState(0)
+  const [runningJobIds, setRunningJobIds] = useState<Set<string>>(new Set())
 
   const jobBus = useMemo(() => createJobEventBus(), [])
 
+  useEffect(() => {
+    api.jobs.list().then(jobs => {
+      setRunningJobIds(new Set(jobs.filter((j: Job) => j.status === 'running').map((j: Job) => j.id)))
+    }).catch(() => {})
+  }, [])
+
   const sseHandlers = useMemo(() => ({
     onJobUpdate: (job: Job) => {
-      if (job.status === 'running')
-        setActiveJobs(n => n + 1)
-      if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled')
-        setActiveJobs(n => Math.max(0, n - 1))
+      setRunningJobIds(prev => {
+        const next = new Set(prev)
+        if (job.status === 'running') next.add(job.id)
+        else next.delete(job.id)
+        return next
+      })
       jobBus.emit(job)
     },
   }), [jobBus])
@@ -65,9 +74,8 @@ export function Layout() {
               <div className="sidebar-sub-label">Groups</div>
             )}
             {studyDetail.groups?.map((g: string) => (
-              <>
+              <React.Fragment key={g}>
                 <NavLink
-                  key={g}
                   to={`/${study}/${g}`}
                   className={({ isActive }) => `sidebar-link sidebar-link-indented2 ${isActive ? 'active' : ''}`}
                 >
@@ -82,7 +90,7 @@ export function Layout() {
                     {r.name}
                   </NavLink>
                 ))}
-              </>
+              </React.Fragment>
             ))}
             {studyDetail.runs && studyDetail.runs.length > 0 && (
               <div className="sidebar-sub-label">Runs</div>
@@ -103,7 +111,7 @@ export function Layout() {
 
         <div className="sidebar-section">System</div>
         <NavLink to="/jobs" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
-          Jobs{activeJobs > 0 && ` (${activeJobs})`}
+          Jobs{runningJobIds.size > 0 && ` (${runningJobIds.size})`}
         </NavLink>
         <NavLink to="/databases" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Databases</NavLink>
         <NavLink to="/config" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Default Config</NavLink>
@@ -113,7 +121,9 @@ export function Layout() {
       <main className="main-content">
         <JobEventContext.Provider value={jobBus}>
           <Breadcrumb />
-          <Outlet />
+          <ErrorBoundary>
+            <Outlet />
+          </ErrorBoundary>
         </JobEventContext.Provider>
       </main>
     </div>

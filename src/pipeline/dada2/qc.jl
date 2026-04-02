@@ -106,7 +106,7 @@
                     truncLen = $trunc_len,
                     maxEE    = $max_ee,
                     minLen   = $(ft["min_len"]),
-                    maxN     = $(ft["max_n"]),
+                    maxN     = 0, # DADA2 requires no Ns
                     matchIDs = $(ft["match_ids"]),
                     rm.phix  = $(ft["rm_phix"]),
                     verbose  = $verbose
@@ -120,7 +120,7 @@
                     truncLen = $(trunc_len[1]),
                     maxEE    = $(max_ee[1]),
                     minLen   = $(ft["min_len"]),
-                    maxN     = $(ft["max_n"]),
+                    maxN     = 0, # DADA2 requires no Ns
                     rm.phix  = $(ft["rm_phix"]),
                     verbose  = $verbose
                 )

@@ -4,7 +4,7 @@ module DuckDBStore
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-export load_results_db, with_results_db
+export load_results_db, with_results_db, with_results_db_write
 
 using DuckDB, Logging
 
@@ -63,6 +63,26 @@ function with_results_db(f::Function, merge_dir::String)
     db_path = joinpath(merge_dir, "results.duckdb")
     isfile(db_path) || error("DuckDB file not found: $db_path")
     db  = DuckDB.DB(db_path; readonly=true)
+    con = DBInterface.connect(db)
+    try
+        return f(con)
+    finally
+        DBInterface.close!(con)
+        close(db)
+    end
+end
+
+"""
+    with_results_db_write(f, merge_dir)
+
+Open the DuckDB database in read-write mode and pass the connection to `f`.
+Use this for mutations (CREATE TABLE, DROP TABLE) only; prefer `with_results_db`
+for all read operations to avoid unintentional writes.
+"""
+function with_results_db_write(f::Function, merge_dir::String)
+    db_path = joinpath(merge_dir, "results.duckdb")
+    isfile(db_path) || error("DuckDB file not found: $db_path")
+    db  = DuckDB.DB(db_path)
     con = DBInterface.connect(db)
     try
         return f(con)

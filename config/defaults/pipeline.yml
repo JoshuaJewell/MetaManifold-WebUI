@@ -1,3 +1,18 @@
+your_name: ""
+annotation:
+  contamination:
+    blacklist:
+      function: []
+      detailed_function: []
+      associated_organism: []
+      associated_material: []
+      environment: []
+    whitelist:
+      function: []
+      detailed_function: []
+      associated_organism: []
+      associated_material: []
+      environment: []
 seed: 123
 subsample_n: 0
 pool_children: false
@@ -17,7 +32,6 @@ dada2:
   verbose: true
   filter_trim:
     min_len: 175
-    max_n: 0
     match_ids: true
     rm_phix: true
     trunc_q: 2

@@ -6,6 +6,7 @@ import type {
   ConfigMap,
   DatabaseEntry,
   ApiError,
+  AnnotationSource, AnnotationMeta, ContaminationStats,
   AnalysisRequest, TaxaBarRequest, ComparisonRequest, PermanovaResult,
 } from './types'
 
@@ -206,6 +207,37 @@ export const api = {
                      post<unknown>(`/api/v1/studies/${study}/analysis/nmds`, body),
     permanova:     (study: string, body: ComparisonRequest) =>
                      post<PermanovaResult>(`/api/v1/studies/${study}/analysis/permanova`, body),
+    capabilities:  () => get<{ r_available: boolean }>('/api/v1/capabilities'),
+  },
+
+  annotations: {
+    list: (study: string, run: string, source: AnnotationSource, group?: string | null) =>
+      get<AnnotationMeta[]>(`/api/v1/studies/${study}/runs/${run}/annotations/${source}${gq(group)}`),
+    generate: (study: string, run: string, source: AnnotationSource, table: string, group?: string | null) =>
+      post<AnnotationMeta & { output_path: string }>(`/api/v1/studies/${study}/runs/${run}/annotations/${source}/generate${gq(group)}`, { table }),
+    query: (study: string, run: string, source: AnnotationSource, table: string, q: TableQuery, group?: string | null) =>
+      post<TablePage>(`/api/v1/studies/${study}/runs/${run}/annotations/${source}/${table}/query${gq(group)}`, q),
+    distinct: (study: string, run: string, source: AnnotationSource, table: string, column: string, activeFilters?: Record<string, ColFilter>, group?: string | null) =>
+      post<DistinctInfo>(`/api/v1/studies/${study}/runs/${run}/annotations/${source}/${table}/distinct/${column}${gq(group)}`,
+        activeFilters ? { colFilters: activeFilters } : {}),
+    updateContamination: (study: string, run: string, source: AnnotationSource, table: string,
+                          rank: string, taxon: string, status: string, group?: string | null) =>
+      patch<{ table: string; rank: string; taxon: string; status: string; rows_affected: number }>(
+        `/api/v1/studies/${study}/runs/${run}/annotations/${source}/${table}/contamination${gq(group)}`,
+        { rank, taxon, status }),
+    contaminationStats: (study: string, run: string, source: AnnotationSource, table: string, group?: string | null) =>
+      get<ContaminationStats>(`/api/v1/studies/${study}/runs/${run}/annotations/${source}/${table}/contamination/stats${gq(group)}`),
+    applyContaminationFilter: (
+      study: string, run: string, source: AnnotationSource, table: string,
+      filter: { blacklist: Record<string, string[]>; whitelist: Record<string, string[]> },
+      group?: string | null,
+    ) =>
+      post<AnnotationMeta & { output_path: string; contamination_stats: ContaminationStats }>(
+        `/api/v1/studies/${study}/runs/${run}/annotations/${source}/generate${gq(group)}`,
+        { table, contamination_only: true, ...filter },
+      ),
+    addFuncdbEntry: (entry: Record<string, string>, modified_by?: string) =>
+      post<Record<string, string>>('/api/v1/funcdb/entries', { ...entry, modified_by: modified_by ?? '' }),
   },
 
   databases: {

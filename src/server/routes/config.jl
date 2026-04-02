@@ -6,6 +6,8 @@
 
 using JSON3, YAML
 
+const _config_file_lock = ReentrantLock()
+
 ## Config resolution
 
 # Returns the merged config cascade for a run as a flat dict of dotted keys,
@@ -80,30 +82,48 @@ end
 
 function _write_override(path::String, dotted_key::String, value)
     _validate_config_key(dotted_key)
-    cfg = _load_yml(path)
-    parts = split(dotted_key, ".")
-    d = cfg
-    for p in parts[1:end-1]
-        d = get!(d, p, Dict())
-    end
-    d[parts[end]] = value
-    open(path, "w") do io
-        YAML.write(io, cfg)
+    lock(_config_file_lock) do
+        cfg = _load_yml(path)
+        parts = split(dotted_key, ".")
+        d = cfg
+        for p in parts[1:end-1]
+            child = get(d, p, nothing)
+            if child isa Dict
+                d = child
+            elseif isnothing(child)
+                new_dict = Dict()
+                d[p] = new_dict
+                d = new_dict
+            else
+                error("Config key segment '$p' is not a section; cannot set sub-key")
+            end
+        end
+        d[parts[end]] = value
+        tmp = path * ".tmp"
+        open(tmp, "w") do io
+            YAML.write(io, cfg)
+        end
+        mv(tmp, path; force=true)
     end
 end
 
 function _delete_override(path::String, dotted_key::String)
     isfile(path) || return
-    cfg   = _load_yml(path)
-    parts = split(dotted_key, ".")
-    d     = cfg
-    for p in parts[1:end-1]
-        haskey(d, p) || return
-        d = d[p]
-    end
-    delete!(d, parts[end])
-    open(path, "w") do io
-        YAML.write(io, cfg)
+    lock(_config_file_lock) do
+        cfg   = _load_yml(path)
+        parts = split(dotted_key, ".")
+        d     = cfg
+        for p in parts[1:end-1]
+            haskey(d, p) || return
+            d = d[p]
+            d isa Dict || return
+        end
+        delete!(d, parts[end])
+        tmp = path * ".tmp"
+        open(tmp, "w") do io
+            YAML.write(io, cfg)
+        end
+        mv(tmp, path; force=true)
     end
 end
 
@@ -279,7 +299,7 @@ function _all_run_names(study::String)
     for group in _group_names(study)
         append!(runs, _group_run_names(study, group))
     end
-    runs
+    unique!(runs)
 end
 
 @get "/api/v1/studies/{study}/runs/{run}/config" function(req, study::String, run::String)

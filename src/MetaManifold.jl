@@ -9,6 +9,9 @@ include("core/duckdb_store.jl")
 include("core/validate.jl")
 include("core/project.jl")
 
+# Annotation
+include("annotation/funcdb.jl")
+
 # Pipeline
 include("pipeline/tools.jl")
 include("pipeline/merge_taxa.jl")

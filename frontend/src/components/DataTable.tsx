@@ -1,3 +1,6 @@
+// © 2026 Joshua Benjamin Jewell. All rights reserved.
+// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import type { TablePage, TableQuery, ColFilter, DistinctInfo } from '../api/types'
@@ -19,10 +22,16 @@ interface Props {
   fetcher: (q: TableQuery) => Promise<TablePage>
   distinctFetcher?: (column: string, activeFilters?: Record<string, ColFilter>) => Promise<DistinctInfo>
   rowPopupFetcher?: (row: Record<string, unknown>) => Promise<RowPopupData | null>
-  /** Extra columns available only in the popup (e.g. merged table columns not in merged_otu) */
+  /** Extra columns available only in the popup (e.g. merged table columns not in merged_otu). */
   popupColumns?: string[]
-  /** Map from cell value to display label, keyed by column name. E.g. { SeqName: { otu1: 'otu1 (3)' } } */
+  /** Map from cell value to display label, keyed by column name. E.g. { SeqName: { otu1: 'otu1 (3)' } }. */
   cellLabels?: Record<string, Record<string, string>>
+  /** Override cell rendering for specific columns. Return null to fall back to default. */
+  cellRenderer?: (column: string, value: string, row: Record<string, unknown>) => React.ReactNode | null
+  /** Extra actions rendered in the action cell (same cell as BLAST, or its own cell if no sequence col). */
+  extraRowActions?: (row: Record<string, unknown>) => React.ReactNode
+  /** Show VSEARCH / DADA2 taxonomy column preset buttons (Tables tab). The All button is always shown when _dada2 cols are present. */
+  showTaxonomyPresets?: boolean
   perPage?: number
   initialFilters?: Record<string, ColFilter>
   onFiltersChange?: (filters: Record<string, ColFilter>) => void
@@ -32,7 +41,7 @@ interface Props {
 
 type SortDir = 'asc' | 'desc'
 
-export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColumns, cellLabels, perPage = 100, initialFilters, onFiltersChange, onSortChange, onStatsChange }: Props) {
+export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColumns, cellLabels, cellRenderer, extraRowActions, showTaxonomyPresets = false, perPage = 100, initialFilters, onFiltersChange, onSortChange, onStatsChange }: Props) {
   const [page, setPage]             = useState(1)
   const [filter, setFilter]         = useState('')
   const [sortBy, setSortBy]         = useState<string | null>(null)
@@ -42,6 +51,8 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set())
   const [stickyCols, setStickyCols] = useState<Set<string>>(new Set())
   const [showColPicker, setShowColPicker] = useState(false)
+  const [countsHidden, setCountsHidden] = useState(false)
+  const [activePreset, setActivePreset] = useState<'vsearch' | 'dada2' | null>(null)
   const colPickerRef = useRef<HTMLDivElement>(null)
 
   const [popupData, setPopupData]       = useState<RowPopupData | null>(null)
@@ -84,12 +95,12 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
   }, [])
 
   const setColFilters = useCallback((updater: Record<string, ColFilter> | ((prev: Record<string, ColFilter>) => Record<string, ColFilter>)) => {
-    _setColFilters(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater
-      onFiltersChange?.(next)
-      return next
-    })
-  }, [onFiltersChange])
+    _setColFilters(prev => typeof updater === 'function' ? updater(prev) : updater)
+  }, [])
+
+  useEffect(() => {
+    onFiltersChange?.(colFilters)
+  }, [colFilters]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (initialFilters) {
@@ -121,7 +132,12 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
   const rows  = data && Array.isArray(data.rows) ? data.rows : []
   const allCols = data && Array.isArray(data.columns) ? data.columns
               : (rows.length > 0 && rows[0] ? Object.keys(rows[0]) : [])
-  const cols = allCols.filter(c => !hiddenCols.has(c))
+  const sampleCountColSet = new Set(data?.sample_count_columns ?? [])
+  const effectiveHidden = new Set([
+    ...hiddenCols,
+    ...(countsHidden ? sampleCountColSet : []),
+  ])
+  const cols = allCols.filter(c => !effectiveHidden.has(c))
   const hasSequenceCol = allCols.includes('sequence')
   const pages = data ? Math.ceil(data.total / perPage) : 0
 
@@ -167,7 +183,7 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
   const clearAllFilters = () => { setColFilters({}); setFilter(''); setPage(1) }
 
   const sortIndicator = (col: string) => {
-    if (sortBy !== col) return <span className={styles.sortIcon}> ⇅</span>
+    if (sortBy !== col) return <span className={styles.sortIcon}> +</span>
     return <span className={styles.sortIconActive}>{sortDir === 'asc' ? ' ^' : ' v'}</span>
   }
 
@@ -193,33 +209,31 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
     })
   }
 
+
   const applyColumnPreset = (preset: 'vsearch' | 'dada2' | 'all') => {
     if (preset === 'all') {
       setHiddenCols(new Set())
       setColFilters({})
+      setActivePreset(null)
       setPage(1)
       return
     }
-
-    const mainHasBoth = allCols.some(c => c.endsWith('_dada2'))
-    const scope = mainHasBoth ? pickerCols : extraPopupCols
-
     const vsearchOnlyCols = ['Pident', 'Accession', 'rRNA', 'Organellum', 'specimen']
-    const vsearchTaxCols = scope.filter(c => pickerCols.includes(c + '_dada2'))
-    const dada2Cols = scope.filter(c => c.endsWith('_dada2') || c.endsWith('_boot'))
-
+    const vsearchTaxCols = pickerCols.filter(c => pickerCols.includes(c + '_dada2'))
+    const dada2Cols = pickerCols.filter(c => c.endsWith('_dada2') || c.endsWith('_boot'))
     if (preset === 'vsearch') {
       setHiddenCols(new Set(dada2Cols))
       const filters: Record<string, ColFilter> = {}
       if (pickerCols.includes('Pident')) filters['Pident'] = { min: 0 }
       setColFilters(filters)
     } else {
-      setHiddenCols(new Set([...vsearchOnlyCols.filter(c => scope.includes(c)), ...vsearchTaxCols]))
+      setHiddenCols(new Set([...vsearchOnlyCols.filter(c => pickerCols.includes(c)), ...vsearchTaxCols]))
       const filters: Record<string, ColFilter> = {}
       const bootCol = pickerCols.find(c => c.endsWith('_boot'))
       if (bootCol) filters[bootCol] = { min: 0 }
       setColFilters(filters)
     }
+    setActivePreset(preset)
     setPage(1)
   }
 
@@ -251,7 +265,7 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
           <div style={{ position: 'relative' }}>
             <button className="btn" style={{ fontSize: '.78rem', padding: '3px 8px' }}
               onClick={() => setShowColPicker(v => !v)}>
-              Columns{hiddenCols.size > 0 ? ` (${pickerCols.length - hiddenCols.size}/${pickerCols.length})` : ''}
+              Columns{effectiveHidden.size > 0 ? ` (${pickerCols.length - effectiveHidden.size}/${pickerCols.length})` : ''}
             </button>
             {showColPicker && (
               <div ref={colPickerRef} className={styles.dropdown}
@@ -275,13 +289,27 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
         )}
         {pickerCols.some(c => c.endsWith('_dada2')) && (
           <>
-            <button className="btn" style={{ fontSize: '.78rem', padding: '3px 8px' }}
-              onClick={() => applyColumnPreset('vsearch')}>VSEARCH</button>
-            <button className="btn" style={{ fontSize: '.78rem', padding: '3px 8px' }}
-              onClick={() => applyColumnPreset('dada2')}>DADA2</button>
-            <button className="btn" style={{ fontSize: '.78rem', padding: '3px 8px' }}
+            {showTaxonomyPresets && (
+              <>
+                <button className={`btn${activePreset === 'vsearch' ? ' btn-primary' : ''}`} style={{ fontSize: '.78rem', padding: '3px 8px' }}
+                  onClick={() => applyColumnPreset('vsearch')}>VSEARCH</button>
+                <button className={`btn${activePreset === 'dada2' ? ' btn-primary' : ''}`} style={{ fontSize: '.78rem', padding: '3px 8px' }}
+                  onClick={() => applyColumnPreset('dada2')}>DADA2</button>
+              </>
+            )}
+            <button className={`btn${activePreset === null ? ' btn-primary' : ''}`} style={{ fontSize: '.78rem', padding: '3px 8px' }}
               onClick={() => applyColumnPreset('all')}>All</button>
           </>
+        )}
+        {sampleCountColSet.size > 0 && (
+          <button
+            className={`btn${countsHidden ? ' btn-primary' : ''}`}
+            style={{ fontSize: '.78rem', padding: '3px 8px' }}
+            onClick={() => setCountsHidden(h => !h)}
+            title={countsHidden ? 'Show sample counts' : 'Hide sample counts'}
+          >
+            {countsHidden ? 'Show counts' : 'Hide counts'}
+          </button>
         )}
       </div>
 
@@ -315,7 +343,7 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
                             className={`${styles.dropdownBtn} ${colIsFiltered(c) ? styles.dropdownBtnActive : ''}`}
                             onClick={e => { e.stopPropagation(); setOpenDropdown(openDropdown === c ? null : c) }}
                             title="Filter values"
-                          >▾</button>
+                          >v</button>
                         )}
                         {openDropdown === c && distinctFetcher && (
                           <ColumnDropdown
@@ -332,15 +360,15 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
                       </th>
                     )
                   })}
-                  {hasSequenceCol && <th style={{ width: 60 }}></th>}
+                  {(hasSequenceCol || extraRowActions) && <th style={{ width: hasSequenceCol && extraRowActions ? 90 : 60 }}></th>}
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={cols.length + (hasSequenceCol ? 1 : 0)} className={styles.msg} style={{ textAlign: 'center' }}>Loading...</td></tr>
+                  <tr><td colSpan={cols.length + (hasSequenceCol || extraRowActions ? 1 : 0)} className={styles.msg} style={{ textAlign: 'center' }}>Loading...</td></tr>
                 )}
                 {!loading && rows.length === 0 && (
-                  <tr><td colSpan={cols.length + (hasSequenceCol ? 1 : 0)} className={styles.msg} style={{ textAlign: 'center' }}>
+                  <tr><td colSpan={cols.length + (hasSequenceCol || extraRowActions ? 1 : 0)} className={styles.msg} style={{ textAlign: 'center' }}>
                     {hasAnyFilter ? 'No matching rows.' : 'No data.'}
                   </td></tr>
                 )}
@@ -359,6 +387,10 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
                         background: 'var(--color-bg)',
                       } : undefined
                       const text = String(row[c] ?? '')
+                      const custom = cellRenderer?.(c, text, row)
+                      if (custom !== null && custom !== undefined) {
+                        return <td key={c} style={stickyStyle}>{custom}</td>
+                      }
                       const display = cellLabels?.[c]?.[text] ?? text
                       return (
                         <td key={c} style={stickyStyle}
@@ -373,15 +405,18 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
                         >{display}</td>
                       )
                     })}
-                    {hasSequenceCol && (
+                    {(hasSequenceCol || extraRowActions) && (
                       <td className={styles.blastCell}>
-                        <a
-                          href={`https://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=blastn&DATABASE=nt&CMD=Put&QUERY=${encodeURIComponent(String(row['sequence'] ?? ''))}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={styles.blastLink}
-                          title="Search this sequence on NCBI BLAST"
-                        >BLAST</a>
+                        {hasSequenceCol && (
+                          <a
+                            href={`https://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=blastn&DATABASE=nt&CMD=Put&ENTREZ_QUERY=NOT+uncultured+organism%5Borganism%5D+NOT+environmental+sample%5Borganism%5D&QUERY=${encodeURIComponent(String(row['sequence'] ?? ''))}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={styles.blastLink}
+                            title="Search this sequence on NCBI BLAST"
+                          >BLAST</a>
+                        )}
+                        {extraRowActions?.(row)}
                       </td>
                     )}
                   </tr>
@@ -437,7 +472,7 @@ export function DataTable({ fetcher, distinctFetcher, rowPopupFetcher, popupColu
                               {popupHasSeq && (
                                 <td className={styles.blastCell}>
                                   <a
-                                    href={`https://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=blastn&DATABASE=nt&CMD=Put&QUERY=${encodeURIComponent(String(r['sequence'] ?? ''))}`}
+                                    href={`https://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=blastn&DATABASE=nt&CMD=Put&ENTREZ_QUERY=NOT+uncultured+organism%5Borganism%5D+NOT+environmental+sample%5Borganism%5D&QUERY=${encodeURIComponent(String(r['sequence'] ?? ''))}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className={styles.blastLink}
@@ -484,7 +519,7 @@ function ColumnDropdown({ column, distinctFetcher, activeFilters, current, isSti
 
   useEffect(() => {
     let cancelled = false
-    // Pass all filters except this column's so the dropdown shows contextual values
+    // Pass all filters except this column's so the dropdown shows contextual values.
     const otherFilters: Record<string, ColFilter> = {}
     for (const [col, f] of Object.entries(activeFilters)) {
       if (col !== column) otherFilters[col] = f
@@ -526,6 +561,8 @@ function ColumnDropdown({ column, distinctFetcher, activeFilters, current, isSti
           sum={info.sum}
           mean={info.mean}
           median={info.median}
+          q1={info.q1}
+          q3={info.q3}
           currentMin={current?.min}
           currentMax={current?.max}
           onApply={(min, max) => {
@@ -593,12 +630,14 @@ function TextFilter({ values, current, onApply }: {
   )
 }
 
-function NumericFilter({ dataMin, dataMax, sum, mean, median, currentMin, currentMax, onApply }: {
+function NumericFilter({ dataMin, dataMax, sum, mean, median, q1, q3, currentMin, currentMax, onApply }: {
   dataMin:     number
   dataMax:     number
   sum?:        number
   mean?:       number
   median?:     number
+  q1?:         number
+  q3?:         number
   currentMin?: number
   currentMax?: number
   onApply:     (min: number | null, max: number | null) => void
@@ -619,12 +658,11 @@ function NumericFilter({ dataMin, dataMax, sum, mean, median, currentMin, curren
 
   return (
     <>
-      <div className={styles.numericInfo}>
-        Range: {dataMin} - {dataMax}
-      </div>
-      {(sum != null || mean != null || median != null) && (
-        <div className={styles.numericInfo} style={{ borderTop: 'none', paddingTop: 0, fontSize: '.75rem', color: 'var(--color-muted-fg)' }}>
+      {(sum != null || mean != null || median != null || q1 != null) && (
+        <div className={styles.numericInfo} style={{ fontSize: '.75rem', color: 'var(--color-muted-fg)' }}>
           {sum != null && <div>Sum: {fmt(sum)}</div>}
+          <div>Range: {fmt(dataMin)} - {fmt(dataMax)}</div>
+          {q1 != null && q3 != null && <div>IQR: {fmt(q1)} - {fmt(q3)}</div>}
           {mean != null && <div>Mean: {fmt(mean)}</div>}
           {median != null && <div>Median: {fmt(median)}</div>}
         </div>

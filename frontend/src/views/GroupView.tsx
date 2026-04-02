@@ -4,16 +4,11 @@ import { useApi } from '../hooks/useApi'
 import { api } from '../api/client'
 import { Skeleton } from '../components/Skeleton'
 import { NameDialog } from '../components/NameDialog'
+import { CardActions } from '../components/CardActions'
 import { useToast } from '../components/Toast'
 import { ComparisonPanel } from '../components/ComparisonPanel'
 import { expandRunSpecs } from '../api/types'
-import {
-  STAGE_CONFIG_PREFIXES,
-  STAGE_LABELS,
-  StageConfig,
-} from '../components/PipelineStages'
-
-const VISIBLE_STAGES = Object.keys(STAGE_CONFIG_PREFIXES) as (keyof typeof STAGE_CONFIG_PREFIXES)[]
+import { ConfigAccordion } from '../components/ConfigAccordion'
 
 type Dialog =
   | { mode: 'rename-group' }
@@ -26,7 +21,7 @@ export function GroupView({ groupName }: { groupName?: string } = {}) {
   const navigate = useNavigate()
   const toast    = useToast()
   const [dialog, setDialog]   = useState<Dialog | null>(null)
-  const [expanded, setExpanded] = useState<string | null>(null)
+
 
   const runsFetcher = useCallback(() => api.runs.listGroup(study!, group!), [study, group])
   const { data: runs, loading, error, refetch } = useApi(runsFetcher)
@@ -106,36 +101,16 @@ export function GroupView({ groupName }: { groupName?: string } = {}) {
       <h2 style={{ fontSize: '1rem', marginBottom: 8 }}>Group Config</h2>
       {configMap && (
         <div style={{ marginBottom: 24 }}>
-          {VISIBLE_STAGES.map(stage => {
-            const prefixes = STAGE_CONFIG_PREFIXES[stage]
-            const hasKeys = prefixes.some(p => Object.keys(configMap).some(k => k.startsWith(p)))
-            if (!hasKeys) return null
-            const isExpanded = expanded === stage
-            return (
-              <div key={stage} style={{ marginBottom: 4 }}>
-                <div
-                  style={{ cursor: 'pointer', fontWeight: 600, fontSize: '.85rem', padding: '4px 0' }}
-                  onClick={() => setExpanded(isExpanded ? null : stage)}
-                >
-                  <span style={{ fontSize: '.8rem', marginRight: 6, opacity: .65 }}>{isExpanded ? '▾' : '▸'}</span>
-                  {STAGE_LABELS[stage]}
-                </div>
-                {isExpanded && (
-                  <StageConfig
-                    configMap={configMap}
-                    prefixes={prefixes}
-                    study={study!}
-                    run={group!}
-                    onConfigChanged={refetchConfig}
-                    patchFn={patchFn}
-                    deleteFn={deleteFn}
-                    sourceLevel="group"
-                    overrides={overrides}
-                  />
-                )}
-              </div>
-            )
-          })}
+          <ConfigAccordion
+            configMap={configMap}
+            study={study!}
+            run={group!}
+            onConfigChanged={refetchConfig}
+            patchFn={patchFn}
+            deleteFn={deleteFn}
+            sourceLevel="group"
+            overrides={overrides}
+          />
         </div>
       )}
 
@@ -214,27 +189,3 @@ export function GroupView({ groupName }: { groupName?: string } = {}) {
   )
 }
 
-function CardActions({ onRename, onDelete }: { onRename: () => void; onDelete: () => void }) {
-  return (
-    <div style={{
-      display: 'flex', gap: 6, justifyContent: 'flex-end',
-      marginTop: 10, paddingTop: 8,
-      borderTop: '1px solid var(--color-border-light)',
-    }}>
-      <button
-        className="btn"
-        style={{ padding: '2px 8px', fontSize: '.78rem' }}
-        onClick={e => { e.preventDefault(); e.stopPropagation(); onRename() }}
-      >
-        Rename
-      </button>
-      <button
-        className="btn"
-        style={{ padding: '2px 8px', fontSize: '.78rem', color: '#c92a2a', borderColor: '#ffc9c9' }}
-        onClick={e => { e.preventDefault(); e.stopPropagation(); onDelete() }}
-      >
-        Delete
-      </button>
-    </div>
-  )
-}

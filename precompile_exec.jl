@@ -23,7 +23,7 @@ let
     mkpath(defaults_dir)
 
     open(joinpath(defaults_dir, "pipeline.yml"), "w") do io
-        YAML.write(io, Dict("dada2" => Dict("filter_trim" => Dict("maxN" => 0))))
+        YAML.write(io, Dict("dada2" => Dict("filter_trim" => Dict("min_len" => 175))))
     end
     open(joinpath(config_dir, "pipeline.yml"), "w") do io
         YAML.write(io, Dict("vsearch" => Dict("enabled" => true)))

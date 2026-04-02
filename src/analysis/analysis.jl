@@ -7,7 +7,7 @@ using DataFrames, JSON3, DuckDB, DBInterface, RCall
 using ..DiversityMetrics: richness, shannon, simpson
 
 export sample_columns, filtered_counts, filtered_df, taxonomy_levels,
-       aggregate_by_taxon, combined_counts_across_runs,
+       aggregate_by_taxon, combined_counts_across_runs, combined_asv_counts_across_runs,
        alpha_chart, taxa_bar_chart, pipeline_stats_chart,
        alpha_boxplot, nmds_chart,
        run_nmds, run_permanova, r_available
@@ -152,6 +152,53 @@ function combined_counts_across_runs(
     end
 
     mat, all_samples, taxa_labels, run_labels
+end
+
+"""
+    combined_asv_counts_across_runs(run_data) -> (Matrix{Float64}, Vector{String}, Vector{String}, Vector{String})
+
+Build a combined ASV count matrix across multiple runs using the raw DNA sequence
+string as the alignment key, so identical sequences from different runs collapse
+into the same column.
+
+`run_data` is a vector of `(label, sample_cols, asv_counts_df)` tuples where
+`asv_counts_df` must contain a `sequence` column.
+
+Returns (matrix, all_sample_names, sequence_labels, run_labels_per_sample).
+"""
+function combined_asv_counts_across_runs(
+    run_data::Vector{Tuple{String, Vector{String}, DataFrame}}
+)
+    seq_counts = Dict{String, Dict{String, Float64}}()
+    all_samples = String[]
+    run_labels = String[]
+
+    for (label, sample_cols, df) in run_data
+        append!(all_samples, sample_cols)
+        append!(run_labels, fill(label, length(sample_cols)))
+        for row in eachrow(df)
+            seq = string(row[:sequence])
+            sd = get!(seq_counts, seq, Dict{String, Float64}())
+            for col in sample_cols
+                v = row[Symbol(col)]
+                sd[col] = get(sd, col, 0.0) + (ismissing(v) ? 0.0 : Float64(v))
+            end
+        end
+    end
+
+    seq_labels = sort(collect(keys(seq_counts)))
+    n_samples = length(all_samples)
+    n_seqs = length(seq_labels)
+    mat = zeros(Float64, n_samples, n_seqs)
+
+    for (j, seq) in enumerate(seq_labels)
+        sd = seq_counts[seq]
+        for (i, sample) in enumerate(all_samples)
+            mat[i, j] = get(sd, sample, 0.0)
+        end
+    end
+
+    mat, all_samples, seq_labels, run_labels
 end
 
 ## Plotly chart builders
@@ -766,9 +813,10 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
             set.seed(seed)
             dist_mat <- vegdist(mat, method = "bray")
             form <- as.formula(paste("dist_mat ~", formula_rhs))
+            perm_err <- NULL
             perm_res <- tryCatch(
                 adonis2(form, data = meta_r, permutations = 999),
-                error = function(e) NULL
+                error = function(e) { perm_err <<- conditionMessage(e); NULL }
             )
             if (!is.null(perm_res)) {
                 perm_text <- paste(capture.output(print(perm_res)), collapse = "\\n")
@@ -776,7 +824,7 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
                 perm_f <- perm_res\$F[1]
                 perm_p <- perm_res[["Pr(>F)"]][1]
             } else {
-                perm_text <- NA_character_
+                perm_text <- if (!is.null(perm_err)) perm_err else NA_character_
                 perm_r2 <- NA_real_
                 perm_f <- NA_real_
                 perm_p <- NA_real_
@@ -786,11 +834,14 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
         r2 = RCall.rcopy(RCall.reval("perm_r2"))
         f_stat = RCall.rcopy(RCall.reval("perm_f"))
         p_val = RCall.rcopy(RCall.reval("perm_p"))
-        RCall.reval("rm(mat, meta_r, formula_rhs, seed, dist_mat, form, perm_res, perm_text, perm_r2, perm_f, perm_p); gc()")
+        RCall.reval("rm(mat, meta_r, formula_rhs, seed, dist_mat, form, perm_res, perm_err, perm_text, perm_r2, perm_f, perm_p); gc()")
 
-        (ismissing(txt) || txt == "NA") && return nothing
+        ismissing(txt) && return nothing
+        # When R's adonis2 threw, txt is the error message and r2/f/p are missing.
+        # Return a named tuple with :message so the route can distinguish and surface it.
+        ismissing(r2) && return (; message=string(txt))
         (; text=txt,
-           r2=ismissing(r2) ? nothing : r2,
+           r2=r2,
            f_statistic=ismissing(f_stat) ? nothing : f_stat,
            p_value=ismissing(p_val) ? nothing : p_val)
     end

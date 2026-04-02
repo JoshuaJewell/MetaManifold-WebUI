@@ -92,48 +92,23 @@ const STAGE_HASHES = Dict(
     ],
 )
 
-# Check whether cdhit is enabled in the run config.
-function _cdhit_enabled(run_dir::String)::Bool
+function _config_flag(run_dir::String, keys::Vector{String}, default::Bool)::Bool
     config_path = joinpath(run_dir, "run_config.yml")
-    isfile(config_path) || return false
+    isfile(config_path) || return default
     cfg = YAML.load_file(config_path)
-    cfg isa Dict || return false
-    cdhit = get(cfg, "cdhit", Dict())
-    cdhit isa Dict || return false
-    get(cdhit, "enabled", false) == true
+    cfg isa Dict || return default
+    d = cfg
+    for k in keys
+        d = get(d, k, nothing)
+        d isa Dict || return default
+    end
+    get(d, "enabled", default) == true
 end
 
-function _classify_enabled(run_dir::String)::Bool
-    config_path = joinpath(run_dir, "run_config.yml")
-    isfile(config_path) || return true
-    cfg = YAML.load_file(config_path)
-    cfg isa Dict || return true
-    dada2 = get(cfg, "dada2", Dict())
-    dada2 isa Dict || return true
-    tax = get(dada2, "taxonomy", Dict())
-    tax isa Dict || return true
-    get(tax, "enabled", true) != false
-end
-
-function _vsearch_enabled(run_dir::String)::Bool
-    config_path = joinpath(run_dir, "run_config.yml")
-    isfile(config_path) || return true
-    cfg = YAML.load_file(config_path)
-    cfg isa Dict || return true
-    vs = get(cfg, "vsearch", Dict())
-    vs isa Dict || return true
-    get(vs, "enabled", true) != false
-end
-
-function _swarm_enabled(run_dir::String)::Bool
-    config_path = joinpath(run_dir, "run_config.yml")
-    isfile(config_path) || return true
-    cfg = YAML.load_file(config_path)
-    cfg isa Dict || return true
-    sw = get(cfg, "swarm", Dict())
-    sw isa Dict || return true
-    get(sw, "enabled", true) != false
-end
+_cdhit_enabled(run_dir::String)    = _config_flag(run_dir, ["cdhit"], false)
+_classify_enabled(run_dir::String) = _config_flag(run_dir, ["dada2", "taxonomy"], true)
+_vsearch_enabled(run_dir::String)  = _config_flag(run_dir, ["vsearch"], true)
+_swarm_enabled(run_dir::String)    = _config_flag(run_dir, ["swarm"], true)
 
 # Ensure run_config.yml is up to date with the config cascade.
 # Without this, config changes made through the PATCH API are invisible to

@@ -30,13 +30,9 @@ end
 @get "/api/v1/jobs/{id}/logs" function(req, id::String)
     j = get_job(id)
     isnothing(j) && return json_error(404, "job_not_found", "Job '$id' not found")
-
-    # Stub - log streaming will be wired once the capture mechanism is in place
-    HTTP.Response(200,
-        ["Content-Type" => "text/event-stream",
-         "Cache-Control" => "no-cache",
-         "Connection" => "keep-alive"],
-        body = "event: complete\ndata: {\"status\":\"$(j.status)\"}\n\n")
+    HTTP.Response(501, ["Content-Type" => "application/json"],
+        body = JSON3.write((; error="not_implemented",
+                             message="Log streaming is not yet implemented")))
 end
 
 @delete "/api/v1/jobs/{id}" function(req, id::String)

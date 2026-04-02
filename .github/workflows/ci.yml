@@ -22,8 +22,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Julia
         uses: julia-actions/setup-julia@v2
@@ -52,8 +50,8 @@ jobs:
         run: |
           sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org", lib=.Library)'
           sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE, lib=.Library)'
-          sudo Rscript -e 'install.packages(c("vegan", "dplyr", "tibble"), repos="https://cloud.r-project.org", lib=.Library)'
-          Rscript -e 'for (pkg in c("dada2","vegan","dplyr","tibble")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
+          sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org", lib=.Library)'
+          Rscript -e 'for (pkg in c("dada2","vegan")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
 
       - name: Install cutadapt
         run: pip install cutadapt
@@ -61,26 +59,31 @@ jobs:
       - name: Install cd-hit
         run: sudo apt-get install -y cd-hit
 
-      - name: Install vsearch (latest release)
+      - name: Install vsearch 2.29.2
         run: |
-          URL=$(curl -s https://api.github.com/repos/torognes/vsearch/releases/latest \
-            | grep -oP '"browser_download_url":\s*"\K[^"]*linux-x86_64\.tar\.gz(?!.*ubi)' | head -1)
-          echo "Downloading $URL"
-          curl -sSL "$URL" | tar xz
-          sudo mv vsearch-*/bin/vsearch /usr/local/bin/vsearch
+          curl -sSL "https://github.com/torognes/vsearch/releases/download/v2.29.2/vsearch-2.29.2-linux-x86_64.tar.gz" | tar xz
+          sudo mv vsearch-2.29.2-linux-x86_64/bin/vsearch /usr/local/bin/vsearch
           vsearch --version
 
-      - name: Install swarm (latest release)
+      - name: Install swarm 3.1.5
         run: |
-          URL=$(curl -s https://api.github.com/repos/torognes/swarm/releases/latest \
-            | grep -oP '"browser_download_url":\s*"\K[^"]*linux-x86_64[^"]*' | head -1)
-          echo "Downloading $URL"
-          curl -sSL "$URL" | tar xz
-          sudo mv swarm-*/bin/swarm /usr/local/bin/swarm
+          curl -sSL "https://github.com/torognes/swarm/releases/download/v3.1.5/swarm-3.1.5-linux-x86_64.tar.gz" | tar xz
+          sudo mv swarm-3.1.5-linux-x86_64/bin/swarm /usr/local/bin/swarm
           swarm --version
 
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
 
       - name: Download PR2 databases
         run: julia --project=. config/ci/download_databases.jl

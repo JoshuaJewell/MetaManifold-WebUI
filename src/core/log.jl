@@ -4,7 +4,7 @@ module PipelineLog
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-export pipeline_log, log_written, reset_log, finalise_log, write_combined_log
+export pipeline_log, log_written
 
     using SHA, Dates
     using ..PipelineTypes

@@ -15,6 +15,11 @@ export function ComparisonPanel({ study, runs }: {
   const [loading, setLoading]         = useState<string | null>(null)
   const [tables, setTables]           = useState<string[]>([])
   const [table, setTable]             = useState('merged')
+  const [rAvailable, setRAvailable]   = useState<boolean | null>(null)
+
+  useEffect(() => {
+    api.analysis.capabilities().then(c => setRAvailable(c.r_available)).catch(() => setRAvailable(false))
+  }, [])
 
   const isSubgroupMode = runs.length > 0 && runs.every(r => r.prefix)
 
@@ -40,7 +45,7 @@ export function ComparisonPanel({ study, runs }: {
       if (sorted.length > 0 && !sorted.includes(table)) setTable(sorted[0])
     })
     return () => { cancelled = true }
-  }, [study, runs])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [study, runs, table])
 
   const body = { table, runs, colFilters: {} as Record<string, ColFilter> }
 
@@ -87,12 +92,16 @@ export function ComparisonPanel({ study, runs }: {
         <button className="btn" onClick={() => run('alpha')} disabled={loading !== null}>
           {loading === 'alpha' ? 'Computing...' : 'Alpha Comparison'}
         </button>
-        <button className="btn" onClick={() => run('nmds')} disabled={loading !== null}>
-          {loading === 'nmds' ? 'Computing...' : 'NMDS'}
-        </button>
-        <button className="btn" onClick={() => run('permanova')} disabled={loading !== null}>
-          {loading === 'permanova' ? 'Computing...' : 'PERMANOVA'}
-        </button>
+        {rAvailable && (
+          <button className="btn" onClick={() => run('nmds')} disabled={loading !== null}>
+            {loading === 'nmds' ? 'Computing...' : 'NMDS'}
+          </button>
+        )}
+        {rAvailable && (
+          <button className="btn" onClick={() => run('permanova')} disabled={loading !== null}>
+            {loading === 'permanova' ? 'Computing...' : 'PERMANOVA'}
+          </button>
+        )}
       </div>
 
       {alphaFig != null && <PlotlyChart figure={alphaFig} />}

@@ -12,6 +12,8 @@ export swarm
     using ..Config
     using ..Tools: tool_bin, _sq, _run_logged, _safe_optional_args
 
+    _safe_int_count(v) = ismissing(v) ? 0 : Int(v)
+
     function _swarm_args(cfg::Dict)::String
         parts = String[]
         push!(parts, "-d $(get(cfg, "differences", 1))")
@@ -48,7 +50,7 @@ export swarm
             sample_cols = filter(c -> c ∉ ("SeqName", "Sequence", "sequence"), names(df))
             abundances = Dict{String,Int}()
             for row in eachrow(df)
-                total = sum(ismissing(row[c]) ? 0 : Int(row[c]) for c in sample_cols)
+                total = sum(_safe_int_count(row[c]) for c in sample_cols)
                 abundances[string(row.SeqName)] = total
             end
         else

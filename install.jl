@@ -675,16 +675,16 @@ function build_sysimage()
     # Import after installation so it is available in this session
     @eval using PackageCompiler
 
-    precompile_kw = isfile(PRECOMPILE_EXEC_PATH) ?
-        Dict(:precompile_execution_file => [PRECOMPILE_EXEC_PATH]) : Dict()
-
     @info "Compiling sysimage - this may take several minutes...\n  Package: MetaManifold\n  Output:  $SYSIMAGE_PATH"
 
-    @eval PackageCompiler.create_sysimage(
+    kw = isfile(PRECOMPILE_EXEC_PATH) ?
+        (; precompile_execution_file=[PRECOMPILE_EXEC_PATH]) : (;)
+
+    PackageCompiler.create_sysimage(
         [:MetaManifold];
-        sysimage_path = $SYSIMAGE_PATH,
-        project       = $PROJECT_ROOT,
-        $precompile_kw...,
+        sysimage_path = SYSIMAGE_PATH,
+        project       = PROJECT_ROOT,
+        kw...
     )
 
     @info "Sysimage written to $SYSIMAGE_PATH"
@@ -805,14 +805,14 @@ function main()
     resolved["swarm"] = Dict("path" => path)
 
     # R packages
-    r_packages = ["dada2", "tidyverse", "vegan"]
-    should_install_r = UPDATE_MODE || (MODIFY_MODE && prompt_yn("  Install/check R packages (dada2, tidyverse, vegan)?"))
+    r_packages = ["dada2", "vegan"]
+    should_install_r = UPDATE_MODE || (MODIFY_MODE && prompt_yn("  Install/check R packages (dada2, vegan)?"))
     if should_install_r
         println()
         println("  --- R packages -----------------------------------------------------")
         install_r_sysdeps()
         force_reinstall_r = UPDATE_MODE &&
-            prompt_yn("  Reinstall all R packages (dada2, tidyverse, vegan)?", false)
+            prompt_yn("  Reinstall all R packages (dada2, vegan)?", false)
         install_r_packages(r_packages; force_reinstall=force_reinstall_r)
     end
 

@@ -101,6 +101,8 @@ export interface DistinctNumeric {
   sum:    number
   mean:   number
   median: number
+  q1:     number
+  q3:     number
 }
 
 export type DistinctInfo = DistinctText | DistinctNumeric
@@ -113,6 +115,7 @@ export interface TablePage {
   page:                   number
   per_page:               number
   columns:                string[]
+  sample_count_columns:   string[]
   rows:                   Record<string, unknown>[]
 }
 
@@ -137,7 +140,6 @@ export interface StageUpdateEvent {
   data: { study: string; run: string | null; stage: string; status: StageStatus }
 }
 
-export type SSEEvent = JobUpdateEvent | StageUpdateEvent
 
 export interface FilterPreset {
   name:        string
@@ -197,4 +199,21 @@ export interface ApiError {
   error:   string
   message: string
   detail?: string
+}
+
+export type AnnotationSource = 'VSEARCH' | 'DADA2'
+
+export interface AnnotationMeta {
+  table:        string
+  source:       AnnotationSource
+  status:       'missing' | 'fresh' | 'stale'
+  rows:         number | null
+  generated_at: number | null
+}
+
+export interface ContaminationStats {
+  yes:        { rows: number; reads: number }
+  no:         { rows: number; reads: number }
+  unassigned: { rows: number; reads: number }
+  total:      { rows: number; reads: number }
 }

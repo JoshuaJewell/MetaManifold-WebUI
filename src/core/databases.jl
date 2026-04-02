@@ -4,7 +4,7 @@ module Databases
 # downloading from their configured URIs as needed.
 #
 # Usage:
-#   dbs = ensure_databases("config/dada2.yml")
+#   dbs = ensure_databases("config/databases.yml")
 #   dbs["pr2_dada2"]   # -> resolved local path for DADA2 assignTaxonomy
 #   dbs["pr2_vsearch"] # -> resolved local path for VSEARCH --db
 #

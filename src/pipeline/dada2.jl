@@ -74,6 +74,7 @@ export dada2, dada2_denoise, dada2_classify,
     - `checkpoint.RData`   - final R environment snapshot
     """
     function dada2(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing)
+        _single_sample_warned[] = false
         R"rm(list=ls())"
         prefilter_qc(config_path; progress, input_dir, workspace_root)
         filter_trim(config_path; progress, input_dir, workspace_root); R"gc()"

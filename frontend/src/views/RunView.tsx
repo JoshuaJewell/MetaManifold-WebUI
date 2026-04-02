@@ -10,10 +10,11 @@ import { Skeleton } from '../components/Skeleton'
 import { useToast } from '../components/Toast'
 import { NameDialog } from '../components/NameDialog'
 import { ComparisonPanel } from '../components/ComparisonPanel'
+import { AnnotationPanel } from '../components/AnnotationPanel'
 import type { TableMeta, TableQuery, ColFilter, FilterPreset, ConfigMap, ConfigSource, RunStages } from '../api/types'
 import type { RowPopupData, TableStats } from '../components/DataTable'
 
-type Tab = 'pipeline' | 'qc' | 'dada2' | 'tables'
+type Tab = 'pipeline' | 'qc' | 'dada2' | 'tables' | 'annotation'
 
 // Maps tabs to the backend stages whose staleness should show a yellow dot
 const TAB_STALE_STAGES: Partial<Record<Tab, string[]>> = {
@@ -134,11 +135,12 @@ export function RunView({ runName }: { runName?: string } = {}) {
       )}
 
       <div className="tabs">
-        {(['pipeline', 'qc', 'dada2', 'tables'] as Tab[]).map(t => {
+        {(['pipeline', 'qc', 'dada2', 'tables', 'annotation'] as Tab[]).map(t => {
           const label = t === 'pipeline' ? 'Pipeline'
             : t === 'qc' ? 'QC'
             : t === 'dada2' ? 'DADA2'
-            : `Tables (${tables?.length ?? 0})`
+            : t === 'tables' ? `Tables (${tables?.length ?? 0})`
+            : 'Annotation'
           const stale = isTabStale(t)
           return (
             <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
@@ -168,6 +170,7 @@ export function RunView({ runName }: { runName?: string } = {}) {
       {tab === 'qc' && <QCPanel study={study!} run={run!} group={group} qcData={qcData ?? null} stages={runData?.stages ?? null} onRunStage={handleRunStage} configMap={configMap} cacheKey={runData?.stages?.fastqc?.last_run ?? null} />}
       {tab === 'dada2' && <DADA2Panel study={study!} run={run!} group={group} dada2Data={dada2Data ?? null} configMap={configMap ?? null} onConfigChanged={handleConfigChanged} stages={runData?.stages ?? null} onRunStage={handleRunStage} cacheKey={runData?.stages?.dada2_denoise?.last_run ?? null} />}
       {tab === 'tables' && <TablesPanel study={study!} run={run!} group={group} tables={tables ?? []} onTablesChanged={refetchTables} />}
+      {tab === 'annotation' && <AnnotationPanel study={study!} run={run!} group={group} />}
 
       {runData?.pooled && runData.subgroups.length >= 2 && (
         <ComparisonPanel
@@ -716,6 +719,12 @@ function DADA2Panel({ study, run, group, dada2Data, configMap, onConfigChanged, 
 
 function TablesPanel({ study, run, group, tables, onTablesChanged }: { study: string; run: string; group?: string; tables: TableMeta[]; onTablesChanged: () => void }) {
   const [selected, setSelected] = useState<string | null>(tables[0]?.id ?? null)
+
+  useEffect(() => {
+    if (tables.length > 0 && !tables.some(t => t.id === selected)) {
+      setSelected(tables[0].id)
+    }
+  }, [tables])
   const [filters, setFilters]   = useState<Record<string, ColFilter>>({})
   const [sortBy, setSortBy]     = useState<string | null>(null)
   const [sortDir, setSortDir]   = useState<'asc' | 'desc'>('asc')
@@ -996,6 +1005,7 @@ function TablesPanel({ study, run, group, tables, onTablesChanged }: { study: st
             onFiltersChange={setFilters}
             onSortChange={(sb, sd) => { setSortBy(sb); setSortDir(sd) }}
             onStatsChange={setLiveStats}
+            showTaxonomyPresets
           />
           <AnalysisPanel
             study={study} run={run} group={group}
@@ -1020,11 +1030,12 @@ function AnalysisPanel({ study, run, group, table, filters }: {
   const toast = useToast()
 
   useEffect(() => {
-    api.analysis.ranks(study, run, group).then(r => {
-      setRanks(r)
-      if (r.length > 0 && !rank) setRank(r[r.length - 1])
-    }).catch(() => {})
+    api.analysis.ranks(study, run, group).then(setRanks).catch(() => {})
   }, [study, run, group])
+
+  useEffect(() => {
+    if (ranks.length > 0 && !rank) setRank(ranks[ranks.length - 1])
+  }, [ranks])
 
   const body = useMemo(() => ({ table, colFilters: filters }), [table, filters])
 

@@ -4,7 +4,7 @@ module Validation
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-export validate_environment, validate_project
+export validate_environment, validate_project, ValidationError
 
     using YAML, Logging
     using ..PipelineTypes

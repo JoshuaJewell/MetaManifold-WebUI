@@ -1,3 +1,6 @@
+// © 2026 Joshua Benjamin Jewell. All rights reserved.
+// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+
 import { useState, useEffect } from 'react'
 import type { RunStages, StageStatus, ConfigMap, ConfigSource } from '../api/types'
 import { api } from '../api/client'
@@ -10,31 +13,36 @@ const VISIBLE_STAGES = ['cutadapt', 'dada2_denoise', 'dada2_classify', 'swarm', 
 type VisibleStage = typeof VISIBLE_STAGES[number]
 
 // Config sections include pipeline stages plus non-stage sections like study_design
-export type ConfigSection = VisibleStage | 'study_design' | 'analysis'
+export type ConfigSection = VisibleStage | 'study_design' | 'annotation' | 'analysis' | 'global'
 
 export const STAGE_LABELS: Record<ConfigSection, string> = {
+  global:         'Global',
   study_design:   'Study Design',
-  analysis:       'Analysis',
   cutadapt:       'Primer Trimming',
   dada2_denoise:  'DADA2 Denoising',
   dada2_classify: 'Taxonomy Assignment (DADA2)',
   swarm:          'OTU Clustering (SWARM)',
   vsearch:        'Taxonomy Assignment (VSEARCH)',
+  annotation:     'Annotation',
+  analysis:       'Analysis',
 }
 
 export const STAGE_CONFIG_PREFIXES: Record<ConfigSection, string[]> = {
+  global:         ['your_name'],
   study_design:   ['seed', 'subsample_n', 'pool_children'],
-  analysis:       ['analysis.alpha.', 'analysis.nmds.', 'analysis.taxa_bar.'],
   cutadapt:       ['cutadapt.'],
   dada2_denoise:  ['dada2.file_patterns.', 'dada2.filter_trim.', 'dada2.dada.', 'dada2.merge.', 'dada2.asv.', 'cdhit.'],
   dada2_classify: ['dada2.taxonomy.', 'dada2.output.'],
   swarm:          ['swarm.'],
   vsearch:        ['vsearch.'],
+  annotation:     ['annotation.contamination.'],
+  analysis:       ['analysis.alpha.', 'analysis.nmds.', 'analysis.taxa_bar.'],
 }
 
 const STAGE_ORDER = [...VISIBLE_STAGES]
 
 export const CONFIG_DESCRIPTIONS: Record<string, string> = {
+  'your_name':                      'Your name or identifier - pre-fills the "Modified by" field when adding FuncDB entries.',
   'pool_children':                  'Pool FASTQ files from child directories into a single run. Each child directory becomes a sub-group identified by a prefix.',
   'seed':                           'Global random seed used by stages that require randomness.',
   'subsample_n':                    'Number of samples to randomly select per run for quick config iteration (0 = all). 3 is recommended for testing DADA2 parameters.',
@@ -108,6 +116,16 @@ export const CONFIG_DESCRIPTIONS: Record<string, string> = {
   'analysis.alpha.significance_test': 'Overall significance test used for alpha comparison annotations.',
   'analysis.nmds.distance':       'Distance metric for NMDS ordination.',
   'analysis.nmds.max_stress':     'Warn if NMDS stress exceeds this value.',
+  'annotation.contamination.blacklist.function':            'One entry per line. Rows whose funcdb_function matches an entry are marked as contamination.',
+  'annotation.contamination.blacklist.detailed_function':   'One entry per line. Rows whose funcdb_detailed_function matches an entry are marked as contamination.',
+  'annotation.contamination.blacklist.associated_organism': 'One entry per line. Rows whose funcdb_associated_organism matches are marked as contamination.',
+  'annotation.contamination.blacklist.associated_material': 'One entry per line. Rows whose funcdb_associated_material matches are marked as contamination.',
+  'annotation.contamination.blacklist.environment':         'One entry per line. Rows whose funcdb_environment matches are marked as contamination.',
+  'annotation.contamination.whitelist.function':            'One entry per line. Rows whose funcdb_function matches an entry are marked as non-contamination.',
+  'annotation.contamination.whitelist.detailed_function':   'One entry per line. Rows whose funcdb_detailed_function matches an entry are marked as non-contamination.',
+  'annotation.contamination.whitelist.associated_organism': 'One entry per line. Rows whose funcdb_associated_organism matches are marked as non-contamination.',
+  'annotation.contamination.whitelist.associated_material': 'One entry per line. Rows whose funcdb_associated_material matches are marked as non-contamination.',
+  'annotation.contamination.whitelist.environment':         'One entry per line. Rows whose funcdb_environment matches are marked as non-contamination.',
 }
 
 export type ConfigType =
@@ -116,6 +134,7 @@ export type ConfigType =
   | { kind: 'float'; nullable?: boolean; min?: number; max?: number; step?: number }
   | { kind: 'enum'; options: string[] }
   | { kind: 'multiselect'; optionsFrom: string }
+  | { kind: 'string_list' }
 
 /** Explicit type hints for config keys that aren't plain strings or arrays. */
 export const CONFIG_TYPES: Record<string, ConfigType> = {
@@ -165,6 +184,16 @@ export const CONFIG_TYPES: Record<string, ConfigType> = {
   'swarm.fastq_minovlen':         { kind: 'int' },
   'swarm.identity':               { kind: 'float', min: 0, max: 1, step: 0.01 },
   'analysis.taxa_bar.top_n':      { kind: 'int' },
+  'annotation.contamination.blacklist.function':            { kind: 'string_list' },
+  'annotation.contamination.blacklist.detailed_function':   { kind: 'string_list' },
+  'annotation.contamination.blacklist.associated_organism': { kind: 'string_list' },
+  'annotation.contamination.blacklist.associated_material': { kind: 'string_list' },
+  'annotation.contamination.blacklist.environment':         { kind: 'string_list' },
+  'annotation.contamination.whitelist.function':            { kind: 'string_list' },
+  'annotation.contamination.whitelist.detailed_function':   { kind: 'string_list' },
+  'annotation.contamination.whitelist.associated_organism': { kind: 'string_list' },
+  'annotation.contamination.whitelist.associated_material': { kind: 'string_list' },
+  'annotation.contamination.whitelist.environment':         { kind: 'string_list' },
   'analysis.alpha.show_points':   { kind: 'boolean' },
   'analysis.alpha.annotate_significance': { kind: 'boolean' },
   'analysis.alpha.pairwise_brackets': { kind: 'boolean' },
@@ -235,7 +264,7 @@ export function PipelineStages({ stages, onRun, disabled, configMap, study, run,
                 style={{ cursor: hasConfig ? 'pointer' : 'default' }}
                 onClick={() => hasConfig && setExpanded(isExpanded ? null : key)}
               >
-                {hasConfig && <span style={{ fontSize: '.8rem', marginRight: 6, opacity: .65 }}>{isExpanded ? '▾' : '▸'}</span>}
+                {hasConfig && <span style={{ fontSize: '.8rem', marginRight: 6, opacity: .65 }}>{isExpanded ? 'v' : '>'}</span>}
                 {STAGE_LABELS[key]}
                 {runOverrides > 0 && (
                   <span style={{ marginLeft: 6, fontSize: '.68rem', fontWeight: 600, color: 'var(--color-primary)', verticalAlign: 'middle' }}
@@ -371,7 +400,12 @@ function StageConfigField({ dottedKey, leafKey, value, source, study, run, group
   const startEdit = () => {
     // Booleans, enums, and multiselects use inline controls, no draft needed
     if (typeHint?.kind === 'boolean' || typeHint?.kind === 'enum' || typeHint?.kind === 'multiselect') return
-    setDraft(typeof value === 'string' ? value : JSON.stringify(value))
+    if (typeHint?.kind === 'string_list') {
+      const items = Array.isArray(value) ? (value as string[]) : []
+      setDraft(items.join('\n'))
+    } else {
+      setDraft(typeof value === 'string' ? value : JSON.stringify(value))
+    }
     setEditing(true)
   }
 
@@ -391,7 +425,11 @@ function StageConfigField({ dottedKey, leafKey, value, source, study, run, group
 
   const save = async () => {
     let parsed: unknown
-    try { parsed = JSON.parse(draft) } catch { parsed = draft }
+    if (typeHint?.kind === 'string_list') {
+      parsed = draft.split('\n').map(s => s.trim()).filter(s => s.length > 0)
+    } else {
+      try { parsed = JSON.parse(draft) } catch { parsed = draft }
+    }
     await saveValue(parsed)
   }
 
@@ -465,6 +503,42 @@ function StageConfigField({ dottedKey, leafKey, value, source, study, run, group
       saving={saving} saveValue={saveValue}
       labelEl={labelEl} sourceEl={sourceEl} removeBtn={removeBtn}
     />
+  }
+
+  if (typeHint?.kind === 'string_list') {
+    const items = Array.isArray(value) ? (value as string[]) : []
+    if (editing) {
+      return (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '2px 0 2px 8px' }} title={tooltip}>
+          {labelEl}
+          <textarea
+            style={{ flex: 1, fontFamily: 'monospace', fontSize: '.78rem', padding: '2px 6px', border: '1px solid var(--color-border)', borderRadius: 3, resize: 'vertical', minHeight: 60, background: 'var(--color-bg)', color: 'inherit' }}
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            autoFocus disabled={saving}
+            placeholder="one entry per line"
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <button className="btn" style={{ padding: '1px 6px', fontSize: '.72rem' }} onClick={save} disabled={saving}>Save</button>
+            <button className="btn" style={{ padding: '1px 6px', fontSize: '.72rem' }} onClick={() => setEditing(false)} disabled={saving}>Cancel</button>
+          </div>
+        </div>
+      )
+    }
+    const preview = items.length === 0 ? '(empty)'
+      : items.length <= 3 ? items.join(', ')
+      : `${items.slice(0, 3).join(', ')} ... (${items.length})`
+    return (
+      <div
+        style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '2px 0 2px 8px', cursor: 'pointer' }}
+        onClick={startEdit}
+        title={tooltip ?? 'Click to edit'}
+      >
+        {labelEl}
+        <div style={{ fontFamily: 'monospace', fontSize: '.78rem', flex: 1, color: items.length === 0 ? 'var(--color-muted-fg)' : undefined }}>{preview}</div>
+        {sourceEl}{removeBtn}
+      </div>
+    )
   }
 
   if (editing) {

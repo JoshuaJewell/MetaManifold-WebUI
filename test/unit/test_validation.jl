@@ -98,4 +98,25 @@ Pairs: []
         @test any(e -> occursin("primer_pairs", e.message), errors)
     end
 
+    @testset "validate_environment - missing tools config" begin
+        n = Validation.validate_environment(
+            ProjectCtx[],
+            "/nonexistent/databases.yml",
+            "/nonexistent/tools.yml"
+        )
+        @test n > 0
+    end
+
+    @testset "validate_environment - empty tools config" begin
+        mktempdir() do tmp
+            tools_cfg = joinpath(tmp, "tools.yml")
+            write(tools_cfg, "")
+            db_cfg = joinpath(tmp, "databases.yml")
+            write(db_cfg, "databases: {}")
+            n = Validation.validate_environment(ProjectCtx[], db_cfg, tools_cfg)
+            # Empty tools.yml is not a valid Dict; expect at least 1 error
+            @test n > 0
+        end
+    end
+
 end

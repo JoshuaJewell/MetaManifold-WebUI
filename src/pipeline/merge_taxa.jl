@@ -450,11 +450,12 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         hash_file   = joinpath(merge_dir, "config.hash")
 
         tax_counts_path = joinpath(dirname(source.taxonomy), "tax_counts.csv")
-        tax_prefix_     = splitext(basename(source.taxonomy))[1]
-        boot_path_      = joinpath(dirname(source.taxonomy), tax_prefix_ * "_bootstraps.csv")
+        tables_dir      = dirname(source.taxonomy)
+        tax_prefix      = splitext(basename(source.taxonomy))[1]
+        boot_path       = joinpath(tables_dir, tax_prefix * "_bootstraps.csv")
         data_mtime     = max(mtime(tax.tsv), mtime(source.taxonomy),
                              isfile(tax_counts_path) ? mtime(tax_counts_path) : 0.0,
-                             isfile(boot_path_)      ? mtime(boot_path_)      : 0.0)
+                             isfile(boot_path)       ? mtime(boot_path)       : 0.0)
         config_changed = _section_stale(config_path, stage_sections(:merge_taxa), hash_file)
         merged_csv     = joinpath(merge_dir, "merged.csv")
 
@@ -468,9 +469,6 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         mkpath(merge_dir)
         counts_path = (isfile(tax_counts_path) && filesize(tax_counts_path) > 0) ?
                       tax_counts_path : source.taxonomy
-        tables_dir = dirname(source.taxonomy)
-        tax_prefix = splitext(basename(source.taxonomy))[1]
-        boot_path  = joinpath(tables_dir, tax_prefix * "_bootstraps.csv")
         df = merge_taxonomy_counts(tax.tsv, counts_path, db_meta;
                                    bootstraps_path=boot_path)
 

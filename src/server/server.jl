@@ -17,6 +17,7 @@ module Server
 
     using MetaManifold.PipelineTypes, MetaManifold.PipelineLog, MetaManifold.Config
     using MetaManifold.Databases, MetaManifold.DuckDBStore
+    using MetaManifold.FuncDBAnnotation
     using MetaManifold.Tools, MetaManifold.TaxonomyTableTools, MetaManifold.ProjectSetup
     using MetaManifold.DADA2, MetaManifold.OTUPipeline
     using MetaManifold.DiversityMetrics, MetaManifold.Analysis
@@ -41,7 +42,16 @@ module Server
            (occursin("EPIPE", msg_str) || occursin("broken pipe", msg_str))
             return
         end
-        Logging.handle_message(l.inner, level, msg, _module, group, id, file, line; kwargs...)
+        try
+            Logging.handle_message(l.inner, level, msg, _module, group, id, file, line; kwargs...)
+        catch e
+            # When a job is stopped the TTY handle becomes invalid. uv_write()
+            # then returns Nothing instead of Int32, triggering a TypeError
+            # before Julia can turn it into an IOError/EPIPE. Suppress both so
+            # "Exception while generating log record" spam is silenced on cancel.
+            (e isa Base.IOError || e isa TypeError) && return
+            rethrow()
+        end
     end
 
     ## Server state
@@ -75,6 +85,7 @@ module Server
     include(joinpath(@__DIR__, "routes", "pipeline.jl"))
     include(joinpath(@__DIR__, "routes", "jobs.jl"))
     include(joinpath(@__DIR__, "routes", "results.jl"))
+    include(joinpath(@__DIR__, "routes", "annotations.jl"))
     include(joinpath(@__DIR__, "routes", "databases.jl"))
     include(joinpath(@__DIR__, "routes", "events.jl"))
     include(joinpath(@__DIR__, "routes", "analysis.jl"))
