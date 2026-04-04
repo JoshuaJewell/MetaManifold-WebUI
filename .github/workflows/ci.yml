@@ -50,8 +50,8 @@ jobs:
         run: |
           sudo Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.org", lib=.Library)'
           sudo Rscript -e 'BiocManager::install("dada2", ask=FALSE, lib=.Library)'
-          sudo Rscript -e 'install.packages("vegan", repos="https://cloud.r-project.org", lib=.Library)'
-          Rscript -e 'for (pkg in c("dada2","vegan")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
+          sudo Rscript -e 'install.packages(c("vegan", "dplyr"), repos="https://cloud.r-project.org", lib=.Library)'
+          Rscript -e 'for (pkg in c("dada2","vegan","dplyr")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
 
       - name: Install cutadapt
         run: pip install cutadapt
@@ -91,9 +91,20 @@ jobs:
       - name: Rebuild RCall against installed R
         run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
 
+      - name: Verify R packages visible from RCall
+        run: |
+          julia --project=. -e '
+            using RCall
+            R"cat(.libPaths(), sep=\"\n\")"
+            for pkg in ["dada2", "dplyr", "vegan", "tibble"]
+              R"if (!require($pkg, character.only=TRUE, quietly=TRUE)) stop($pkg, \" not found\")"
+            end
+          '
+
       - name: Run tests
         env:
           CI_SKIP_TAXONOMY: "1"
+          R_LIBS_SITE: /usr/local/lib/R/site-library:/usr/lib/R/site-library:/usr/lib/R/library
         run: julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration
 
       - name: Process coverage
