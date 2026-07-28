@@ -6,6 +6,7 @@ import { Skeleton } from '../components/Skeleton'
 import { NameDialog } from '../components/NameDialog'
 import { CardActions } from '../components/CardActions'
 import { useToast } from '../components/Toast'
+import { useNavRefresh } from '../hooks/useNavRefresh'
 
 type Dialog = { mode: 'create' } | { mode: 'rename'; name: string }
 
@@ -13,12 +14,14 @@ export function StudiesView() {
   const { data: studies, loading, error, refetch } = useApi(api.studies.list)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const toast = useToast()
+  const refreshNav = useNavRefresh()
   const navigate = useNavigate()
 
   const handleCreate = async (name: string) => {
     await api.studies.create(name)
     setDialog(null)
     toast.success(`Study '${name}' created`)
+    refreshNav()
     refetch()
   }
 
@@ -26,14 +29,20 @@ export function StudiesView() {
     await api.studies.rename(oldName, newName)
     setDialog(null)
     toast.success(`Renamed to '${newName}'`)
+    refreshNav()
     navigate(`/${newName}`)
   }
 
   const handleDelete = async (name: string) => {
     if (!window.confirm(`Delete study '${name}'? This cannot be undone.`)) return
-    await api.studies.delete(name)
-    toast.success(`Study '${name}' deleted`)
-    refetch()
+    try {
+      await api.studies.delete(name)
+      toast.success(`Study '${name}' deleted`)
+      refreshNav()
+      refetch()
+    } catch (e) {
+      toast.error(`Delete failed: ${(e as Error).message}`)
+    }
   }
 
   return (
@@ -66,9 +75,9 @@ export function StudiesView() {
                 <h3>{s.name}</h3>
                 <div className="meta">
                   {s.run_count} run{s.run_count !== 1 ? 's' : ''}
-                  {' - '}
+                  {' · '}
                   {s.group_count} group{s.group_count !== 1 ? 's' : ''}
-                  {s.active_job_count > 0 && ` - ${s.active_job_count} active`}
+                  {s.active_job_count > 0 && ` · ${s.active_job_count} active`}
                 </div>
               </Link>
               <CardActions

@@ -3,26 +3,18 @@
 
 # Routes: /api/v1/databases
 using JSON3, YAML
-using MetaManifold.DatabasesLibrary
+using ..DatabasesLibrary
 
 ## Databases document (whole-file view and edit)
 _databases_path() = joinpath(dirname(ServerState.data_dir()), "config", "databases.yml")
 
-# Atomic write of a document already in the native file shape. The temp file and
-# rename mean a reader never observes a half-written file, and the lock means two
-# concurrent writes cannot interleave their bytes into a corrupt file. It does
-# NOT make read-validate-write atomic: two clients can each read the document
-# before either writes, and the later write silently overwrites the earlier
-# client's edit (a lost update, not a torn file).
 function _write_databases(native::AbstractDict)
     _atomic_write_yaml(_databases_path(), native)
 end
 
-# Read the document, turning an unparseable file into a 400 that names it rather
-# than a 500. DatabasesLibrary.load deliberately raises instead of degrading to
-# an empty document, because an empty document would breeze through validation
-# and the next Save would overwrite the real config with nothing.
-# Returns the document, or an HTTP.Response error.
+# Read the document; an unparseable file becomes a 400 naming it. DatabasesLibrary.load
+# raises on a bad file because an empty document would pass validation and the next
+# Save would overwrite the real config. Returns the document, or an HTTP.Response error.
 function _read_databases()
     try
         DatabasesLibrary.load(_databases_path())
@@ -71,11 +63,8 @@ function _version_token(uri::AbstractString)
 end
 
 # Advisory warnings for a submitted document. Never blocks a write.
-#
-# `current` is passed in rather than re-read here. The handler has already loaded
-# it through `_read_databases`, which catches the deliberate raise on an
-# unparseable file; loading it again here would escape that guard and throw,
-# turning a Save into a 500 if the file changed underneath us between the reads.
+# `current` comes from the handler's guarded `_read_databases`, so a file that turns
+# unparseable between reads cannot throw here.
 function _database_warnings(doc::AbstractDict, current::AbstractDict)
     warnings = Any[]
     was = Set(DatabasesLibrary.database_keys(current))
@@ -103,14 +92,8 @@ function _database_warnings(doc::AbstractDict, current::AbstractDict)
     end
 
     # Both formats must come from one release: the consensus rank compares the
-    # DADA2 and VSEARCH labels for string equality, so references drawn from
-    # different releases score genuine agreements as disagreements.
-    #
-    # `_seq`, not a bare `get(doc, "databases", Any[])`: the default only fires
-    # when the key is ABSENT, so an explicit `databases: null` reaches a bare
-    # `get` as `nothing`, which throws on iteration. Every other site that walks
-    # this section (all five in DatabasesLibrary) already goes through `_seq`;
-    # this was the one that bypassed it.
+    # DADA2 and VSEARCH labels for string equality.
+    # `_seq` tolerates an explicit `databases: null`.
     for e in Validation._seq(get(doc, "databases", nothing))
         e isa AbstractDict || continue
         d = get(e, "dada2", nothing); v = get(e, "vsearch", nothing)
@@ -134,12 +117,9 @@ end
     json(doc)
 end
 
-# Replace the whole databases document. Validated before the write lands on disk.
-# The response carries advisory warnings: removing or renaming a database a study
-# resolves to, changing a database's levels, and a cross-release URI pair. None
-# of them blocks the write. The read of the current document comes first: when
-# the file on disk is corrupt we refuse the write rather than let it be
-# overwritten from an empty editor.
+# Replace the whole databases document, validated before the write. The response
+# carries advisory warnings: a removed or renamed database a study resolves to,
+# changed levels, and a cross-release URI pair. A corrupt file on disk refuses the write.
 @put "/api/v1/databases" function(req)
     current = _read_databases()
     current isa HTTP.Response && return current
@@ -152,10 +132,7 @@ end
 end
 
 # A format is present when its `local:` override names a file that exists, or when
-# the asset named by its `uri:` has been downloaded into the databases cache. The
-# config schema has no `local_path` key, only `uri`, `local`, and `remote_path`, so
-# reading `local_path` meant every database reported itself unavailable regardless
-# of what was actually on disk.
+# the asset named by its `uri:` has been downloaded into the databases cache.
 function _format_available(entry::AbstractDict, format::String, db_dir::String)
     info = get(entry, format, nothing)
     info isa AbstractDict || return false
@@ -171,13 +148,10 @@ function _format_available(entry::AbstractDict, format::String, db_dir::String)
 end
 
 function _db_info()
-    path = joinpath(dirname(ServerState.data_dir()), "config", "databases.yml")
+    path = _databases_path()
     isfile(path) || return []
     cfg = get(YAML.load_file(path), "databases", Dict())
-    # The cache directory is `databases.dir`, exactly as `Databases.ensure_databases`
-    # resolves it. Hard-coding "databases/" here would report every database
-    # unavailable on any deployment that sets the key, while the pipeline resolved it
-    # perfectly well.
+    # Cache directory resolved as in Databases.ensure_databases.
     db_dir = abspath(get(cfg, "dir", "./databases"))
     map(filter(((k,v),) -> v isa Dict, collect(cfg))) do (key, entry)
         (;
@@ -194,14 +168,14 @@ end
 end
 
 @post "/api/v1/databases/{key}/download" function(req, key::String)
-    db_cfg = joinpath(dirname(ServerState.data_dir()), "config", "databases.yml")
+    db_cfg = _databases_path()
     isfile(db_cfg) || return json_error(404, "config_not_found",
                                             "databases.yml not found")
     cfg = get(YAML.load_file(db_cfg), "databases", Dict())
     haskey(cfg, key) || return json_error(404, "database_unavailable",
                                               "Database '$key' not configured")
     job = submit_job!("db_download"; study=nothing) do
-        ensure_databases(db_cfg)
+        ensure_databases(db_cfg; only=Set([key]))
     end
     json(_job_to_namedtuple(job))
 end

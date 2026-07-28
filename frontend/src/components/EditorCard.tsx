@@ -26,14 +26,11 @@ export function EditorCard({
 
   return (
     <div className="card" style={{ marginBottom: 12 }}>
-      <div
-        style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
-        onClick={() => setExpanded(e => !e)}
-      >
-        <span style={{ fontSize: '.8rem', opacity: .65 }}>{expanded ? 'v' : '>'}</span>
+      <button type="button" className="toggle-btn" aria-expanded={expanded} onClick={() => setExpanded(e => !e)}>
+        <span aria-hidden="true" style={{ fontSize: '.8rem', opacity: .65 }}>{expanded ? '▾' : '▸'}</span>
         <strong style={{ flex: 1 }}>{name}</strong>
         {meta && <span style={metaStyle}>{meta}</span>}
-      </div>
+      </button>
 
       {expanded && (
         <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -41,10 +38,10 @@ export function EditorCard({
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button className="btn btn-primary" onClick={onSave} disabled={busy}>
-              {busy ? 'Saving...' : 'Save'}
+              {busy ? 'Saving…' : 'Save'}
             </button>
             <button
-              className="btn"
+              className="btn btn-danger"
               onClick={onDelete}
               disabled={busy || deleteDisabled}
               title={deleteTitle}
@@ -139,10 +136,8 @@ export const fieldHintStyle: CSSProperties = {
   color:       'var(--color-muted-fg)',
 }
 
-// The app's error red, matching .error-msg in styles/app.css. Inline styles
-// cannot reach that class, so the value is named here rather than a second red
-// being invented at each call site.
-export const dangerColour = '#c92a2a'
+// The app's error red, matching .error-msg in styles/app.css, for inline styles.
+export const dangerColour = 'var(--color-danger)'
 
 //## Row-list editing
 // Index-based edits over a list of rows, shared by the editors that render one.

@@ -5,7 +5,7 @@ export { nameIssues } from './EditorCard'
 export type { NameIssue } from './EditorCard'
 
 // Valid IUPAC nucleotide codes, case-insensitive. Mirrors the server rule so an
-// illegal base is flagged inline before Save rather than bouncing off a 400.
+// illegal base is flagged inline before Save.
 // A sequence must have at least one base: an empty one passes the server's
 // character check vacuously, and would reach cutadapt as an empty primer.
 const IUPAC = /^[ACGTMRWSYKVHDBNacgtmrwsykvhdbn]+$/
@@ -21,9 +21,8 @@ export interface PrimerRow {
 
 export interface PrimerListEditorProps {
   title:    string
-  // Ordered name/sequence rows. The parent holds primers as an ordered list
-  // rather than a map, so a half-typed or duplicated name cannot collapse two
-  // rows into one; see PrimersView.
+  // Ordered name/sequence rows. An ordered list keeps a half-typed or duplicated
+  // name from collapsing two rows into one; see PrimersView.
   rows:     PrimerRow[]
   onChange: (next: PrimerRow[]) => void
   disabled: boolean

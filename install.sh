@@ -9,7 +9,8 @@
 #   bash install.sh [--update] [--modify] [--sysimage]
 #
 # Options:
-#   --update    Abort any in-progress merge, sync tracked files to origin/main,
+#   --update    Refuse if tracked files have uncommitted changes; otherwise abort
+#               any in-progress merge, sync tracked files to origin/main,
 #               clean generated build artifacts, then re-assert the pinned tool
 #               versions in bin/ (see config/defaults/tool_versions.yml). This
 #               re-fetches the pins; it does not advance them.
@@ -57,6 +58,13 @@ update_checkout() {
         return
     fi
 
+    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "--update would discard uncommitted changes to tracked files:"
+        git status --short --untracked-files=no
+        echo "Commit or stash them, then re-run: bash install.sh --update"
+        exit 1
+    fi
+
     echo "Syncing checkout to origin/main..."
     git merge --abort >/dev/null 2>&1 || true
     git fetch origin
@@ -70,29 +78,94 @@ fi
 
 # Julia check and install
 
-if command -v julia &>/dev/null; then
-    echo "Found Julia: $(julia --version)"
-else
-    echo "Julia not found. Installing via juliaup..."
-    curl -fsSL https://install.julialang.org | sh -s -- --yes
+JULIAUP_BIN="$HOME/.juliaup/bin"
 
-    # juliaup installs to ~/.juliaup; source the env file if present
+# Locate julia, pulling juliaup's shim dir onto PATH if that is all that's
+# missing. Returns 0 with julia callable, or 1 if it genuinely can't be found.
+locate_julia() {
+    command -v julia &>/dev/null && return 0
+
     if [ -f "$HOME/.juliaup/env" ]; then
         # shellcheck disable=SC1091
         source "$HOME/.juliaup/env"
     fi
-    export PATH="$HOME/.juliaup/bin:$PATH"
 
-    if command -v julia &>/dev/null; then
-        echo "Julia installed: $(julia --version)"
+    if [ -x "$JULIAUP_BIN/julia" ]; then
+        # Standard juliaup layout: installed, but its bin dir isn't on PATH.
+        # This is the usual reason install.sh appears to work but a later
+        # start.sh in a fresh shell cannot find julia.
+        export PATH="$JULIAUP_BIN:$PATH"
+    elif command -v juliaup &>/dev/null; then
+        # juliaup from a distro package / brew / snap: different shim location.
+        juliaup add release >/dev/null 2>&1 || true
+        export PATH="$(CDPATH= cd -- "$(dirname -- "$(command -v juliaup)")" && pwd):$PATH"
+    fi
+
+    command -v julia &>/dev/null
+}
+
+# Make juliaup's bin dir stick for future shells (start.sh, new terminals).
+persist_juliaup_path() {
+    local line='export PATH="$HOME/.juliaup/bin:$PATH"'
+    local rc=""
+    case "$(basename "${SHELL:-}")" in
+        zsh)  rc="${ZDOTDIR:-$HOME}/.zshrc" ;;
+        bash) rc="$HOME/.bashrc" ;;
+    esac
+
+    echo ""
+    echo "NOTE: julia is on PATH via juliaup, but only for this session."
+    if [ -n "$rc" ]; then
+        if grep -qF "$line" "$rc" 2>/dev/null; then
+            echo "      $rc already adds it - run 'source $rc' in open shells."
+        else
+            printf '\n# Added by MetaManifold install.sh\n%s\n' "$line" >> "$rc"
+            echo "      Appended it to $rc - run 'source $rc' or open a new terminal."
+        fi
+    else
+        echo "      Add this to your shell profile so start.sh can find julia:"
+        echo "          $line"
+    fi
+    echo ""
+}
+
+if command -v julia &>/dev/null; then
+    echo "Found Julia: $(julia --version)"
+elif locate_julia; then
+    echo "Found Julia (via juliaup, was not on PATH): $(julia --version)"
+    persist_juliaup_path
+else
+    echo "Julia not found. Installing via juliaup..."
+    if ! curl -fsSL https://install.julialang.org | sh -s -- --yes; then
+        echo ""
+        echo "The juliaup installer exited non-zero - usually an existing juliaup"
+        echo "install blocking a reinstall. Trying the existing installation..."
+    fi
+
+    if locate_julia; then
+        echo "Julia available: $(julia --version)"
+        persist_juliaup_path
     else
         echo ""
-        echo "Julia was installed but is not yet in PATH."
-        echo "Please open a new terminal and re-run this script, or install Julia"
-        echo "manually from https://julialang.org/downloads/ and try again."
+        echo "ERROR: Julia is still not callable after attempting install."
+        echo "  Inspect:  juliaup status   ;   ls -la \"$JULIAUP_BIN\""
+        echo "  Or install manually: https://julialang.org/downloads/"
+        echo "  Then re-run: bash install.sh"
         exit 1
     fi
 fi
+
+# Pin this directory to the Julia version the Manifest was resolved with.
+JULIA_PIN="$(awk '/^  julia:/{f=1; next} f && /version:/{gsub(/"/, "", $2); print $2; exit}' config/defaults/tool_versions.yml)"
+if [ -n "$JULIA_PIN" ] && command -v juliaup &>/dev/null; then
+    if juliaup add "$JULIA_PIN" >/dev/null 2>&1 || juliaup status 2>/dev/null | grep -q "$JULIA_PIN"; then
+        juliaup override set "$JULIA_PIN" >/dev/null 2>&1 &&
+            echo "Pinned Julia $JULIA_PIN for this directory (juliaup override)."
+    else
+        echo "WARNING: could not install Julia $JULIA_PIN via juliaup; using $(julia --version)."
+    fi
+fi
+echo ""
 
 # R check and politely ask user to do it for us
 

@@ -77,31 +77,28 @@ export function CompositionsView() {
     mutate(() => api.composition.deleteSet(name),
            `Category set "${name}" deleted`, 'Failed to delete category set'), [mutate])
 
-  //## New-filter / new-set creation. NameDialog catches a rejection itself
-  //## and shows it inline, so these are left to throw rather than toast.
+  // NameDialog shows a thrown error inline.
   const handleCreateFilter = useCallback(async (newName: string) => {
+    if (library?.filters[newName]) throw new Error(`A filter named "${newName}" already exists`)
     await api.composition.saveFilter(newName, { filters: [] })
     refetch()
     setShowNewFilter(false)
     toast.success(`Filter "${newName}" created`)
-  }, [refetch, toast])
+  }, [library, refetch, toast])
 
   const handleCreateSet = useCallback(async (newName: string) => {
+    if (library?.sets[newName]) throw new Error(`A category set named "${newName}" already exists`)
     await api.composition.saveSet(newName, { label: newName, categories: [] })
     refetch()
     setShowNewSet(false)
     toast.success(`Category set "${newName}" created`)
-  }, [refetch, toast])
+  }, [library, refetch, toast])
 
   return (
     <>
       <div className="page-header">
         <h1>Compositions</h1>
-        <p>
-          Filters classify sequences by a taxonomic rule; category sets arrange filters into an
-          ordered, coloured scheme (Protozoa, Fungi, Bacteria, Contaminant, and so on). Editing
-          here replaces hand-editing config/composition.yml.
-        </p>
+        <p>Filters and category sets for tagging sequences, saved to config/composition.yml.</p>
       </div>
 
       {loading && <Skeleton lines={4} />}

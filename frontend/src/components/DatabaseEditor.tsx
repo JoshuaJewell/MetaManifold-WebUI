@@ -277,7 +277,7 @@ export function DatabaseEditor({ row, keyProblem, onChange, onRemove, disabled }
             </div>
             <p style={{ ...fieldHintStyle, marginBottom: 8 }}>
               A correction rewrites a taxon label from one rank into another. Both ranks must be
-              levels of this database; the server rejects the save otherwise.
+              levels of this database.
             </p>
             {row.corrections.length === 0 && <p style={emptyStyle}>None defined.</p>}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -304,9 +304,7 @@ interface FormatEditorProps {
   title:  string
   format: DatabaseFormat
   // Whether this format names neither a uri nor a local path, and so can never
-  // resolve. The server rejects the save for it; it is marked here so this rule
-  // marks its row like every other one rather than only reaching the user as a
-  // toast after a bounced Save.
+  // resolve. The server rejects such a save; flagging it here marks the row.
   unresolved: boolean
   // remote_path is a DADA2-only field: the vsearch stage has no remote host.
   remote?:  boolean
@@ -323,8 +321,8 @@ export const formatUnresolved = (f: DatabaseFormat): boolean =>
 
 function FormatEditor({ title, format, unresolved, remote = false, onChange, disabled }: FormatEditorProps) {
   const set = (patch: Partial<DatabaseFormat>) => onChange({ ...format, ...patch })
-  // An absent path is null, not "": the wire format spells absence as null and an
-  // empty string would land in the YAML as a path of no characters. The value is
+  // The wire format spells an absent path as null; an empty string would land in
+  // the YAML as a path of no characters. The value is
   // trimmed as well as tested: returning the untrimmed text sent a pasted path
   // verbatim, and the server then reported "file not found:  /data/pr2.fa" with
   // the offending space invisible.
@@ -400,8 +398,7 @@ function LevelsEditor({ levels, onChange, disabled }: LevelsEditorProps) {
         <button className="btn" onClick={add} disabled={disabled}>+ Level</button>
       </div>
       <p style={{ ...fieldHintStyle, marginBottom: 8 }}>
-        Ordered from the broadest rank to the narrowest. The order maps onto the database's
-        taxonomy columns, so it is not cosmetic.
+        Broadest rank first. The order maps onto the database's taxonomy columns.
       </p>
       {levels.length === 0 && <p style={emptyStyle}>None defined. A database needs at least one level.</p>}
       <div style={scrollListStyle}>
@@ -488,7 +485,7 @@ function CorrectionEditor({ correction, levelNames, onChange, onRemove, disabled
         <button className="btn" onClick={onRemove} disabled={disabled}>Remove correction</button>
       </div>
 
-      {correction.values.length === 0 && <p style={emptyStyle}>No values. This correction rewrites nothing.</p>}
+      {correction.values.length === 0 && <p style={emptyStyle}>No values.</p>}
       <div style={scrollListStyle}>
         {correction.values.map((v, i) => {
           const problem = issues[i] === 'blank'     ? 'source label required'
@@ -529,9 +526,8 @@ function CorrectionEditor({ correction, levelNames, onChange, onRemove, disabled
 
 //## A level chosen from the entry's own levels
 // The server rejects a correction naming a level the database does not have, so
-// the levels are offered rather than typed. A value that is no longer one of them,
-// because the levels were edited after the correction was written, is kept as a
-// marked option rather than being silently rewritten to another rank.
+// the levels are offered as options. A value that is no longer a level (the levels
+// were edited after the correction was written) stays as a marked option.
 interface LevelSelectProps {
   value:      string
   levelNames: string[]
@@ -573,7 +569,6 @@ const sectionHeadStyle: CSSProperties = {
   marginBottom:   4,
 }
 
-// A long list scrolls within itself rather than dragging the whole page.
 const scrollListStyle: CSSProperties = {
   display:       'flex',
   flexDirection: 'column',

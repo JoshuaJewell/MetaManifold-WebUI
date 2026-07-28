@@ -20,16 +20,16 @@ export function RunCard({ name, to, sampleCount, stages, onRename, onDelete }: {
         <h3>{name}</h3>
         <div className="meta">
           {sampleCount} sample{sampleCount !== 1 ? 's' : ''}
-          {' - '}
+          {' · '}
           {done}/{stageList.length} stages
           {running > 0 && (
             <span style={{ color: 'var(--color-primary)', fontWeight: 600 }}>
-              {' - '}{running} running
+              {' · '}{running} running
             </span>
           )}
           {stale > 0 && (
-            <span style={{ color: '#f59e0b', fontWeight: 600 }}>
-              {' - '}{stale} stale
+            <span style={{ color: 'var(--color-warn)', fontWeight: 600 }}>
+              {' · '}{stale} stale
             </span>
           )}
         </div>
@@ -47,15 +47,13 @@ export function CardActions({ onRename, onDelete }: { onRename: () => void; onDe
       borderTop: '1px solid var(--color-border-light)',
     }}>
       <button
-        className="btn"
-        style={{ padding: '2px 8px', fontSize: '.78rem' }}
+        className="btn btn-sm"
         onClick={e => { e.preventDefault(); e.stopPropagation(); onRename() }}
       >
         Rename
       </button>
       <button
-        className="btn"
-        style={{ padding: '2px 8px', fontSize: '.78rem', color: '#c92a2a', borderColor: '#ffc9c9' }}
+        className="btn btn-sm btn-danger"
         onClick={e => { e.preventDefault(); e.stopPropagation(); onDelete() }}
       >
         Delete

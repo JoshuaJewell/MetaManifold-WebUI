@@ -2,11 +2,21 @@
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
-import type { TablePage, TableQuery, ColFilter, DistinctInfo } from '../api/types'
+import type { TablePage, TableQuery, ColFilter, DistinctInfo, HeatmapMode, TableDisplay } from '../api/types'
+import { SAMPLE_READS_FILTER_KEY } from '../api/types'
 import styles from './DataTable.module.css'
+import { ColumnDropdown } from './dataTable/ColumnDropdown'
+import { SampleReadsControl } from './dataTable/SampleReadsControl'
+import { RowPopup } from './dataTable/RowPopup'
+import { blastUrl, flashCopy } from './dataTable/copy'
 
-const blastUrl = (seq: string) =>
-  `https://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=blastn&DATABASE=nt&CMD=Put&ENTREZ_QUERY=NOT+uncultured+organism%5Borganism%5D+NOT+environmental+sample%5Borganism%5D&QUERY=${encodeURIComponent(seq)}`
+// Same palette as the server's heatmap.jl: white to #6FA8DC over 0 to max.
+const HEAT_HIGH = [0x6f, 0xa8, 0xdc]
+function heatColour(v: number, max: number): string | undefined {
+  if (!(v !== 0 && max > 0 && Number.isFinite(v))) return undefined
+  const t = Math.min(Math.abs(v) / max, 1)
+  return '#' + HEAT_HIGH.map(c => Math.round(255 + (c - 255) * t).toString(16).padStart(2, '0')).join('')
+}
 
 // Star marker for the row-highlight toggle; filled when the row is highlighted,
 // outlined otherwise. Uses currentColor so it follows the button's theme colour.
@@ -16,15 +26,6 @@ const StarIcon = ({ filled }: { filled: boolean }) => (
     <path d="M12 2.6l2.7 5.9 6.4.6-4.8 4.2 1.4 6.3L12 16.9 6.3 19.6l1.4-6.3L2.9 9.1l6.4-.6z" />
   </svg>
 )
-
-// Copy text to the clipboard and briefly flash the clicked element as feedback.
-const flashCopy = (text: string) => (e: React.MouseEvent<HTMLElement>) => {
-  navigator.clipboard.writeText(text)
-  const el = e.currentTarget
-  el.classList.remove(styles.copied)
-  void el.offsetWidth
-  el.classList.add(styles.copied)
-}
 
 export interface RowPopupData {
   columns: string[]
@@ -36,6 +37,9 @@ export interface TableStats {
   total_unfiltered:       number
   total_reads:            number
   total_reads_unfiltered: number
+  /** Sample columns with at least one read in the filtered rows. */
+  samples:                number
+  samples_unfiltered:     number
 }
 
 interface Props {
@@ -60,6 +64,8 @@ interface Props {
   onFiltersChange?: (filters: Record<string, ColFilter>) => void
   onSortChange?: (sortBy: string | null, sortDir: 'asc' | 'desc') => void
   onStatsChange?: (stats: TableStats | null) => void
+  /** Count-cell display options, for passing on to the table export. */
+  onDisplayChange?: (display: TableDisplay) => void
 }
 
 interface PersistedTableState {
@@ -70,6 +76,8 @@ interface PersistedTableState {
   colFilters?: Record<string, ColFilter>
   activePreset?: 'vsearch' | 'dada2' | null
   highlighted?: string[]
+  heatmap?: HeatmapMode
+  hideZeros?: boolean
 }
 
 function loadPersistedState(key: string): PersistedTableState | null {
@@ -87,14 +95,18 @@ function savePersistedState(key: string, state: PersistedTableState) {
 
 type SortDir = 'asc' | 'desc'
 
-export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, rowPopupFetcher, popupColumns, cellLabels, cellRenderer, extraRowActions, showTaxonomyPresets = false, perPage = 100, initialFilters, onFiltersChange, onSortChange, onStatsChange }: Props) {
+const isActiveFilter = (f: ColFilter) =>
+  f.include != null || f.min != null || f.max != null || (f.exclude?.length ?? 0) > 0
+
+export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, rowPopupFetcher, popupColumns, cellLabels, cellRenderer, extraRowActions, showTaxonomyPresets = false, perPage = 100, initialFilters, onFiltersChange, onSortChange, onStatsChange, onDisplayChange }: Props) {
   const [persisted] = useState(() => storageKey ? loadPersistedState(storageKey) : null)
   const [page, setPage]             = useState(1)
   const [filter, setFilter]         = useState('')
   const [sortBy, setSortBy]         = useState<string | null>(persisted?.sortBy ?? null)
   const [sortDir, setSortDir]       = useState<SortDir>(persisted?.sortDir ?? 'asc')
+  // A preset or import remounts the table with non-empty initialFilters, which win over the session copy.
   const [colFilters, _setColFilters] = useState<Record<string, ColFilter>>(
-    persisted?.colFilters ?? initialFilters ?? {},
+    initialFilters && Object.keys(initialFilters).length ? initialFilters : persisted?.colFilters ?? {},
   )
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set(persisted?.hiddenCols))
@@ -104,6 +116,10 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
   // Manually highlighted rows, keyed by stable row identity so a highlight
   // survives filtering, sorting, and paging, and reappears when a filter clears.
   const [highlighted, setHighlighted] = useState<Set<string>>(new Set(persisted?.highlighted))
+  const [heatmapOn, setHeatmapOn]       = useState(persisted?.heatmap != null && persisted.heatmap !== 'none')
+  const [heatmapWhole, setHeatmapWhole] = useState(persisted?.heatmap === 'table')
+  const [hideZeros, setHideZeros]       = useState(persisted?.hideZeros ?? false)
+  const heatmap: HeatmapMode = heatmapOn ? (heatmapWhole ? 'table' : 'column') : 'none'
   const colPickerRef = useRef<HTMLDivElement>(null)
 
   const [popupData, setPopupData]       = useState<RowPopupData | null>(null)
@@ -112,6 +128,8 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
   const [popupRowIdx, setPopupRowIdx]   = useState<number | null>(null)
   const popupTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const popupRef   = useRef<HTMLDivElement>(null)
+  // Counts popup requests so a slow response for an earlier row is ignored.
+  const popupSeq   = useRef(0)
 
   const startPopup = useCallback((row: Record<string, unknown>, rowIdx: number, e: React.MouseEvent) => {
     if (!rowPopupFetcher) return
@@ -122,10 +140,12 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
       setPopupRowIdx(rowIdx)
       setPopupLoading(true)
       setPopupData(null)
+      const seq = ++popupSeq.current
       rowPopupFetcher(row).then(data => {
+        if (seq !== popupSeq.current) return
         setPopupData(data)
         setPopupLoading(false)
-      }).catch(() => { setPopupData(null); setPopupLoading(false) })
+      }).catch(() => { if (seq === popupSeq.current) { setPopupData(null); setPopupLoading(false) } })
     }, 300)
   }, [rowPopupFetcher])
 
@@ -135,6 +155,7 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
     if (popupTimer.current) { clearTimeout(popupTimer.current); popupTimer.current = null }
     if (cancelTimer.current) clearTimeout(cancelTimer.current)
     cancelTimer.current = setTimeout(() => {
+      popupSeq.current++
       setPopupData(null)
       setPopupLoading(false)
       setPopupRowIdx(null)
@@ -177,8 +198,14 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
       colFilters,
       activePreset,
       highlighted: [...highlighted],
+      heatmap,
+      hideZeros,
     })
-  }, [storageKey, hiddenCols, stickyCols, sortBy, sortDir, colFilters, activePreset, highlighted])
+  }, [storageKey, hiddenCols, stickyCols, sortBy, sortDir, colFilters, activePreset, highlighted, heatmap, hideZeros])
+
+  useEffect(() => {
+    onDisplayChange?.({ heatmap, hide_zeros: hideZeros })
+  }, [heatmap, hideZeros]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const bound = useCallback(() => {
     const q: TableQuery = { page, perPage }
@@ -186,7 +213,7 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
     if (sortBy) { q.sortBy = sortBy; q.sortDir = sortDir }
     const active: Record<string, ColFilter> = {}
     for (const [col, f] of Object.entries(colFilters)) {
-      if (f.include != null || f.min != null || f.max != null) active[col] = f
+      if (isActiveFilter(f)) active[col] = f
     }
     if (Object.keys(active).length > 0) q.colFilters = active
     return fetcher(q)
@@ -203,7 +230,12 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
 
   useEffect(() => {
     if (!data) { onStatsChange?.(null); return }
-    onStatsChange?.({ total: data.total, total_unfiltered: data.total_unfiltered, total_reads: data.total_reads, total_reads_unfiltered: data.total_reads_unfiltered })
+    onStatsChange?.({
+      total: data.total, total_unfiltered: data.total_unfiltered,
+      total_reads: data.total_reads, total_reads_unfiltered: data.total_reads_unfiltered,
+      samples: Object.values(data.count_max ?? {}).filter(v => v > 0).length,
+      samples_unfiltered: data.sample_count_columns.length + (data.excluded_samples?.length ?? 0),
+    })
   }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const rows  = data && Array.isArray(data.rows) ? data.rows : []
@@ -211,6 +243,15 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
               : (rows.length > 0 && rows[0] ? Object.keys(rows[0]) : [])
   const sampleCountColSet = new Set(data?.sample_count_columns ?? [])
   const allCountsHidden = sampleCountColSet.size > 0 && [...sampleCountColSet].every(c => hiddenCols.has(c))
+  const countMax = data?.count_max ?? {}
+  const wholeMax = Math.max(0, ...Object.values(countMax))
+  const countCellStyle = (c: string, text: string): React.CSSProperties | undefined => {
+    if (heatmap === 'none' || !sampleCountColSet.has(c) || text === '') return undefined
+    const bg = heatColour(Number(text), heatmap === 'table' ? wholeMax : countMax[c] ?? 0)
+    return bg ? { background: bg, color: '#111' } : undefined
+  }
+  const isHiddenZero = (c: string, text: string) =>
+    hideZeros && sampleCountColSet.has(c) && text !== '' && Number(text) === 0
   const cols = allCols.filter(c => !hiddenCols.has(c))
   const hasSequenceCol = allCols.includes('sequence')
   const pages = data ? Math.ceil(data.total / perPage) : 0
@@ -268,7 +309,7 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
   const hasAnyFilter = !!filter || Object.keys(colFilters).length > 0
   const colIsFiltered = (col: string) => {
     const f = colFilters[col]
-    return f && (f.include != null || f.min != null || f.max != null)
+    return !!f && isActiveFilter(f)
   }
 
   const toggleColVisibility = (col: string) => {
@@ -315,8 +356,8 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
     setPage(1)
   }
 
-  // Stable identity for a row; prefers a natural key so highlights track the
-  // row rather than its transient position after filtering or sorting.
+  // Stable identity for a row. A natural key keeps highlights on the same row
+  // through filtering and sorting.
   const rowKey = (row: Record<string, unknown>): string => {
     const id = row['SeqName'] ?? row['sequence']
     return id != null ? String(id) : JSON.stringify(row)
@@ -346,9 +387,15 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
       <div className={styles.toolbar}>
         <input
           className={styles.search}
-          placeholder="Global filter..."
+          placeholder="Global filter…"
+          aria-label="Filter all columns"
           value={filter}
           onChange={e => { setFilter(e.target.value); setPage(1) }}
+        />
+        <SampleReadsControl
+          current={colFilters[SAMPLE_READS_FILTER_KEY]}
+          excluded={data?.excluded_samples ?? []}
+          onApply={f => updateColFilter(SAMPLE_READS_FILTER_KEY, f)}
         />
         {hasAnyFilter && (
           <button className="btn" style={{ fontSize: '.78rem', padding: '3px 8px' }}
@@ -409,6 +456,32 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
               {allCountsHidden ? 'Show counts' : 'Hide counts'}
             </button>
         )}
+        {sampleCountColSet.size > 0 && (
+          <button
+            className={`btn${hideZeros ? ' btn-primary' : ''}`}
+            style={{ fontSize: '.78rem', padding: '3px 8px' }}
+            aria-pressed={hideZeros}
+            onClick={() => setHideZeros(h => !h)}
+            title="Blank zero counts"
+          >Hide zeros</button>
+        )}
+        {sampleCountColSet.size > 0 && (
+          <button
+            className={`btn${heatmapOn ? ' btn-primary' : ''}`}
+            style={{ fontSize: '.78rem', padding: '3px 8px' }}
+            aria-pressed={heatmapOn}
+            onClick={() => setHeatmapOn(h => !h)}
+            title="Shade counts from zero to the largest value"
+          >Heatmap</button>
+        )}
+        {sampleCountColSet.size > 0 && heatmapOn && (
+          <button
+            className="btn"
+            style={{ fontSize: '.78rem', padding: '3px 8px' }}
+            onClick={() => setHeatmapWhole(w => !w)}
+            title={heatmapWhole ? 'One scale across all sample columns' : 'Each sample column on its own scale'}
+          >{heatmapWhole ? 'Scale: whole table' : 'Scale: per column'}</button>
+        )}
         {highlighted.size > 0 && (
           <button
             className="btn"
@@ -420,7 +493,7 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
       </div>
 
       {error && <p className={styles.error}>{error}</p>}
-      {loading && cols.length === 0 && <p className={styles.msg}>Loading...</p>}
+      {loading && cols.length === 0 && <p className={styles.msg}>Loading…</p>}
       {!loading && !error && cols.length === 0 && <p className={styles.msg}>No data.</p>}
 
       {cols.length > 0 && (
@@ -443,17 +516,20 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
                     } : undefined
                     return (
                       <th key={c} className={styles.sortable}
+                        aria-sort={sortBy === c ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
                         onClick={() => handleSort(c)}
                         style={stickyStyle}>
-                        <span className={styles.headerLabel}>
+                        <button type="button" className={styles.headerLabel}
+                          onClick={e => { e.stopPropagation(); handleSort(c) }}>
                           {c}{sortIndicator(c)}
-                        </span>
+                        </button>
                         {distinctFetcher && (
                           <button
                             className={`${styles.dropdownBtn} ${colIsFiltered(c) ? styles.dropdownBtnActive : ''}`}
                             onClick={e => { e.stopPropagation(); setOpenDropdown(openDropdown === c ? null : c) }}
                             title="Filter values"
-                          >v</button>
+                            aria-label={`Filter ${c}`}
+                          >▾</button>
                         )}
                         {openDropdown === c && distinctFetcher && (
                           <ColumnDropdown
@@ -476,7 +552,7 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={cols.length + 1 + (hasSequenceCol || extraRowActions ? 1 : 0)} className={styles.msg} style={{ textAlign: 'center' }}>Loading...</td></tr>
+                  <tr><td colSpan={cols.length + 1 + (hasSequenceCol || extraRowActions ? 1 : 0)} className={styles.msg} style={{ textAlign: 'center' }}>Loading…</td></tr>
                 )}
                 {!loading && rows.length === 0 && (
                   <tr><td colSpan={cols.length + 1 + (hasSequenceCol || extraRowActions ? 1 : 0)} className={styles.msg} style={{ textAlign: 'center' }}>
@@ -514,9 +590,10 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
                       if (custom !== null && custom !== undefined) {
                         return <td key={c} style={stickyStyle}>{custom}</td>
                       }
-                      const display = cellLabels?.[c]?.[text] ?? text
+                      const display = isHiddenZero(c, text) ? '' : cellLabels?.[c]?.[text] ?? text
+                      const heat = countCellStyle(c, text)
                       return (
-                        <td key={c} style={stickyStyle}
+                        <td key={c} style={heat ? { ...stickyStyle, ...heat } : stickyStyle}
                           onClick={flashCopy(text)}
                           title="Click to copy"
                         >{display}</td>
@@ -543,64 +620,8 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
             </table>
           </div>
           {popupRowIdx !== null && (popupLoading || (popupData && popupData.rows.length > 0)) && (
-            <div
-              ref={popupRef}
-              className={styles.popup}
-              style={{ left: popupPos.x, top: popupPos.y }}
-              onMouseEnter={keepPopup}
-              onMouseLeave={cancelPopup}
-            >
-              {popupLoading && <div className={styles.popupTitle}>Loading...</div>}
-              {!popupLoading && popupData && popupData.rows.length > 0 && (() => {
-                const popupCols = popupData.columns.filter(c => !hiddenCols.has(c))
-                const popupHasSeq = popupCols.includes('sequence')
-                return (
-                  <>
-                    <div className={styles.popupTitle}>
-                      ASV members ({popupData.rows.length})
-                    </div>
-                    <div className={styles.popupScroll}>
-                      <table className={styles.popupTable}>
-                        <thead>
-                          <tr>
-                            {popupCols.map(c => (
-                              <th key={c}>{c}</th>
-                            ))}
-                            {popupHasSeq && <th style={{ width: 50 }}></th>}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {popupData.rows.map((r, i) => (
-                            <tr key={i}>
-                              {popupCols.map(c => {
-                                const text = String(r[c] ?? '')
-                                return (
-                                  <td key={c}
-                                    onClick={flashCopy(text)}
-                                    title="Click to copy"
-                                  >{text}</td>
-                                )
-                              })}
-                              {popupHasSeq && (
-                                <td className={styles.blastCell}>
-                                  <a
-                                    href={blastUrl(String(r['sequence'] ?? ''))}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className={styles.blastLink}
-                                    title="Search this sequence on NCBI BLAST"
-                                  >BLAST</a>
-                                </td>
-                              )}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )
-              })()}
-            </div>
+            <RowPopup ref={popupRef} data={popupData} loading={popupLoading} hiddenCols={hiddenCols}
+              pos={popupPos} onMouseEnter={keepPopup} onMouseLeave={cancelPopup} />
           )}
           {pages > 1 && (
             <div className={styles.pager}>
@@ -612,214 +633,5 @@ export function DataTable({ fetcher, refreshKey, storageKey, distinctFetcher, ro
         </>
       )}
     </div>
-  )
-}
-
-function ColumnDropdown({ column, distinctFetcher, activeFilters, keywordFilter, current, isSticky, onToggleSticky, onApply, onClose }: {
-  column:          string
-  distinctFetcher: (col: string, activeFilters?: Record<string, ColFilter>, keywordFilter?: string) => Promise<DistinctInfo>
-  activeFilters:   Record<string, ColFilter>
-  keywordFilter?:  string
-  current?:        ColFilter
-  isSticky:        boolean
-  onToggleSticky:  () => void
-  onApply:         (f: ColFilter | undefined) => void
-  onClose:         () => void
-}) {
-  const [info, setInfo]         = useState<DistinctInfo | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    // Pass all filters except this column's so the dropdown shows contextual values.
-    const otherFilters: Record<string, ColFilter> = {}
-    for (const [col, f] of Object.entries(activeFilters)) {
-      if (col !== column) otherFilters[col] = f
-    }
-    const hasOther = Object.keys(otherFilters).length > 0
-    distinctFetcher(column, hasOther ? otherFilters : undefined, keywordFilter || undefined)
-      .then(d => { if (!cancelled) setInfo(d) })
-      .catch(e => { if (!cancelled) setLoadError(e.message ?? 'Failed to load') })
-    return () => { cancelled = true }
-  }, [column, distinctFetcher, activeFilters, keywordFilter])
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [onClose])
-
-  return (
-    <div ref={ref} className={styles.dropdown} onClick={e => e.stopPropagation()}>
-      <label className={styles.dropdownItem} style={{ borderBottom: '1px solid var(--color-border)', paddingTop: 6, paddingBottom: 6 }}>
-        <input type="checkbox" checked={isSticky} onChange={onToggleSticky} />
-        <span style={{ fontWeight: 600, fontSize: '.78rem' }}>Sticky column</span>
-      </label>
-      {loadError && <div className={styles.dropdownError}>{loadError}</div>}
-      {!info && !loadError && <div className={styles.dropdownLoading}>Loading...</div>}
-      {info?.type === 'text' && (
-        <TextFilter
-          values={info.values}
-          current={current?.include}
-          onApply={vals => onApply(vals ? { include: vals } : undefined)}
-        />
-      )}
-      {info?.type === 'numeric' && (
-        <NumericFilter
-          dataMin={info.min}
-          dataMax={info.max}
-          sum={info.sum}
-          mean={info.mean}
-          median={info.median}
-          q1={info.q1}
-          q3={info.q3}
-          currentMin={current?.min}
-          currentMax={current?.max}
-          onApply={(min, max) => {
-            if (min == null && max == null) onApply(undefined)
-            else onApply({ min: min ?? undefined, max: max ?? undefined })
-          }}
-        />
-      )}
-    </div>
-  )
-}
-
-function TextFilter({ values, current, onApply }: {
-  values:   string[]
-  current?: string[]
-  onApply:  (vals: string[] | undefined) => void
-}) {
-  const [search, setSearch]   = useState('')
-  const [checked, setChecked] = useState<Set<string>>(() => new Set(current ?? values))
-
-  const visible = search
-    ? values.filter(v => v.toLowerCase().includes(search.toLowerCase()))
-    : values
-
-  const allTicked = checked.size === values.length
-
-  const toggle = (val: string) => {
-    setChecked(prev => {
-      const next = new Set(prev)
-      if (next.has(val)) next.delete(val); else next.add(val)
-      return next
-    })
-  }
-
-  return (
-    <>
-      <input
-        className={styles.dropdownSearch}
-        placeholder="Search..."
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        autoFocus
-      />
-      <div className={styles.dropdownActions}>
-        <button onClick={() => setChecked(new Set(values))}>All</button>
-        <button onClick={() => setChecked(new Set())}>None</button>
-        <span className={styles.dropdownCount}>{checked.size}/{values.length}</span>
-      </div>
-      <div className={styles.dropdownList}>
-        {visible.map(v => (
-          <label key={v} className={styles.dropdownItem}>
-            <input type="checkbox" checked={checked.has(v)} onChange={() => toggle(v)} />
-            <span>{v || '(empty)'}</span>
-          </label>
-        ))}
-        {visible.length === 0 && <div className={styles.dropdownEmpty}>No matching values</div>}
-      </div>
-      <div className={styles.dropdownFooter}>
-        <button className="btn btn-primary" style={{ fontSize: '.78rem', padding: '3px 10px' }}
-          onClick={() => onApply(allTicked ? undefined : [...checked])}>Apply</button>
-        <button className="btn" style={{ fontSize: '.78rem', padding: '3px 10px' }}
-          onClick={() => onApply(undefined)}>Clear</button>
-      </div>
-    </>
-  )
-}
-
-// A single numeric statistic; clicking it copies the raw (unformatted) value.
-function Stat({ value, fmt }: { value: number; fmt: (v: number) => string }) {
-  return (
-    <span className={styles.statValue} onClick={flashCopy(String(value))} title="Click to copy">
-      {fmt(value)}
-    </span>
-  )
-}
-
-function NumericFilter({ dataMin, dataMax, sum, mean, median, q1, q3, currentMin, currentMax, onApply }: {
-  dataMin:     number
-  dataMax:     number
-  sum?:        number
-  mean?:       number
-  median?:     number
-  q1?:         number
-  q3?:         number
-  currentMin?: number
-  currentMax?: number
-  onApply:     (min: number | null, max: number | null) => void
-}) {
-  const [minVal, setMinVal] = useState(currentMin != null ? String(currentMin) : '')
-  const [maxVal, setMaxVal] = useState(currentMax != null ? String(currentMax) : '')
-
-  const fmt = (v: number) => Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 2 })
-
-  const apply = () => {
-    const mn = minVal !== '' ? Number(minVal) : null
-    const mx = maxVal !== '' ? Number(maxVal) : null
-    onApply(
-      mn != null && !isNaN(mn) ? mn : null,
-      mx != null && !isNaN(mx) ? mx : null,
-    )
-  }
-
-  return (
-    <>
-      {(sum != null || mean != null || median != null || q1 != null) && (
-        <div className={styles.numericInfo} style={{ fontSize: '.75rem', color: 'var(--color-muted-fg)' }}>
-          {sum != null && <div>Sum: <Stat value={sum} fmt={fmt} /></div>}
-          <div>Range: <Stat value={dataMin} fmt={fmt} /> - <Stat value={dataMax} fmt={fmt} /></div>
-          {q1 != null && q3 != null && <div>IQR: <Stat value={q1} fmt={fmt} /> - <Stat value={q3} fmt={fmt} /></div>}
-          {mean != null && <div>Mean: <Stat value={mean} fmt={fmt} /></div>}
-          {median != null && <div>Median: <Stat value={median} fmt={fmt} /></div>}
-        </div>
-      )}
-      <div className={styles.numericInputs}>
-        <label>
-          <span>Min</span>
-          <input
-            type="number"
-            className={styles.numericInput}
-            placeholder="0"
-            value={minVal}
-            onChange={e => setMinVal(e.target.value)}
-            step="any"
-            autoFocus
-          />
-        </label>
-        <label>
-          <span>Max</span>
-          <input
-            type="number"
-            className={styles.numericInput}
-            placeholder="100"
-            value={maxVal}
-            onChange={e => setMaxVal(e.target.value)}
-            step="any"
-          />
-        </label>
-      </div>
-      <div className={styles.dropdownFooter}>
-        <button className="btn btn-primary" style={{ fontSize: '.78rem', padding: '3px 10px' }}
-          onClick={apply}>Apply</button>
-        <button className="btn" style={{ fontSize: '.78rem', padding: '3px 10px' }}
-          onClick={() => onApply(null, null)}>Clear</button>
-      </div>
-    </>
   )
 }

@@ -39,22 +39,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     error:   (msg) => add(msg, 'error'),
     info:    (msg) => add(msg, 'info'),
   })
-  api.current.success = (msg) => add(msg, 'success')
-  api.current.error   = (msg) => add(msg, 'error')
-  api.current.info    = (msg) => add(msg, 'info')
 
   return (
     <ToastContext.Provider value={api.current}>
       {children}
-      <div style={{
+      <div role="status" aria-live="polite" style={{
         position: 'fixed', bottom: 16, right: 16, zIndex: 9999,
         display: 'flex', flexDirection: 'column-reverse', gap: 8,
         pointerEvents: 'none',
       }}>
         {toasts.map(t => (
-          <div key={t.id} style={{
+          <div key={t.id} role={t.variant === 'error' ? 'alert' : undefined} style={{
             pointerEvents: 'auto',
-            padding: '10px 18px',
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+            padding: '10px 12px 10px 18px',
             borderRadius: 8,
             fontSize: '.88rem',
             fontWeight: 500,
@@ -62,9 +60,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             animation: 'toast-in .2s ease-out',
             ...VARIANT_STYLES[t.variant],
           }}
-            onClick={() => setToasts(ts => ts.filter(x => x.id !== t.id))}
           >
-            {t.message}
+            <span style={{ flex: 1 }}>{t.message}</span>
+            <button aria-label="Dismiss" onClick={() => setToasts(ts => ts.filter(x => x.id !== t.id))}
+              style={{ border: 'none', background: 'none', color: 'inherit', cursor: 'pointer', font: 'inherit', padding: '0 2px', lineHeight: 1 }}>
+              ×
+            </button>
           </div>
         ))}
       </div>

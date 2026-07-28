@@ -10,6 +10,7 @@ import { PrimerListEditor, nameIssues } from '../components/PrimerListEditor'
 import type { PrimerRow } from '../components/PrimerListEditor'
 import { PairEditor } from '../components/PairEditor'
 import type { PrimerDocument, PrimerPair } from '../api/types'
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard'
 
 // The wire format keys primers by name; the editor holds them as ordered rows
 // with a stable id. A name is edited text, so it cannot double as the
@@ -35,6 +36,7 @@ export function PrimersView() {
   const [pairs, setPairs]     = useState<PrimerPair[]>([])
   const [busy, setBusy]       = useState(false)
   const [dirty, setDirty]     = useState(false)
+  useUnsavedGuard(dirty)
 
   const load = useCallback((doc: PrimerDocument) => {
     // Forward and reverse ids share one space so a row id is unique per view.
@@ -106,8 +108,7 @@ export function PrimersView() {
       })
       load(res.document)
       toast.success('Primers saved')
-      // The save succeeded; a warning is advisory, so it is reported as info
-      // rather than as an error the user might read as a failure.
+      // The save succeeded, so warnings are shown as info.
       for (const w of res.warnings) {
         toast.info(`Saved. Pair "${w.pair}" is still referenced by: ${w.referenced_by.join(', ')}`)
       }
@@ -122,11 +123,7 @@ export function PrimersView() {
     <>
       <div className="page-header">
         <h1>Primers</h1>
-        <p>
-          Define the forward and reverse primers and the pairs composed from them. Editing here
-          replaces hand-editing config/primers.yml. Removing or renaming a pair a study still
-          references is allowed, but you will be told which studies it affects.
-        </p>
+        <p>Forward and reverse primers and the pairs built from them, saved to config/primers.yml.</p>
       </div>
 
       {loading && <Skeleton lines={4} />}
@@ -156,7 +153,7 @@ export function PrimersView() {
 
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <button className="btn btn-primary" onClick={handleSave} disabled={busy || nameProblem !== null}>
-              {busy ? 'Saving...' : 'Save'}
+              {busy ? 'Saving…' : 'Save'}
             </button>
             {nameProblem && <span className="error-msg" style={{ margin: 0 }}>{nameProblem}</span>}
             {!nameProblem && dirty && (

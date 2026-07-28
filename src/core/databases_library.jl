@@ -29,15 +29,10 @@ const _VSEARCH_FORMATS = ("pr2", "generic")
 _has_fetchable_scheme(uri::AbstractString) =
     startswith(uri, "http://") || startswith(uri, "https://")
 
-# Characters that give a remote shell something to do besides name a file. The
-# remote taxonomy stage interpolates remote_path into a command string that ssh
-# runs through a login shell, so a path carrying any of these is refused at the
-# write gate rather than reaching that interpolation.
-const _SHELL_METACHARACTERS = ['\'', '"', '`', '$', ';', '&', '|', '<', '>',
-                               '(', ')', '{', '}', '[', ']', '*', '?', '!',
-                               '\\', '\n', '\r', '\0']
-
-_is_shell_safe(p::AbstractString) = !any(c -> c in _SHELL_METACHARACTERS, p)
+# The remote-path gate lives in Validation, shared with the remote stage runner
+# and the pipeline config check so that one answer covers every path that
+# reaches an ssh command string.
+const _is_shell_safe = Validation.is_shell_safe
 
 # The shared cache directory a document that names none falls back to, and the
 # vsearch parser a database that names none is read with. Both are real defaults
@@ -50,27 +45,18 @@ const _DEFAULT_VSEARCH_FORMAT = "generic"
 _empty() = Dict{String,Any}("dir" => _DEFAULT_DIR, "databases" => Any[])
 
 # Coerce a value that is stringified into the document. `string(nothing)` is the
-# literal "nothing", so an idiomatic YAML null would otherwise be written back as
-# that four-letter string rather than as the absence it spells. This file writes
-# `~` for every `local:` already, so a null elsewhere in it is a plausible hand
-# edit and not an exotic one. Absent and null alike mean "no value here", so both
-# become the empty string, which the rules below already read as missing.
+# literal "nothing", so a YAML null (absent or `~`) becomes the empty string, which
+# the rules below read as missing.
 _str_or_empty(v) = isnothing(v) ? "" : string(v)
 
-# `dir` and `vsearch_format` differ from the fields above: each has a real
-# default rather than a meaningful emptiness, so a null means that default and
-# not a blank. Left to `string`, `dir: ~` became the literal directory
-# "./nothing", whereupon every multi-gigabyte database re-downloaded into it.
+# `dir` and `vsearch_format` have real defaults, so a null means the default.
+# `string` would turn `dir: ~` into the directory "./nothing".
 _dir_or_default(v) = isnothing(v) ? _DEFAULT_DIR : string(v)
 _vsearch_format_or_default(v) = isnothing(v) ? _DEFAULT_VSEARCH_FORMAT : string(v)
 
-# A database entry's key, as every reader of the document must see it. It is
-# TRIMMED, because validate judged the trimmed key while to_yaml_doc wrote the
-# raw one: "pr2 " passed the blank, dir and duplicate rules as "pr2" and then
-# landed on disk as `"pr2 ":`, whereupon make_db_meta's haskey(db_cfg, "pr2")
-# missed it and every run broke. Trimming here rather than rejecting keeps the
-# two describing one document, and keeps the duplicate rule (which already
-# compares trimmed keys) in charge of the collision trimming can create.
+# A database entry's key, trimmed, so validate and to_yaml_doc see the same key
+# ("pr2 " would otherwise pass validation as "pr2" and be written as `"pr2 ":`).
+# The duplicate rule compares trimmed keys, so it catches collisions trimming creates.
 _entry_key(e) = strip(_str_or_empty(get(e, "key", "")))
 
 _str_or_nothing(v) = isnothing(v) ? nothing : string(v)
@@ -113,16 +99,11 @@ function _flatten_entry(key, raw)
     corr_raw   = get(raw, "corrections", Any[])
     Dict{String,Any}(
         "key"            => _str_or_empty(key),
-        # A label is optional and its absence is already spelt by omitting the
-        # key, which is exactly what to_yaml_doc does with a blank one, so a null
-        # label means that omission rather than the word "nothing".
+        # A null label is the empty string, which to_yaml_doc omits.
         "label"          => _str_or_empty(get(raw, "label", "")),
         "dada2"          => _flatten_format(get(raw, "dada2",   nothing), "dada2"),
         "vsearch"        => _flatten_format(get(raw, "vsearch", nothing), "vsearch"),
-        # A null level becomes a BLANK one, not the word "nothing": a level with
-        # no name is malformed, and the blank-level rule in validate already
-        # says so, so this hands the null to the rule that exists for it rather
-        # than smuggling it past as a plausible-looking rank.
+        # A null level becomes a blank one, which validate's blank-level rule rejects.
         "levels"         => levels_raw isa AbstractVector ? Any[_str_or_empty(l) for l in levels_raw] : Any[],
         "vsearch_format" => _vsearch_format_or_default(get(raw, "vsearch_format", _DEFAULT_VSEARCH_FORMAT)),
         "corrections"    => corr_raw isa AbstractVector ? Any[_flatten_correction(c) for c in corr_raw] : Any[],
@@ -131,13 +112,10 @@ end
 
 # Normalise a raw/native document (as parsed from YAML) to the canonical shape.
 # `dir` lifts out of the databases: namespace, where it sits alongside the
-# entries on disk. That adjacency is why validate.jl carried a bare
-# `db_name == "dir" && continue` and why no database may be called dir; lifting
-# it out makes the constraint structural rather than incidental.
+# entries on disk, so no database may be called dir.
 #
-# Entries are sorted by key: a YAML mapping's iteration order is not meaningful,
-# so this gives the editor a stable order rather than one that shuffles between
-# loads.
+# Entries are sorted by key, since a YAML mapping has no meaningful order, so the
+# editor shows a stable order.
 function normalise(raw::AbstractDict)
     dbs = get(raw, "databases", nothing)
     dbs isa AbstractDict || return _empty()
@@ -155,10 +133,9 @@ end
 
 # Why `raw` is not a databases document, or nothing when it is one.
 #
-# Presence is checked, not merely type. `get` defaults only an ABSENT key, so a
-# section misspelt (`datbases:`) or nulled (`databases: ~`) reads as no databases
-# at all rather than as the error it is; that is the same laundering a non-mapping
-# file performs, arriving by a different route.
+# Presence is checked as well as type. `get` defaults only an ABSENT key, so a
+# section misspelt (`datbases:`) or nulled (`databases: ~`) would otherwise read as
+# no databases at all.
 #
 # An empty-but-present section is legitimate and must stay so: `databases: {}`,
 # and a `databases:` carrying only `dir`, say "no databases" unambiguously, and
@@ -172,12 +149,10 @@ function _document_error(raw)
     nothing
 end
 
-# Load the document. A MISSING file yields an empty document, so a fresh install
-# behaves as though no databases are defined rather than erroring.
+# Load the document. A missing file yields an empty document (no databases defined).
 #
-# A file that exists but is not a databases document deliberately raises rather
-# than degrading to an empty one, whether it is unparseable YAML or merely
-# structurally wrong. Degrading would be silent data loss: the editor would
+# A file that exists but is not a databases document raises, whether it is
+# unparseable YAML or structurally wrong. Degrading would be silent data loss: the editor would
 # render the file as "no databases", an empty document breaks no validation rule,
 # and the user's next Save would overwrite their real config with nothing. A
 # caller that must not throw catches this at its own boundary and reports the
@@ -259,8 +234,8 @@ end
 # so the environment validator and this module cannot disagree on the shape of a
 # databases document. Never throws.
 #
-# It deliberately does NOT ask whether a configured local: file exists. That is a
-# fact about the machine, not about the document: a user may legitimately save a
+# It does not ask whether a configured local: file exists. That depends on the
+# machine: a user may legitimately save a
 # path before the file arrives, and _validate_databases reports the absence when
 # it matters. Asked here it did real harm, because a save carries the WHOLE
 # document: one local: whose file had since moved rejected every save of every
@@ -272,10 +247,9 @@ end
 # adding it to the shared rules would fail a databases.yml that validated
 # yesterday, so it is applied where new documents are written and nowhere else.
 #
-# `dir` and `databases` are checked before anything else, and a malformed
-# `databases` returns immediately rather than falling through to _seq: _seq
-# exists to keep genuine iteration from throwing on a null inner sequence, not
-# to make a malformed top-level section look like a deliberately emptied one.
+# `dir` and `databases` are checked first, and a malformed `databases` returns
+# immediately. _seq only guards iteration over a null inner sequence; a malformed
+# top-level section is an error.
 # Coercing it here would be the same mistake load's docstring above refuses to
 # make: an empty document breaks no validation rule, so the write gate would
 # wave through a document that wipes every database on save. Deleting every
@@ -324,14 +298,9 @@ function validate(doc::AbstractDict; native::AbstractDict=to_yaml_doc(doc))
         levels = get(e, "levels", Any[])
         levels = levels isa AbstractVector ? String[_str_or_empty(l) for l in levels] : String[]
         isempty(levels) && push!(errors, "database '$key' has no taxonomy levels")
-        # The names are compared TRIMMED, and each must carry one. A blank name
-        # is meaningless and yields a taxonomy column of no name; a null one is
-        # the same defect differently spelt, and reaches here as a blank rather
-        # than as the word "nothing". Two names alike
-        # but for surrounding space are one rank spelt twice, so the second is a
-        # silent no-op rather than the extra rank the editor shows. `isempty`
-        # above tests the LIST, which is a different question from these, and
-        # `unique` over the raw names answers neither.
+        # Names are compared trimmed and each must be non-blank (a null arrives
+        # as blank). Two names differing only in surrounding space are one rank
+        # spelt twice. `isempty` above tests the list itself.
         trimmed = String[strip(l) for l in levels]
         any(isempty, trimmed) &&
             push!(errors, "database '$key' has a taxonomy level with no name")
@@ -363,9 +332,7 @@ function validate(doc::AbstractDict; native::AbstractDict=to_yaml_doc(doc))
                 push!(errors, "database '$key' $format uri must begin with http:// or https://")
             # remote_path is interpolated into the command string that
             # _assign_taxonomy_remote hands to ssh, which the remote sshd runs
-            # through a login shell. A path is never legitimately spelt with a
-            # shell metacharacter, so refuse one here rather than let a saved
-            # config reach that interpolation.
+            # through a login shell, so shell metacharacters are refused.
             if format == "dada2"
                 rp = get(f, "remote_path", nothing)
                 isnothing(rp) || _is_shell_safe(string(rp)) ||

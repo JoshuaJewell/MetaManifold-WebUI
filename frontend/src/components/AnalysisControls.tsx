@@ -22,7 +22,7 @@ export function AnalysisControls({
         {children}
 
         <button className="btn" onClick={runAlpha} disabled={loading || !body}>
-          {loading ? 'Computing...' : 'Alpha Diversity'}
+          {loading ? 'Computing…' : 'Alpha Diversity'}
         </button>
       </div>
 

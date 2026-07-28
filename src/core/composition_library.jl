@@ -15,7 +15,7 @@ _empty() = Dict{String,Any}("filters" => Dict{String,Any}(),
 
 # Coerce a filters map's keys to String so downstream lookups never depend on
 # the type YAML inferred for the key (an unquoted numeric name parses as an
-# Int64, not a String). Accepts any Dict-like value (plain Dict from YAML, or
+# Int64). Accepts any Dict-like value (plain Dict from YAML, or
 # OrderedDict from a caller that built the library in memory).
 _normalise_filters(filters) = filters isa AbstractDict ?
     Dict{String,Any}(string(k) => v for (k, v) in filters) : filters
@@ -35,8 +35,7 @@ function _normalise_set_cfg(set_cfg)
     cfg
 end
 
-# A filter-less category is the legitimate catch-all; leave it without a
-# "filter" key rather than manufacturing the string "nothing".
+# A filter-less category is the catch-all and keeps no "filter" key.
 function _normalise_category(cat)
     cat isa AbstractDict || return cat
     c = Dict{String,Any}(cat)
@@ -44,8 +43,7 @@ function _normalise_category(cat)
     c
 end
 
-# Load the library document. A missing file yields an empty library so a fresh
-# install behaves as though no sets are defined rather than erroring.
+# Load the library document. A missing file yields an empty library (no sets defined).
 function load(path::String)
     isfile(path) || return _empty()
     raw = YAML.load_file(path)
@@ -58,9 +56,7 @@ end
 
 ## Validation
 const _NAME_RE  = Validation.SAFE_NAME_RE
-# Public so a route checking a colour before it reaches `validate` tests it
-# against the same pattern the document is held to, rather than a hand-copied
-# twin that can drift out of step with it.
+# Public so routes check colours against the same pattern `validate` uses.
 const COLOUR_RE = r"^#[0-9a-fA-F]{6}$"
 
 # Names of the sets that reference `name` as a category filter. Values are
@@ -82,7 +78,7 @@ end
 
 # Check the whole library. Returns human-readable errors; empty means valid.
 # Never throws: every section and entry is type-checked before use, so a
-# malformed edit is rejected with a message rather than crashing the caller.
+# malformed edit yields a message.
 function validate(lib::Dict)
     errors = String[]
     filters = get(lib, "filters", Dict())
@@ -97,9 +93,8 @@ function validate(lib::Dict)
         push!(errors, "Filters section must be a Dict, not $(typeof(filters))")
         filters = Dict()
     end
-    # Compare references against stringified keys, so a library built by a caller
-    # rather than by `load` (where a numeric name parses as an integer) does not
-    # raise a false dangling error for a filter that is present.
+    # Compare references against stringified keys, since a library built in memory
+    # may hold a numeric filter name as an integer.
     filter_names = Set{String}(string(k) for k in keys(filters))
 
     sets = get(lib, "sets", Dict())

@@ -11,18 +11,15 @@ module PrimersLibrary
 using YAML
 using ..Validation
 
-# An empty document, used when the file is absent. A malformed file does NOT
-# reach this: load raises rather than degrading to it, since an empty document
-# is exactly what a Save would then write over the real primers.
+# An empty document, used when the file is absent. A malformed file raises in
+# load, since a Save of an empty document would overwrite the real primers.
 _empty() = Dict{String,Any}("Forward" => Dict{String,Any}(),
                             "Reverse" => Dict{String,Any}(),
                             "Pairs"   => Any[])
 
 # Coerce a value that is stringified into the document. `string(nothing)` is the
-# literal "nothing", so an idiomatic YAML null (`~`) would otherwise be written
-# back as that four-letter string rather than as the absence it spells. Absent
-# and null alike mean "no value here", so both become the empty string, which the
-# rules below already read as missing.
+# literal "nothing", so a YAML null (absent or `~`) becomes the empty string, which
+# the rules below read as missing.
 _str_or_empty(v) = isnothing(v) ? "" : string(v)
 
 # Coerce a name-to-sequence map's keys to String. A numeric primer name parses
@@ -36,20 +33,12 @@ _empty_pair() = Dict{String,Any}("name" => "", "forward" => "", "reverse" => "")
 # pair it carries. An entry is meant to be a single-key mapping name => [fwd,
 # rev], and a well-formed one yields exactly one pair.
 #
-# A multi-key entry is a malformed document, not a single pair: primers.yml
-# indents a pair's members level with their key, so one missing "- " fuses the
-# following pair into the same mapping, which is an ordinary typo rather than an
-# exotic one. Returning on the first key discarded every other pair silently, and
-# because a mapping iterates in hash order the pair discarded was not even
-# predictable; the next Save then wrote the survivor alone over the real file.
-# Surfacing every key loses nothing, shows the user both pairs, and makes a Save
-# rewrite them in the canonical one-mapping-per-pair shape. It also reconciles
-# the two readers of this document: Validation.primer_document_errors already
-# iterates every key of the entry, so returning one here made the shared rules
-# and this module contradict each other about what the file contains.
+# A multi-key entry is malformed: one missing "- " in primers.yml fuses the next
+# pair into the same mapping. Every key is returned, so the user sees both pairs
+# and a Save rewrites them one mapping per pair. Validation.primer_document_errors
+# also iterates every key.
 #
-# A malformed entry is otherwise represented leniently, with empty strings where
-# members are missing, so validate can flag it rather than load dropping it.
+# Missing members become empty strings, so validate flags a malformed entry.
 function _flatten_pairs(entry)
     entry isa AbstractDict || return Any[_empty_pair()]
     out = Any[]
@@ -59,11 +48,8 @@ function _flatten_pairs(entry)
         push!(out, Dict{String,Any}("name" => _str_or_empty(name), "forward" => fwd, "reverse" => rev))
     end
     isempty(out) && return Any[_empty_pair()]
-    # The keys of one fused entry are sorted, though Pairs itself is not: the
-    # fusion has already destroyed whatever order they were written in, since a
-    # mapping keeps none, so sorting gives a stable reading rather than the
-    # hash-order shuffle. A well-formed entry has one key, so this never
-    # reorders anything; the sequence order of Pairs proper is untouched.
+    # The keys of one fused entry are sorted for a stable order, since a mapping
+    # has none. A well-formed entry has one key; the order of Pairs is untouched.
     sort!(out; by = p -> p["name"])
     out
 end
@@ -93,10 +79,9 @@ const _SECTIONS = (("Forward", AbstractDict, "a mapping of name to sequence"),
 
 # Why `raw` is not a primers document, or nothing when it is one.
 #
-# Presence is checked, not merely type. `get` defaults only an ABSENT key, so a
-# section misspelt (`Pares:`) or nulled (`Pairs: ~`) reads as no pairs at all
-# rather than as the error it is; that is the same laundering a non-mapping file
-# performs, arriving by a different route.
+# Presence is checked as well as type. `get` defaults only an ABSENT key, so a
+# section misspelt (`Pares:`) or nulled (`Pairs: ~`) would otherwise read as no
+# pairs at all.
 #
 # An empty-but-present section is legitimate and must stay so: `Pairs: []` and
 # `Forward: {}` say "no pairs" and "no primers" unambiguously, and deleting
@@ -110,12 +95,10 @@ function _document_error(raw)
     nothing
 end
 
-# Load the document. A MISSING file yields an empty document, so a fresh install
-# behaves as though no primers are defined rather than erroring.
+# Load the document. A missing file yields an empty document (no primers defined).
 #
-# A file that exists but is not a primers document deliberately raises rather
-# than degrading to an empty one, whether it is unparseable YAML or merely
-# structurally wrong. Degrading would be silent data loss: the editor would
+# A file that exists but is not a primers document raises, whether it is
+# unparseable YAML or structurally wrong. Degrading would be silent data loss: the editor would
 # render the file as "no primers", an empty document breaks no validation rule,
 # and the user's next Save would overwrite their real primers with nothing. A
 # caller that must not throw catches this at its own boundary and reports the
@@ -171,16 +154,12 @@ end
 # adding it to the shared rules would fail a primers.yml that validated
 # yesterday, so it is applied where new documents are written and nowhere else.
 #
-# `Pairs` is checked before anything else, and a malformed `Pairs` returns
-# immediately rather than falling through to _seq: _seq exists to keep genuine
-# iteration from throwing on a null inner sequence, not to make a malformed
-# top-level section look like a deliberately emptied one. Coercing it here
-# would be the same mistake load's docstring above refuses to make: an empty
-# document breaks no validation rule, so the write gate would wave through a
-# document that wipes every pair on save. Deleting every pair already has an
-# unambiguous spelling, the empty list, so nothing legitimate is lost by
-# rejecting anything else. `Forward` and `Reverse` are checked the same way,
-# because a scalar or a list there would serialise nonsense just as readily.
+# `Pairs` is checked first, and a malformed `Pairs` returns immediately instead of
+# falling through to _seq, which only guards iteration over a null inner sequence.
+# An empty document breaks no validation rule, so coercing a malformed section to
+# empty would let the write gate accept a document that wipes every pair on save.
+# Deleting every pair is spelled as the empty list. `Forward` and `Reverse` are
+# checked the same way.
 function validate(doc::AbstractDict; native::AbstractDict=to_yaml_doc(doc))
     errors = String[]
     for section in ("Forward", "Reverse")

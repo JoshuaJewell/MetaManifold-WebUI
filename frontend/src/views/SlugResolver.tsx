@@ -10,8 +10,9 @@ import { NotFoundView } from './NotFoundView'
 export function SlugResolver() {
   const { study, slug } = useParams<{ study: string; slug: string }>()
   const fetcher = useCallback(() => api.studies.get(study!), [study])
-  const { data: detail, loading } = useApi(fetcher)
+  const { data: detail, loading, error } = useApi(fetcher)
 
+  if (error) return <NotFoundView />
   if (loading || !detail) return <Skeleton lines={4} />
 
   if (detail.groups?.includes(slug!)) {

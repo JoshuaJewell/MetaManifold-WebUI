@@ -10,6 +10,7 @@ import { inputStyle, fieldLabelStyle, fieldHintStyle, patchAt, removeAt, nameIss
 import { DatabaseEditor, emptyDatabaseRow, nextId, toDatabaseEntries, toDatabaseRows } from '../components/DatabaseEditor'
 import type { DatabaseRow } from '../components/DatabaseEditor'
 import type { DatabaseDocument, DatabaseEntry, DatabaseWarning } from '../api/types'
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard'
 
 // A version token the server could not read out of a URI's basename arrives as
 // an empty string, which would otherwise render as a gap in the sentence.
@@ -42,6 +43,7 @@ export function DatabasesView() {
   const [rows, setRows] = useState<DatabaseRow[]>([])
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
+  useUnsavedGuard(dirty)
 
   const load = useCallback((d: DatabaseDocument) => {
     setDir(d.dir)
@@ -56,29 +58,18 @@ export function DatabasesView() {
   const removeRow = (i: number) => { setRows(removeAt(rows, i)); setDirty(true) }
   const addRow    = () => { setRows([...rows, emptyDatabaseRow(nextId(rows))]); setDirty(true) }
 
-  // The fault in each database's name, computed once. The editor marks its row
-  // with the entry from this array and Save is withheld on the same array, so a
-  // blocked Save always has a marked row explaining it. Expressing the rule twice
-  // let the two normalise differently and left the user unable to see the cause;
-  // see the note on nameIssues.
+  // Save is gated on the same array the editor uses to mark rows.
   const keyProblems = useMemo(() => {
     const issues = nameIssues(rows.map(r => r.key))
     return rows.map((r, i) =>
       issues[i] === 'blank'     ? 'A name is required.'
       : issues[i] === 'duplicate' ? 'Two databases share this name.'
-      // `dir` is the cache directory and shares the entries' namespace on disk, so
-      // a database of that name would silently become the cache path. The server
-      // rejects it; catching it here marks the row rather than bouncing the save.
+      // `dir` names the cache directory in databases.yml.
       : r.key.trim() === 'dir'    ? 'The name "dir" is reserved for the cache directory.'
       : null)
   }, [rows])
 
-  // A blank level name is meaningless and yields a taxonomy column of no name; a
-  // level duplicated after trimming is one rank spelt twice, so the second is a
-  // silent no-op. The levels editor has always marked both red with `nameIssues`,
-  // but Save was not withheld on them and the server accepted them, so the user
-  // saved successfully DESPITE a red field. The server now rejects both; gating
-  // here on the same rule is what makes mark, gate and backend agree.
+  // Save is gated on the same `nameIssues` rule the levels editor marks.
   const levelProblem = useMemo(() => {
     for (const row of rows) {
       const issues = nameIssues(row.levels.map(l => l.name))
@@ -88,11 +79,7 @@ export function DatabasesView() {
     return null
   }, [rows])
 
-  // A correction value's `from` re-keys the native mapping on save, so the same
-  // hazard as a database name reappears one level down: a blank `from` has
-  // nowhere to go and two rows sharing one collapse into a single entry. The
-  // editor marks the offending row with the same `nameIssues` rule, so a blocked
-  // Save always has a marked row explaining it.
+  // A correction's `from` becomes a map key on save, so blanks and duplicates are rejected.
   const correctionProblem = useMemo(() => {
     for (const row of rows) {
       for (const correction of row.corrections) {
@@ -116,8 +103,7 @@ export function DatabasesView() {
       const res = await api.databases.save({ dir, databases: toDatabaseEntries(rows) })
       load(res.document)
       toast.success('Databases saved')
-      // The save succeeded; a warning is advisory, so it is reported as info
-      // rather than as an error the user might read as a failure.
+      // The save succeeded, so warnings are shown as info.
       for (const w of res.warnings) toast.info(warningMessage(w))
       // The badges below describe the saved config, which has just changed.
       refetchList()
@@ -143,9 +129,8 @@ export function DatabasesView() {
       <div className="page-header">
         <h1>Databases</h1>
         <p>
-          The reference databases taxonomy assignment draws on. Editing here replaces hand-editing
-          config/databases.yml. Renaming or removing a database a study still resolves to is allowed,
-          but you will be told which studies it affects.
+          Reference databases for taxonomy assignment, saved to config/databases.yml. Saving lists
+          any studies affected by a rename or removal.
         </p>
       </div>
 
@@ -191,7 +176,7 @@ export function DatabasesView() {
 
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16 }}>
             <button className="btn btn-primary" onClick={handleSave} disabled={busy || saveProblem !== null}>
-              {busy ? 'Saving...' : 'Save'}
+              {busy ? 'Saving…' : 'Save'}
             </button>
             {saveProblem && <span className="error-msg" style={{ margin: 0 }}>{saveProblem}</span>}
             {!saveProblem && dirty && (
@@ -203,14 +188,12 @@ export function DatabasesView() {
 
       <section style={{ marginTop: 32 }}>
         <h2 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: 4 }}>Availability</h2>
-        {/* These badges are read from the saved config, so while the editor is
-            dirty they can speak neither for the URI on screen nor for anything
-            downloaded from it. They are greyed and the download withheld rather
-            than shown as though they were live. */}
+        {/* Badges come from the saved config, so they are greyed and downloads
+            withheld while the editor has unsaved edits. */}
         <p style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)', marginBottom: 10 }}>
           {dirty
-            ? 'Stale: these describe the saved configuration, not your unsaved edits. Save to refresh them.'
-            : 'Whether each configured file is already on disk. A download fetches the source URI into the cache directory.'}
+            ? 'These reflect the saved configuration. Save to refresh them.'
+            : 'Files present in the cache directory.'}
         </p>
 
         {listError && <p className="error-msg">{listError}</p>}
@@ -227,8 +210,8 @@ export function DatabasesView() {
                   <strong>{db.label}</strong>
                   <div style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)' }}>
                     DADA2: {db.dada2_available ? 'available' : 'not downloaded'}
-                    {' - '}
-                    vsearch: {db.vsearch_available ? 'available' : 'not downloaded'}
+                    {' · '}
+                    VSEARCH: {db.vsearch_available ? 'available' : 'not downloaded'}
                   </div>
                 </div>
                 {(!db.dada2_available || !db.vsearch_available) && (

@@ -92,8 +92,7 @@ export function CategorySetEditor({ name, set, filterNames, onSave, onDelete }: 
       </div>
 
       <p style={{ fontSize: '.8rem', color: 'var(--color-muted-fg)' }}>
-        First match wins: a sequence is placed in the first category, top to bottom, whose
-        filter it satisfies. Reorder these with that in mind; it is not cosmetic.
+        Each sequence goes to the first category, top to bottom, whose filter it matches.
       </p>
 
       {categories.length === 0 && (

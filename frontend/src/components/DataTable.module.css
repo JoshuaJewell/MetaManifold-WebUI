@@ -51,7 +51,16 @@
 }
 .sortable:hover { background: var(--color-bg); }
 
-.headerLabel { margin-right: 4px; }
+.headerLabel {
+  margin-right: 4px;
+  border:       none;
+  background:   none;
+  padding:      0;
+  font:         inherit;
+  color:        inherit;
+  cursor:       pointer;
+  text-align:   left;
+}
 
 .sortIcon       { font-size: .7rem; color: var(--color-muted-fg); opacity: .4; }
 .sortIconActive { font-size: .7rem; color: var(--color-primary); }
@@ -232,6 +241,7 @@
   transition:      opacity .12s ease-out, color .12s ease-out;
 }
 .table tr:hover .highlightBtn { opacity: 0.75; }
+.highlightBtn:focus-visible { opacity: 1; }
 .highlightBtn.highlightBtnOn {
   color:   #e0a92e;
   opacity: 1;

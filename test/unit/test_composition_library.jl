@@ -38,7 +38,7 @@ end
     cats = [Dict("name" => "Bacteria", "filter" => "bacteria"),
             Dict("name" => "Contaminant")]
 
-    case = Categories.category_case_when(cats, Set(["Domain"]), "VSEARCH"; filters)
+    case = Categories.category_case_when(cats, Set(["Domain", "Pident"]), "VSEARCH"; filters)
     # The named filter compiles to a branch.
     @test occursin("THEN 'Bacteria'", case)
     # A filter-less category becomes the catch-all ELSE label.
@@ -46,7 +46,7 @@ end
 
     # A dangling name is dropped for display, and fails hard under strict.
     dangling = [Dict("name" => "Ghost", "filter" => "absent")]
-    @test Categories.category_case_when(dangling, Set(["Domain"]), "VSEARCH";
+    @test Categories.category_case_when(dangling, Set(["Domain", "Pident"]), "VSEARCH";
                                         filters, strict=true) === nothing
 
     # (a) Branch precedence: two filtered categories compile in declaration
@@ -62,7 +62,7 @@ end
     )
     ordered_cats = [Dict("name" => "Bacteria", "filter" => "bacteria"),
                     Dict("name" => "Archaea", "filter" => "archaea")]
-    ordered_case = Categories.category_case_when(ordered_cats, Set(["Domain"]),
+    ordered_case = Categories.category_case_when(ordered_cats, Set(["Domain", "Pident"]),
                                                  "VSEARCH"; filters=ordered_filters)
     bacteria_idx = findfirst("THEN 'Bacteria'", ordered_case)
     archaea_idx = findfirst("THEN 'Archaea'", ordered_case)
@@ -74,7 +74,7 @@ end
     # branch, so with no other categories the result is the bare catch-all
     # literal rather than a full CASE expression.
     two_catchalls = [Dict("name" => "First"), Dict("name" => "Second")]
-    catchall_case = Categories.category_case_when(two_catchalls, Set(["Domain"]),
+    catchall_case = Categories.category_case_when(two_catchalls, Set(["Domain", "Pident"]),
                                                    "VSEARCH"; filters=Dict{String,Any}())
     @test catchall_case == "'Second'"
     @test !occursin("First", catchall_case)
@@ -88,9 +88,9 @@ end
                                                    "values" => ["Foo"])]),
     )
     absent_col_cats = [Dict("name" => "SpeciesCat", "filter" => "species_only")]
-    @test Categories.category_case_when(absent_col_cats, Set(["Domain"]), "VSEARCH";
+    @test Categories.category_case_when(absent_col_cats, Set(["Domain", "Pident"]), "VSEARCH";
                                         filters=absent_col_filters, strict=true) === nothing
-    absent_col_display = Categories.category_case_when(absent_col_cats, Set(["Domain"]),
+    absent_col_display = Categories.category_case_when(absent_col_cats, Set(["Domain", "Pident"]),
                                                         "VSEARCH"; filters=absent_col_filters,
                                                         strict=false)
     @test absent_col_display isa String
@@ -106,7 +106,7 @@ end
     )
     mixed_cats = [Dict("name" => "Ghost", "filter" => "absent_filter"),
                   Dict("name" => "Bacteria", "filter" => "bacteria")]
-    mixed_case = Categories.category_case_when(mixed_cats, Set(["Domain"]), "VSEARCH";
+    mixed_case = Categories.category_case_when(mixed_cats, Set(["Domain", "Pident"]), "VSEARCH";
                                                filters=mixed_filters, strict=false)
     @test !occursin("Ghost", mixed_case)
     @test occursin("THEN 'Bacteria'", mixed_case)

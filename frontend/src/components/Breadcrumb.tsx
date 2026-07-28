@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 
 export function Breadcrumb() {
-  const { study, group, run, slug } = useParams<{ study?: string; group?: string; run?: string; slug?: string }>()
+  const { study, group, run, slug, file } = useParams<{ study?: string; group?: string; run?: string; slug?: string; file?: string }>()
 
   const crumbs: { label: string; to: string }[] = [
     { label: 'Studies', to: '/studies' },
@@ -9,6 +9,11 @@ export function Breadcrumb() {
 
   if (study) {
     crumbs.push({ label: study, to: `/${study}` })
+
+    if (file) {
+      crumbs.push({ label: 'Trees', to: `/${study}?view=trees` })
+      crumbs.push({ label: file, to: `/${study}/trees/${encodeURIComponent(file)}` })
+    }
 
     if (group) {
       crumbs.push({ label: group, to: `/${study}/${group}` })
@@ -26,7 +31,7 @@ export function Breadcrumb() {
   if (crumbs.length <= 1) return null
 
   return (
-    <nav style={{
+    <nav aria-label="Breadcrumb" style={{
       fontSize: '.82rem',
       color: 'var(--color-muted-fg)',
       marginBottom: 12,
@@ -38,9 +43,9 @@ export function Breadcrumb() {
         const isLast = i === crumbs.length - 1
         return (
           <span key={c.to} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {i > 0 && <span style={{ opacity: .4 }}>/</span>}
+            {i > 0 && <span aria-hidden="true" style={{ opacity: .4 }}>/</span>}
             {isLast
-              ? <span style={{ color: 'var(--color-fg)', fontWeight: 500 }}>{c.label}</span>
+              ? <span aria-current="page" style={{ color: 'var(--color-fg)', fontWeight: 500 }}>{c.label}</span>
               : <Link to={c.to} style={{ color: 'var(--color-muted-fg)' }}>{c.label}</Link>
             }
           </span>

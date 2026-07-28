@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useId } from 'react'
 import { errorMessage } from '../api/errorMessage'
 
 interface Props {
@@ -14,10 +14,26 @@ export function NameDialog({ title, initialValue = '', placeholder = 'Name', onC
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const titleId = useId()
 
+  // Focus the input on open and hand focus back to the opener on close.
   useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
     inputRef.current?.select()
+    return () => { opener?.focus?.() }
   }, [])
+
+  // Escape closes; Tab stays inside the dialog.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.stopPropagation(); onClose(); return }
+    if (e.key !== 'Tab' || !dialogRef.current) return
+    const items = dialogRef.current.querySelectorAll<HTMLElement>('input, button:not([disabled])')
+    if (!items.length) return
+    const first = items[0], last = items[items.length - 1]
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -41,7 +57,7 @@ export function NameDialog({ title, initialValue = '', placeholder = 'Name', onC
       }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div style={{
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={onKeyDown} style={{
         background: 'var(--color-bg)',
         border: '1px solid var(--color-border)',
         borderRadius: 10,
@@ -49,13 +65,13 @@ export function NameDialog({ title, initialValue = '', placeholder = 'Name', onC
         minWidth: 320,
         boxShadow: '0 8px 32px rgba(0,0,0,.2)',
       }}>
-        <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: 14 }}>{title}</h3>
+        <h3 id={titleId} style={{ fontSize: '1rem', fontWeight: 700, marginBottom: 14 }}>{title}</h3>
         <form onSubmit={handleSubmit}>
           <input
             ref={inputRef}
             value={value}
             onChange={e => setValue(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Escape') onClose() }}
+            aria-label={title}
             placeholder={placeholder}
             disabled={busy}
             autoFocus
@@ -67,19 +83,18 @@ export function NameDialog({ title, initialValue = '', placeholder = 'Name', onC
               borderRadius: 6,
               background: 'var(--color-surface)',
               color: 'var(--color-fg)',
-              outline: 'none',
               marginBottom: 8,
             }}
           />
           {error && (
-            <p style={{ color: '#c92a2a', fontSize: '.82rem', marginBottom: 8 }}>{error}</p>
+            <p role="alert" style={{ color: 'var(--color-danger)', fontSize: '.82rem', marginBottom: 8 }}>{error}</p>
           )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button type="button" className="btn" onClick={onClose} disabled={busy}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={busy || !value.trim()}>
-              {busy ? 'Saving...' : 'Save'}
+              {busy ? 'Saving…' : initialValue ? 'Save' : 'Create'}
             </button>
           </div>
         </form>
