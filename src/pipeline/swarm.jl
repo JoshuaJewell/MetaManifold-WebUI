@@ -10,14 +10,14 @@ export swarm
     using ..PipelineTypes
     using ..PipelineLog
     using ..Config
-    using ..Tools: tool_bin, _sq, _run_logged, _safe_optional_args
+    using ..Tools: tool_bin, _sq, _run_logged, _safe_optional_args, _num
 
     _safe_int_count(v) = ismissing(v) ? 0 : Int(v)
 
     function _swarm_args(cfg::Dict)::String
         parts = String[]
-        push!(parts, "-d $(get(cfg, "differences", 1))")
-        threads = get(cfg, "threads", 0)
+        push!(parts, "-d $(_num(cfg, "differences", 1))")
+        threads = _num(cfg, "threads", 0)
         threads > 0 && push!(parts, "-t $threads")
         extra = _safe_optional_args(cfg)
         isempty(extra) || push!(parts, extra)
@@ -271,6 +271,7 @@ export swarm
             @info "[$lbl] SWARM: Skipping - outputs up to date in $swarm_dir"
             return OTUResult(seeds, otu_table)
         end
+        snap = _begin_section(config_path, stage_sections(:swarm), hash_file)
 
         mkpath(swarm_dir); mkpath(log_dir)
         # Each command below appends to its own log, so the stage clears all three
@@ -293,7 +294,7 @@ export swarm
         @info "[$lbl] SWARM: Building OTU count table from ASV counts"
         otu_table = _build_count_table_from_asvs!(swarm_dir, seeds, asvs)
 
-        _write_section_hash(config_path, stage_sections(:swarm), hash_file)
+        _write_section_hash(config_path, stage_sections(:swarm), hash_file; snapshot=snap)
         pipeline_log(project, "SWARM complete")
         log_written(project, seeds)
         log_written(project, otu_table)

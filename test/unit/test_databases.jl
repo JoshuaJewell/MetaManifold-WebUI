@@ -119,10 +119,8 @@ databases:
     end
 
     ## Every format of one logical database must be drawn from the SAME upstream
-    # release. The dual-classifier consensus
-    # (FuncDBAnnotation._compute_consensus_rank) compares the DADA2 and VSEARCH
-    # labels for string equality, so references from different releases score
-    # genuine agreements as disagreements. The shipped defaults once pinned DADA2
+    # release, so DADA2 and VSEARCH labels for one taxon match as strings.
+    # The shipped defaults once pinned DADA2
     # to PR2 5.0.0 and VSEARCH to 5.1.0; 5.1.0 alone retaxonomised 7375 annotated
     # entries and switched species names from underscores to hyphens.
     @testset "database formats share one upstream release" begin

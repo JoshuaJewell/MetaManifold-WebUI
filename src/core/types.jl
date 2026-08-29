@@ -48,6 +48,12 @@ module PipelineTypes
     function find_fastqs(project::ProjectCtx)
         entries = FastqEntry[]
         pooled  = length(project.data_dirs) > 1
+        if pooled
+            # Prefixes come from the folder name alone, so two folders with one name would merge their samples.
+            names = [replace(basename(d), " " => "_") for d in project.data_dirs]
+            dup = unique(filter(n -> count(==(n), names) > 1, names))
+            isempty(dup) || error("Pooled run has more than one folder named $(join(repr.(dup), ", ")); rename one so its samples stay distinct")
+        end
         for d in project.data_dirs
             prefix = pooled ? replace(basename(d), " " => "_") * "_" : ""
             for f in readdir(d)

@@ -1,9 +1,15 @@
 @testset "Config hashing and staleness" begin
 
     @testset "stage_sections" begin
-        @test Config.stage_sections(:cutadapt) == "seed,subsample_n,cutadapt"
+        # primers.yml is embedded in run_config and is the substantive input to
+        # trimming, so editing a primer must invalidate the cutadapt stage; so
+        # must switching the read mode.
+        @test Config.stage_sections(:cutadapt) == "seed,subsample_n,cutadapt,primers,dada2.file_patterns.mode"
         @test Config.stage_sections(:dada2_filter_trim) == "dada2.file_patterns,dada2.filter_trim"
-        @test Config.stage_sections(:merge_taxa) == "merge_taxa,tagging,vsearch.enabled,swarm.enabled,dada2.taxonomy.enabled"
+        @test Config.stage_sections(:merge_taxa) == "merge_taxa,tagging,vsearch.enabled,swarm.enabled,dada2.taxonomy.enabled,reference_database.levels,reference_database.corrections"
+        # A new database release under the same key must invalidate classification.
+        @test occursin("reference_database.vsearch", Config.stage_sections(:vsearch))
+        @test occursin("reference_database.dada2", Config.stage_sections(:dada2_assign_taxonomy))
         @test_throws ErrorException Config.stage_sections(:nonexistent_stage)
     end
 

@@ -24,8 +24,8 @@ const RESULTS_DIR  = joinpath(BENCH_DIR, "results")
 const DEFAULTS_YML = joinpath(dirname(dirname(BENCH_DIR)), "config", "defaults", "pipeline.yml")
 
 # Build a per-dataset config by merging defaults with dataset-specific overrides.
-# The override scope is intentionally narrow: primers, taxonomy database, and
-# annotation max_rank. Everything else inherits from config/defaults/pipeline.yml
+# The override scope is intentionally narrow: primers and taxonomy database.
+# Everything else inherits from config/defaults/pipeline.yml
 # so the benchmark exercises the same code paths a real study would.
 function _write_config(key::AbstractString, entry::Dict)::String
     base = YAML.load_file(DEFAULTS_YML)
@@ -35,10 +35,6 @@ function _write_config(key::AbstractString, entry::Dict)::String
 
     db_key = get(entry, "taxonomy_db", "pr2")
     base["dada2"]["taxonomy"]["database"] = db_key
-
-    # Force fine-grained annotation for accuracy measurement; species level is
-    # the ceiling defined in funcdb's RANK_HIERARCHY.
-    base["annotation"]["max_rank"] = "species"
 
     mkpath(CONFIGS_DIR)
     out_path = joinpath(CONFIGS_DIR, "$(key).yml")

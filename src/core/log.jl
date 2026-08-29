@@ -76,7 +76,7 @@ export pipeline_log, log_written, reset_tool_logs, log_command
     ## The log registry
     # (stage_label, relative_path) pairs; only existing files are included.
     # This is the single declarative record of every log, stats, and hash file the
-    # pipeline writes. It is enforced, not merely documented: the drift guard in
+    # pipeline writes. It is enforced: the drift guard in
     # test/unit/test_log.jl walks a populated run directory and fails the suite on
     # any file that appears neither here nor in _LOG_REGISTRY_EXCLUSIONS below. A
     # new log therefore cannot enter the pipeline unnoticed, as the SWARM branch
@@ -119,25 +119,21 @@ export pipeline_log, log_written, reset_tool_logs, log_command
 
     ## Registry exclusions
     # Files the drift guard sees but which are deliberately kept out of the
-    # consolidated log. Each carries its reason, so that excluding a file is an
-    # act of judgement recorded in source rather than an omission nobody noticed.
+    # consolidated log, each with its reason.
     const _LOG_REGISTRY_EXCLUSIONS = [
         # Companion to each config.hash, listing the config keys the hash was taken
         # over. combined_pipeline.log already embeds run_config.yml verbatim, so
         # these carry nothing the consolidated record does not hold already.
         r"\.hash\.values$",
-        # MultiQC's own working directory, written by MultiQC rather than by
-        # MetaManifold, and superseded by the multiqc_report.html the run retains.
+        # MultiQC's own working directory, superseded by the multiqc_report.html the run retains.
         r"^QC/multiqc_data/",
-        # DADA2's R workspace images: binary resumption state, not a record of
-        # anything, and far too large to append. The .hash file beside each one is
+        # DADA2's R workspace images: binary resumption state, far too large to append. The .hash file beside each one is
         # what attests to the checkpoint, and that is registered.
         r"^dada2/Checkpoints/.*\.RData$",
         # The consolidated record itself. Appending it to itself would recurse.
         r"^pipeline\.log$",
         r"^combined_pipeline\.log$",
-        # A per-sample read-attrition data table, not a tool log: a first-class
-        # analysis output carried by the run directory and surfaced in the UI.
+        # A per-sample read-attrition table: an analysis output surfaced in the UI.
         r"^dada2/Tables/pipeline_stats\.csv$",
     ]
 

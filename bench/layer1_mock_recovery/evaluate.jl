@@ -77,8 +77,7 @@ function _load_expected(path::AbstractString)::DataFrame
 end
 
 # Detect sample-count columns in a predicted tax_counts.csv. Sample columns are
-# integer-typed and exclude *_boot and any rank-bearing columns. This mirrors
-# the heuristic used by FuncDBAnnotation._sample_count_cols.
+# integer-typed and exclude *_boot and any rank-bearing columns.
 function _predicted_samples(df::DataFrame)::Vector{String}
     out = String[]
     for col in names(df)

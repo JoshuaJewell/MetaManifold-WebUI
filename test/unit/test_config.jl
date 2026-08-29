@@ -37,8 +37,6 @@
     @testset "default analysis exclude_categories" begin
         defaults_path = joinpath(@__DIR__, "..", "..", "config", "defaults", "pipeline.yml")
         defaults = YAML.load_file(defaults_path)
-        @test haskey(defaults, "annotation")
-        @test defaults["annotation"]["max_rank"] == "genus"
         @test haskey(defaults, "analysis")
         @test haskey(defaults["analysis"], "exclude_categories")
         excl = defaults["analysis"]["exclude_categories"]

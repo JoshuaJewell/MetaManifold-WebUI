@@ -8,8 +8,10 @@ using CSV, DataFrames, Logging, YAML
 using ..PipelineTypes
 using ..PipelineLog
 using ..Config
+using ..Tools
 
-export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merge_taxa_otu, merge_taxa_dada2_only
+export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merge_taxa_otu,
+       merge_taxa_dada2_only, merge_taxa_cdhit
 
     # Return up to `limit` duplicated values from `vals`, formatted for an error
     # message. Used by the uniqueness guard before the outer join in merge_taxa.
@@ -25,6 +27,44 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             end
         end
         return join(repr.(dups), ", ")
+    end
+
+    # R's write.csv writes an unassigned rank as the text "NA". Left as text it
+    # passes remove_empty filters and is charted as a taxon called "NA".
+    function _na_ranks_to_missing!(df::DataFrame, db_meta::DatabaseMeta)
+        for l in db_meta.levels, col in (l, l * "_dada2")
+            col in names(df) || continue
+            df[!, col] = [ismissing(v) || strip(string(v)) in ("NA", "") ? missing : v for v in df[!, col]]
+        end
+        df
+    end
+
+    """
+        _join_bootstraps(df, boot_path) -> DataFrame
+
+    Left-join the DADA2 `assignTaxonomy` bootstrap confidence columns onto `df`.
+
+    Only `SeqName` and the `*_boot` columns are taken; `Sequence` and the rank
+    columns are already present on the left. Returns `df` unchanged when
+    `boot_path` is missing or empty, so callers need no guard of their own.
+    """
+    function _join_bootstraps(df::DataFrame, boot_path)
+        isnothing(boot_path) && return df
+        (isfile(boot_path) && filesize(boot_path) > 0) || return df
+        "SeqName" in names(df) || return df
+
+        df_boot = CSV.read(boot_path, DataFrame)
+        boot_cols = filter(c -> c == "SeqName" || endswith(c, "_boot"), names(df_boot))
+        select!(df_boot, boot_cols)
+        # A duplicated SeqName here fans the joined row out and multiplies that
+        # ASV's counts everywhere downstream, exactly as on the count join.
+        allunique(df_boot.SeqName) ||
+            error("merge_taxa: SeqName is not unique in bootstraps input " *
+                  "(duplicates: $(_first_duplicates(df_boot.SeqName)))")
+
+        out = leftjoin(df, df_boot, on="SeqName", order=:left)
+        @info "Merge taxa: Joined $(length(boot_cols)-1) bootstrap columns from $boot_path"
+        return out
     end
 
     ## Import vsearch taxonomy
@@ -109,6 +149,12 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         m = match(r"(?:seq|otu)(\d+)", String(x))
         return m === nothing ? typemax(Int) : parse(Int, m.captures[1])
     end
+
+    # A total sort key for SeqName. `seqnum` alone ties every name without a
+    # seq/otu number (and every missing one) at typemax, and the rows reaching
+    # the sort come out of joins that promise no order, so tied rows would be
+    # written in whatever order the join produced. The name itself breaks the tie.
+    seqname_key(x) = (seqnum(x), ismissing(x) ? "" : String(x))
 
     """
         merge_taxonomy_counts(taxonomy_vsearch_path, counts_csv_path, db_meta)
@@ -219,22 +265,11 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
 
         # Full outer join to retain ASVs found by either method
         merged_df = outerjoin(df_taxonomy, df_counts_prepared, on="SeqName")
-        sort!(merged_df, "SeqName", by=seqnum)
 
         # Join bootstrap confidence values if a bootstraps file was provided.
-        if !isnothing(bootstraps_path) && isfile(bootstraps_path) && filesize(bootstraps_path) > 0
-            df_boot = CSV.read(bootstraps_path, DataFrame)
-            # Keep only SeqName and *_boot columns; drop Sequence (already in merged_df).
-            boot_cols = filter(c -> c == "SeqName" || endswith(c, "_boot"), names(df_boot))
-            select!(df_boot, boot_cols)
-            # A duplicated SeqName here fans the joined row out and multiplies that
-            # ASV's counts everywhere downstream, exactly as on the join above.
-            allunique(df_boot.SeqName) ||
-                error("merge_taxa: SeqName is not unique in bootstraps input " *
-                      "(duplicates: $(_first_duplicates(df_boot.SeqName)))")
-            merged_df = leftjoin(merged_df, df_boot, on="SeqName")
-            @info "Merge taxa: Joined $(length(boot_cols)-1) bootstrap columns from $bootstraps_path"
-        end
+        # Done before the sort: leftjoin gives no row-order guarantee.
+        merged_df = _join_bootstraps(merged_df, bootstraps_path)
+        sort!(merged_df, "SeqName", by=seqname_key)
 
         # Fill NA/missing values at lower ranks with parent_X convention.
         # e.g. if Family=Muribaculaceae and Genus=NA, Genus becomes "Muribaculaceae_X".
@@ -260,6 +295,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
                 ]
             end
         end
+        _na_ranks_to_missing!(merged_df, db_meta)
 
         # Apply database-specific taxonomy corrections from config.
         for corr in db_meta.corrections
@@ -492,6 +528,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             @info "[$lbl] Merge taxa: Skipping - $merged_csv up to date"
             return MergedTables(tables)
         end
+        snap = _begin_section(config_path, stage_sections(:merge_taxa), hash_file)
 
         mkpath(merge_dir)
         counts_path = (isfile(tax_counts_path) && filesize(tax_counts_path) > 0) ?
@@ -504,7 +541,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         pipeline_log(project, "Merge complete. $(nrow(df)) ASVs.")
         log_written(project, merged_csv)
 
-        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file)
+        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file; snapshot=snap)
         return MergedTables(tables)
     end
 
@@ -533,6 +570,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             @info "[$lbl] Merge taxa (OTU): Skipping - $merged_csv up to date"
             return MergedTables(tables)
         end
+        snap = _begin_section(config_path, stage_sections(:merge_taxa), hash_file)
 
         mkpath(merge_dir)
         df = merge_taxonomy_counts(tax.tsv, source.count_table, db_meta)
@@ -542,7 +580,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         pipeline_log(project, "OTU merge complete. $(nrow(df)) OTUs.")
         log_written(project, merged_csv)
 
-        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file)
+        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file; snapshot=snap)
         return MergedTables(tables)
     end
 
@@ -563,7 +601,10 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
         hash_file   = joinpath(merge_dir, "config.hash")
         merged_csv  = joinpath(merge_dir, "merged.csv")
 
-        tax_counts_path = joinpath(dirname(source.taxonomy), "tax_counts.csv")
+        tables_dir      = dirname(source.taxonomy)
+        tax_prefix      = splitext(basename(source.taxonomy))[1]
+        tax_counts_path = joinpath(tables_dir, "tax_counts.csv")
+        boot_path       = joinpath(tables_dir, tax_prefix * "_bootstraps.csv")
         counts_path = (isfile(tax_counts_path) && filesize(tax_counts_path) > 0) ?
                       tax_counts_path : source.count_table
 
@@ -571,6 +612,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             isfile(source.taxonomy)    ? mtime(source.taxonomy)    : 0.0,
             isfile(source.count_table) ? mtime(source.count_table) : 0.0,
             isfile(tax_counts_path)    ? mtime(tax_counts_path)    : 0.0,
+            isfile(boot_path)          ? mtime(boot_path)          : 0.0,
         )
         config_changed = _section_stale(config_path,
                                         stage_sections(:merge_taxa), hash_file)
@@ -581,6 +623,7 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             @info "[$lbl] Merge taxa (DADA2 only): Skipping - $merged_csv up to date"
             return MergedTables(tables)
         end
+        snap = _begin_section(config_path, stage_sections(:merge_taxa), hash_file)
 
         isfile(counts_path) ||
             error("merge_taxa_dada2_only: no DADA2 count table found at $counts_path")
@@ -604,14 +647,94 @@ export merge_taxonomy_counts, filter_table, filter_table_dada2, merge_taxa, merg
             end
         end
 
-        "SeqName" in names(df) && sort!(df, "SeqName", by=seqnum)
+        # DADA2 writes bootstraps alongside taxonomy; without vsearch there is no
+        # other merge step to pick them up, so join them here.
+        df = _join_bootstraps(df, boot_path)
+        _na_ranks_to_missing!(df, db_meta)
+
+        "SeqName" in names(df) && sort!(df, "SeqName", by=seqname_key)
 
         CSV.write(merged_csv, df)
         @info "[$lbl] Merge taxa (DADA2 only): Written $merged_csv ($(nrow(df)) rows)"
         pipeline_log(project, "Merge complete (DADA2 only). $(nrow(df)) ASVs.")
         log_written(project, merged_csv)
 
-        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file)
+        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file; snapshot=snap)
+        return MergedTables(tables)
+    end
+
+
+    """
+        merge_taxa_cdhit(project, source, db_meta) -> MergedTables
+
+    CD-HIT variant of `merge_taxa_dada2_only`. Collapses `tax_counts.csv` onto the
+    cd-hit cluster representatives and writes `merged_cdhit.csv` under
+    `{project.dir}/merged/`, alongside the uncollapsed `merged.csv`.
+
+    The table key carries a `_cdhit` suffix so both land in the results database
+    as separate tables and can be compared.
+    """
+    function merge_taxa_cdhit(project::ProjectCtx, source::ASVResult,
+                              db_meta::DatabaseMeta)
+        lbl         = basename(project.dir)
+        config_path = write_run_config(project)
+        merge_dir   = joinpath(project.dir, "merged")
+        hash_file   = joinpath(merge_dir, "config_cdhit.hash")
+        merged_csv  = joinpath(merge_dir, "merged_cdhit.csv")
+
+        cdhit_dir  = joinpath(project.dir, "cdhit")
+        clstr_path = joinpath(cdhit_dir, basename(source.fasta) * ".clstr")
+        isfile(clstr_path) ||
+            (clstr_path = first(vcat(filter(f -> endswith(f, ".clstr"),
+                                            readdir(cdhit_dir; join=true)), [""])))
+
+        tables = Dict{String,String}("merged_cdhit" => merged_csv)
+        if isempty(clstr_path) || !isfile(clstr_path)
+            @warn "[$lbl] Merge taxa (CD-HIT): no .clstr file in $cdhit_dir - skipping"
+            return MergedTables(Dict{String,String}())
+        end
+
+        # Collapse the taxonomy+counts table rather than the bare count table:
+        # it is keyed by SeqName, exactly as the .clstr names its members, and it
+        # already carries the ranks that the representative keeps.
+        tables_dir      = dirname(source.taxonomy)
+        tax_prefix      = splitext(basename(source.taxonomy))[1]
+        tax_counts_path = joinpath(tables_dir, "tax_counts.csv")
+        boot_path       = joinpath(tables_dir, tax_prefix * "_bootstraps.csv")
+
+        isfile(tax_counts_path) ||
+            error("merge_taxa_cdhit: no taxonomy count table at $tax_counts_path")
+
+        data_mtime = max(mtime(tax_counts_path), mtime(clstr_path),
+                         isfile(boot_path) ? mtime(boot_path) : 0.0)
+        config_changed = _section_stale(config_path,
+                                        stage_sections(:merge_taxa), hash_file)
+
+        if !config_changed && isfile(merged_csv) && mtime(merged_csv) > data_mtime
+            @info "[$lbl] Merge taxa (CD-HIT): Skipping - $merged_csv up to date"
+            return MergedTables(tables)
+        end
+        snap = _begin_section(config_path, stage_sections(:merge_taxa), hash_file)
+
+        mkpath(merge_dir)
+        Tools._collapse_cdhit_counts(clstr_path, tax_counts_path, merged_csv;
+                                     fasta_path=source.fasta)
+
+        df = CSV.read(merged_csv, DataFrame)
+        rename!(df, [
+            col => replace(col, r"_R[12]_filt\.fastq\.gz$" => "")
+            for col in names(df)
+            if occursin(r"_R[12]_filt\.fastq\.gz$", col)
+        ])
+        df = _join_bootstraps(df, boot_path)
+        "SeqName" in names(df) && sort!(df, "SeqName", by=seqname_key)
+        CSV.write(merged_csv, df)
+
+        @info "[$lbl] Merge taxa (CD-HIT): Written $merged_csv ($(nrow(df)) rows)"
+        pipeline_log(project, "CD-HIT merge complete. $(nrow(df)) representatives.")
+        log_written(project, merged_csv)
+
+        _write_section_hash(config_path, stage_sections(:merge_taxa), hash_file; snapshot=snap)
         return MergedTables(tables)
     end
 

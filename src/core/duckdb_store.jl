@@ -146,12 +146,15 @@ function load_results_db(merge_dir::String;
     # Recreating the file is the most destructive operation there is on it, so it takes
     # the writer lock for the whole of its work, readers included.
     _with_db_lock(db_path, true) do
-        # Remove stale DB and WAL to avoid schema conflicts on re-runs
-        isfile(db_path) && rm(db_path)
-        isfile(db_path * ".wal") && rm(db_path * ".wal")
+        # Build beside the live file and swap it in only once complete, so a
+        # failed load leaves the previous database in place.
+        tmp_path = db_path * ".building"
+        rm(tmp_path; force=true)
+        rm(tmp_path * ".wal"; force=true)
 
-        db  = DuckDB.DB(db_path)
+        db  = DuckDB.DB(tmp_path)
         con = DBInterface.connect(db)
+        ok  = false
         try
             _esc_id(s) = "\"" * replace(s, "\"" => "\"\"") * "\""
             _esc_str(s) = "'" * replace(s, "'" => "''") * "'"
@@ -181,9 +184,17 @@ function load_results_db(merge_dir::String;
             if !isnothing(tagging)
                 _apply_tagging!(con, tagging)
             end
+            ok = true
         finally
             DBInterface.close!(con)
             close(db)
+            if ok
+                rm(db_path * ".wal"; force=true)
+                mv(tmp_path, db_path; force=true)
+            else
+                rm(tmp_path; force=true)
+                rm(tmp_path * ".wal"; force=true)
+            end
         end
     end
 
@@ -203,7 +214,11 @@ end
 # Mirrors `_taxonomy_cols_for_source` in composition.jl exactly:
 # - VSEARCH: Species, Genus, Family, Order, Class, Division, Supergroup, Subdivision
 # - DADA2:   the _dada2 equivalents of the above, plus Domain_dada2
-# Domain is excluded from the VSEARCH set (handled only via Domain_dada2 for DADA2).
+# Domain is excluded from the VSEARCH set (handled only via Domain for DADA2).
+#
+# Resolution goes through Categories.rank_col, so a vsearch-free table - whose
+# DADA2 taxonomy sits under the plain rank names - yields the same rank list a
+# dual-source table does, rather than an empty one.
 function _rank_cols_for_source(con, table::String, source::String)
     present = Set(string.(DataFrame(DBInterface.execute(con,
         "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
@@ -211,24 +226,35 @@ function _rank_cols_for_source(con, table::String, source::String)
     # Access rank pairs from the sibling Categories module via the parent module.
     cats_mod = parentmodule(DuckDBStore).Categories
     cols = String[]
-    # Iterate RANK_PAIRS but skip Domain/Domain_dada2; VSEARCH has no Domain in
-    # the reference set and Domain_dada2 is appended separately below for DADA2.
-    for (vs, da) in cats_mod._RANK_PAIRS
+    # Iterate RANK_PAIRS but skip Domain; VSEARCH has no Domain in the reference
+    # set and the DADA2 Domain column is appended separately below.
+    for (vs, _) in cats_mod._RANK_PAIRS
         vs == "Domain" && continue
-        col = source == "VSEARCH" ? vs : da
-        col in present && push!(cols, col)
+        col = cats_mod.rank_col(vs, source, present)
+        isnothing(col) || push!(cols, col)
     end
-    # Subdivision is already covered by the loop above; Domain_dada2 is DADA2-only.
+    # Subdivision is already covered by the loop above; Domain is DADA2-only.
     if source == "DADA2"
-        "Domain_dada2" in present && push!(cols, "Domain_dada2")
+        dom = cats_mod.rank_col("Domain", source, present)
+        isnothing(dom) || push!(cols, dom)
     end
     cols
 end
 
 # Internal: apply the tagging block to the merged table in `con`.
+# Every merged* table gets the same treatment: they share the rank columns the
+# category filters name, and a table that is present but untagged silently loses
+# its Category__ columns - the filters that depend on them then match nothing.
+const _TAGGABLE_TABLES = ("merged", "merged_cdhit", "merged_otu")
+
 function _apply_tagging!(con, tagging::Dict)
-    merged_table = "merged"
-    _table_exists(con, merged_table) || return nothing
+    for t in _TAGGABLE_TABLES
+        _table_exists(con, t) && _apply_tagging_to!(con, tagging, t)
+    end
+    return nothing
+end
+
+function _apply_tagging_to!(con, tagging::Dict, merged_table::String)
 
     cats_mod     = parentmodule(DuckDBStore).Categories
     complib_mod  = parentmodule(DuckDBStore).CompositionLibrary
@@ -241,6 +267,15 @@ function _apply_tagging!(con, tagging::Dict)
         @warn "Unknown taxonomy source in tagging block; rank columns will be empty" source
     end
     rank_cols = _rank_cols_for_source(con, merged_table, source)
+    if isempty(rank_cols)
+        present = Set(string.(DataFrame(DBInterface.execute(con,
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+            [merged_table])).column_name))
+        avail = cats_mod.available_sources(present)
+        @warn "Tagging source is not present in the merged table; max_x filtering " *
+              "and category columns will find no taxonomy. Set tagging.source to a " *
+              "source this run actually produced." source available=avail table=merged_table
+    end
     cats_mod.apply_max_x!(con, merged_table, rank_cols, max_x)
 
     isempty(set_names) && return nothing

@@ -17,10 +17,149 @@ module Databases
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 import Downloads
-using YAML, Logging
+using YAML, Logging, CodecZlib, SHA, OrderedCollections
 using ..PipelineTypes
 
-export ensure_databases, resolve_db, make_db_meta
+export ensure_databases, resolve_db, make_db_meta, verify_db_file
+
+    ## Reference file integrity
+    #
+    # A reference database that arrives incomplete does not fail loudly: R's
+    # gzip reader hands back the readable prefix of a truncated stream, so
+    # assignTaxonomy trains on whatever survived and reports confident-looking
+    # bootstraps against an amputated reference set. Nothing downstream can
+    # detect that. So a file is not usable here until it has been shown to
+    # decompress to its end.
+
+    # Stream the whole gzip member through the decompressor. Returns
+    # (ok, uncompressed_bytes, message); a truncated stream throws inside
+    # CodecZlib and is reported in the message.
+    function _gzip_intact(path::AbstractString)
+        total = 0
+        try
+            open(path, "r") do raw
+                stream = GzipDecompressorStream(raw)
+                try
+                    buf = Vector{UInt8}(undef, 1 << 20)
+                    while !eof(stream)
+                        n = readbytes!(stream, buf)
+                        total += n
+                    end
+                finally
+                    close(stream)
+                end
+            end
+        catch err
+            return (false, total, sprint(showerror, err))
+        end
+        return (true, total, "")
+    end
+
+    _sha256_of(path::AbstractString) = open(io -> bytes2hex(sha256(io)), path, "r")
+
+    # Cache the verdict beside the file, keyed by size and mtime, so a
+    # multi-hundred-megabyte reference is not re-read on every pipeline run.
+    # Any change to the file misses the cache and forces a re-check.
+    _verify_sidecar(path::AbstractString) = path * ".verified.yml"
+
+    # `checks` records which expectations the stored verdict actually covered, so
+    # adding a sha256 to databases.yml after a file was verified without one
+    # forces a re-check.
+    function _cached_verdict(path::AbstractString, checks::AbstractString)
+        sidecar = _verify_sidecar(path)
+        isfile(sidecar) || return nothing
+        st = stat(path)
+        try
+            rec = YAML.load_file(sidecar)
+            get(rec, "size", nothing) == Int(st.size) || return nothing
+            get(rec, "mtime_us", nothing) == round(Int, st.mtime * 1_000_000) || return nothing
+            get(rec, "checks", nothing) == checks || return nothing
+            return get(rec, "ok", nothing) === true
+        catch err
+            @warn "Databases: ignoring unreadable verification sidecar $sidecar" exception=err
+            return nothing
+        end
+    end
+
+    function _store_verdict(path::AbstractString, ok::Bool, detail::AbstractString,
+                            checks::AbstractString)
+        st = stat(path)
+        try
+            # Ordered so the sidecar is byte-identical for an identical verdict.
+            YAML.write_file(_verify_sidecar(path), OrderedDict{String,Any}(
+                "file"     => basename(path),
+                "ok"       => ok,
+                "detail"   => detail,
+                "checks"   => checks,
+                "size"     => Int(st.size),
+                "mtime_us" => round(Int, st.mtime * 1_000_000),
+            ))
+        catch err
+            @warn "Databases: could not write verification sidecar" path exception=err
+        end
+    end
+
+    """
+        verify_db_file(path; expected_sha256=nothing, expected_size=nothing,
+                       key="", recheck=false) -> Nothing
+
+    Throw unless `path` is a complete, usable reference file.
+
+    Checks, in order: the file exists and is non-empty; its size matches
+    `expected_size` when one is configured; a `.gz` file decompresses cleanly to
+    the end of the stream; and its SHA-256 matches `expected_sha256` when one is
+    configured. The verdict is cached in a sidecar keyed by size and mtime, so
+    the expensive checks run once per version of the file rather than per run.
+    """
+    function verify_db_file(path::AbstractString;
+                            expected_sha256=nothing, expected_size=nothing,
+                            key::AbstractString="", recheck::Bool=false)
+        tag = isempty(key) ? basename(path) : key
+        isfile(path) || error("Database '$tag': file not found: $path")
+        sz = filesize(path)
+        sz > 0 || error("Database '$tag': file is empty: $path")
+
+        if !isnothing(expected_size) && sz != Int(expected_size)
+            error("Database '$tag': size mismatch for $path - expected " *
+                  "$(expected_size) bytes, found $sz. The file is incomplete or " *
+                  "is not the configured release.")
+        end
+
+        is_gz = endswith(lowercase(path), ".gz")
+        # The key records the expected *values* as well as which checks ran: a
+        # digest changed in databases.yml must invalidate a verdict reached
+        # against the old one. (`size` is compared above, ahead of the cache.)
+        checks = (is_gz ? "gzip" : "") *
+                 (isnothing(expected_sha256) ? "" : "|sha256=" * String(expected_sha256))
+
+        # A cached pass short-circuits the expensive checks; a cached failure is
+        # always re-run, so a repaired file is picked up without hand-editing.
+        if !recheck && _cached_verdict(path, checks) === true
+            return nothing
+        end
+
+        if is_gz
+            ok, nbytes, msg = _gzip_intact(path)
+            if !ok
+                _store_verdict(path, false, msg, checks)
+                error("Database '$tag': $path is a truncated or corrupt gzip stream " *
+                      "($(nbytes) bytes decompressed before it failed: $msg). " *
+                      "Delete the file and let it download again.")
+            end
+        end
+
+        if !isnothing(expected_sha256)
+            actual = _sha256_of(path)
+            if actual != String(expected_sha256)
+                _store_verdict(path, false, "sha256 $actual", checks)
+                error("Database '$tag': SHA-256 mismatch for $path - expected " *
+                      "$(expected_sha256), found $actual.")
+            end
+        end
+
+        _store_verdict(path, true, "verified", checks)
+        return nothing
+    end
 
     """
         ensure_databases(config_path) -> Dict{String,String}
@@ -34,7 +173,7 @@ export ensure_databases, resolve_db, make_db_meta
     If the `local:` path does not exist, the function warns and falls back to
     downloading from `uri`.
     """
-    function ensure_databases(config_path::String)
+    function ensure_databases(config_path::String; only::Union{Nothing,AbstractSet}=nothing)
         if !isfile(config_path)
             template_path = joinpath(dirname(config_path), "defaults", "databases.yml")
             if isfile(template_path)
@@ -62,6 +201,7 @@ export ensure_databases, resolve_db, make_db_meta
         resolved = Dict{String,String}()
         for (db_name, db_info) in db_cfg
             db_name == "dir" && continue
+            isnothing(only) || db_name in only || continue
             !(db_info isa AbstractDict) && continue
             for (fmt, fmt_info) in db_info
                 !(fmt_info isa AbstractDict) && continue
@@ -149,12 +289,22 @@ export ensure_databases, resolve_db, make_db_meta
 
     function _resolve_entry(key, fmt_info, db_dir; emit=nothing)
         log = isnothing(emit) ? msg -> @info(msg) : emit
+        want_sha  = get(fmt_info, "sha256", nothing)
+        want_size = get(fmt_info, "size", nothing)
+        want_sha  = isnothing(want_sha)  ? nothing : String(string(want_sha))
+        want_size = isnothing(want_size) ? nothing : Int(want_size)
+        verify(p) = verify_db_file(p; expected_sha256=want_sha,
+                                   expected_size=want_size, key=string(key))
+
         local_p = get(fmt_info, "local", nothing)
         if !isnothing(local_p)
             local_p = string(local_p)
             if !isempty(local_p)
                 if isfile(local_p)
                     log("[$key] Using local file: $local_p")
+                    # A hand-placed file gets the same scrutiny as a downloaded
+                    # one: it can be truncated too, and nothing downstream notices.
+                    verify(local_p)
                     return local_p
                 end
                 @warn "[$key] Configured local path not found: $local_p - falling back to uri"
@@ -170,10 +320,30 @@ export ensure_databases, resolve_db, make_db_meta
             log("[$key] Using cached: $cached")
         else
             log("[$key] Downloading: $uri")
-            Downloads.download(uri, cached)
+            # Download to a temporary name and move it into place only once it
+            # verifies. Writing straight to `cached` means an interrupted
+            # transfer leaves a partial file under the real name, and every later
+            # run takes the `isfile` branch above and calls it cached.
+            # A unique name, so two jobs fetching the same file cannot share a partial download.
+            part = tempname(dirname(cached)) * ".part"
+            try
+                Downloads.download(string(uri), part)
+                verify_db_file(part; expected_sha256=want_sha, expected_size=want_size,
+                               key=string(key))
+                mv(part, cached; force=true)
+            finally
+                # The verdict written while checking the temporary file would
+                # otherwise be orphaned beside it; the real file gets its own
+                # below.
+                isfile(part) && rm(part; force=true)
+                isfile(_verify_sidecar(part)) && rm(_verify_sidecar(part); force=true)
+            end
             log("[$key] Saved to: $cached")
         end
 
+        # Verify on every resolve: the file may
+        # predate this check, or have been damaged since.
+        verify(cached)
         return cached
     end
 
