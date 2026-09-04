@@ -10,100 +10,56 @@
     Requires: `Checkpoints/ckpt_chimera.RData`
     Saves: `Checkpoints/checkpoint.RData`
     """
-    function _assign_taxonomy_remote(emit, chimera_ckpt, db_path, db_remote_path, tables_dir,
-                                      checkpoint, taxa_prefix, multithread,
-                                      min_boot, tax_levels, verbose, remote_cfg,
-                                      log_path)
-        host          = remote_cfg["host"]
-        rscript       = get(remote_cfg, "rscript", "Rscript")
-        base_dir      = get(remote_cfg, "staging_dir", nothing)
-        identity_file = get(remote_cfg, "identity_file", nothing)
-
-        isnothing(base_dir) &&
-            error("taxonomy.remote.staging_dir must be set explicitly in config")
+    # Assign taxonomy on the bioserver. The chimera-free checkpoint goes up and
+    # the taxonomy tables come back; the reference database goes with it only
+    # when databases.yml does not already name a copy on the server.
+    function _assign_taxonomy_remote(emit, target, chimera_ckpt, db_path, db_remote_path,
+                                      tables_dir, checkpoint, taxa_prefix,
+                                      min_boot, tax_levels, seed, verbose, log_path;
+                                      db_sha256=nothing)
         !isnothing(db_remote_path) && !startswith(string(db_remote_path), "/") &&
             error("databases.yml dada2.remote_path must be an absolute path on the server " *
                   "(got: '$db_remote_path'). Do not include the hostname.")
 
-        run_id      = string(floor(Int, time()))
-        staging_dir = "$base_dir/run_$run_id"
-
-        scripts_dir   = @__DIR__
-        functions_r   = joinpath(scripts_dir, "dada2_functions.r")
-        remote_r      = joinpath(scripts_dir, "taxonomy_remote.r")
-        remote_tables = "$staging_dir/Tables"
-        remote_ckpt   = "$staging_dir/checkpoint.RData"
-
-        # ControlMaster reuses a single SSH connection for all ssh/scp calls
-        ctl     = "/tmp/ssh_mux_$run_id"
-        id_opt  = isnothing(identity_file) ? `` : `-i $identity_file`
-        ssh_opts = `$id_opt -o ControlMaster=auto -o ControlPath=$ctl -o ControlPersist=yes -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=3`
-        ssh = (args...) -> `ssh $ssh_opts $args`
-        scp = (args...) -> `scp $ssh_opts $args`
-
-        if isnothing(identity_file)
-            emit("  Connecting to $host (enter SSH password if prompted)...")
-        else
-            emit("  Connecting to $host (key: $identity_file)...")
-        end
-        emit("  Setting up staging directory on $host")
-        run(ssh(host, "mkdir -p $remote_tables"))
-
-        emit("  Transferring files to $host")
-        run(scp(chimera_ckpt, "$host:$staging_dir/ckpt_chimera.RData"))
-        run(scp(functions_r,  "$host:$staging_dir/dada2_functions.r"))
-        run(scp(remote_r,     "$host:$staging_dir/taxonomy_remote.r"))
-
-        # Use remote_path from databases.yml if set, otherwise transfer local db
-        remote_db_resolved = if !isnothing(db_remote_path)
+        inputs = Pair{String,String}[chimera_ckpt => "ckpt_chimera.RData"]
+        # A database already on the server costs nothing to reuse; one that is
+        # not has to travel, and at ~100MB compressed it dominates this stage's
+        # transfer. Set databases.yml dada2.remote_path to skip it.
+        db_arg = if !isnothing(db_remote_path)
             emit("  Using remote database: $db_remote_path")
-            db_remote_path
+            string(db_remote_path)
         elseif !isnothing(db_path)
-            db_basename = basename(db_path)
-            emit("  Transferring database ($db_basename) to $host")
-            run(scp(db_path, "$host:$staging_dir/$db_basename"))
-            "$staging_dir/$db_basename"
+            emit("  Database will be transferred ($(basename(db_path)))")
+            push!(inputs, db_path => basename(db_path))
+            "REMOTE_STAGING/" * basename(db_path)
         else
             error("No taxonomy database: set databases.yml dada2.remote_path or provide a local database")
         end
 
-        levels_str  = join(tax_levels, ",")
-        verbose_str = verbose ? "true" : "false"
-        mt_str      = multithread isa Bool ? (multithread ? "TRUE" : "FALSE") : string(multithread)
-        remote_cmd  = "$rscript $staging_dir/taxonomy_remote.r " *
-                      "functions=$staging_dir/dada2_functions.r " *
-                      "ckpt=$staging_dir/ckpt_chimera.RData " *
-                      "db=$remote_db_resolved " *
-                      "tables=$remote_tables " *
-                      "save=$remote_ckpt " *
-                      "prefix=$taxa_prefix " *
-                      "multithread=$mt_str " *
-                      "min_boot=$min_boot " *
-                      "levels=$levels_str " *
-                      "verbose=$verbose_str"
-
-        emit("  Running Rscript on $host:$staging_dir")
-        log_command(remote_cmd, log_path)
-        open(log_path, "a") do io
-            run(pipeline(ssh(host, remote_cmd); stdout=io, stderr=io))
-        end
-
-        emit("  Retrieving results from $host")
-        run(scp("$host:$remote_tables/$taxa_prefix.csv",              "$tables_dir/"))
-        run(scp("$host:$remote_tables/$(taxa_prefix)_bootstraps.csv", "$tables_dir/"))
-        run(scp("$host:$remote_tables/$(taxa_prefix)_combined.csv",   "$tables_dir/"))
-        run(scp("$host:$remote_ckpt",                                 checkpoint))
-
-        # Guard against dangerously shallow rm -rf paths
-        parts = filter(!isempty, split(staging_dir, '/'))
-        if length(parts) >= 3
-            emit("  Cleaning up $host:$staging_dir")
-            run(ssh(host, "rm -rf $staging_dir"))
-        else
-            @warn "DADA2: Skipping remote cleanup - staging path '$staging_dir' looks too shallow to delete safely"
-        end
-
-        run(`ssh -o ControlPath=$ctl -O exit $host`)
+        _run_remote_stage(emit, target, "taxonomy_remote.r",
+            [
+                "db"          => db_arg,
+                "prefix"      => taxa_prefix,
+                "multithread" => _mt_str(target.threads),
+                "min_boot"    => string(min_boot),
+                "levels"      => join(tax_levels, ","),
+                "seed"        => string(seed),
+                "verbose"     => string(verbose),
+            ];
+            inputs,
+            # Whether the database was uploaded or was already on the server,
+            # test its gzip stream there before assignTaxonomy reads it.
+            verify_remote_gzip = endswith(lowercase(db_arg), ".gz") ? [db_arg] : String[],
+            # A copy already on the server is checked against the configured release checksum.
+            verify_remote_sha256 = (!isnothing(db_remote_path) && !isnothing(db_sha256)) ?
+                Dict(db_arg => string(db_sha256)) : Dict{String,String}(),
+            outputs = [
+                "Tables/$taxa_prefix.csv"            => joinpath(tables_dir, "$taxa_prefix.csv"),
+                "Tables/$(taxa_prefix)_bootstraps.csv" => joinpath(tables_dir, "$(taxa_prefix)_bootstraps.csv"),
+                "Tables/$(taxa_prefix)_combined.csv"   => joinpath(tables_dir, "$(taxa_prefix)_combined.csv"),
+                "checkpoint.RData"                   => checkpoint,
+            ],
+            log_path, stage = "assign_taxonomy")
     end
 
     function assign_taxonomy(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing, skip_classification=false)
@@ -125,6 +81,7 @@
             @info "[$(lbl)] DADA2: Skipping assign taxonomy - checkpoint up to date"
             return nothing
         end
+        snap = _begin_section(config_path, stage_sections(:dada2_assign_taxonomy), hash_file)
 
         # Free R data objects from prior stages to reduce memory before taxonomy
         R"""
@@ -141,13 +98,13 @@
         combined_file = "tax_counts.csv"
         asv_file      = "asv_counts.csv"
         tables_dir    = ctx.dirs["Tables"]
-        multithread   = get(ctx.cfg["taxonomy"], "multithread", 4)
-        # Guard the Julia/R boundary: YAML ambiguity between `true`, `4`, and
-        # `"4"` previously flipped the assignTaxonomy code path silently. Only
-        # a Bool or a strict positive Integer is meaningful here.
+        target        = _remote_target(ctx.full_cfg, "assign_taxonomy")
+        multithread   = isnothing(target) ?
+                        _r_threads(ctx.full_cfg; stage="assign_taxonomy") : target.threads
+        # Only a Bool or a positive Integer is valid; YAML can yield `"4"`.
         (multithread isa Bool) ||
             (multithread isa Integer && multithread >= 1) ||
-            error("taxonomy.multithread must be a Bool or positive integer (got: $(repr(multithread)))")
+            error("r_threads must be a Bool or positive integer (got: $(repr(multithread)))")
         min_boot      = get(ctx.cfg["taxonomy"], "min_boot", 0)
         db_key    = string(ctx.cfg["taxonomy"]["database"])
         dbs_path  = joinpath(@__DIR__, "..", "..", "..", "config", "databases.yml")
@@ -155,15 +112,12 @@
         tax_levels = String[string(l) for l in get(get(dbs_cfg, db_key, Dict()), "levels", String[])]
         isempty(tax_levels) && error("No levels defined for database '$db_key' in $dbs_path")
 
-        remote_cfg = get(get(ctx.cfg, "taxonomy", Dict()), "remote", nothing)
-        use_remote = !isnothing(remote_cfg) &&
-                     !isnothing(get(remote_cfg, "host", nothing))
-
         # Priority: remote_path > taxonomy_db arg > _resolve_taxonomy_db fallback
         db_remote_path = get(get(get(dbs_cfg, db_key, Dict()), "dada2", Dict()), "remote_path", nothing)
         if !isnothing(db_remote_path)
             db_remote_path = string(db_remote_path)
         end
+        db_sha256 = get(get(get(dbs_cfg, db_key, Dict()), "dada2", Dict()), "sha256", nothing)
         db_path = isnothing(taxonomy_db) ? _resolve_taxonomy_db(ctx.cfg, emit) : taxonomy_db
 
         R"load($chimera_ckpt)"
@@ -192,12 +146,11 @@
                            taxa_prefix * "_combined.csv", combined_file, asv_file)
                 touch(joinpath(tables_dir, suffix))
             end
-        elseif use_remote
-            emit("Assigning taxonomy (remote: $(remote_cfg["host"]))")
-            _assign_taxonomy_remote(emit, chimera_ckpt, db_path, db_remote_path, tables_dir,
-                                    checkpoint, taxa_prefix, multithread,
-                                    min_boot, tax_levels, verbose, remote_cfg,
-                                    log_path)
+        elseif !isnothing(target)
+            emit("Assigning taxonomy (remote: $(target.host))")
+            _assign_taxonomy_remote(emit, target, chimera_ckpt, db_path, db_remote_path,
+                                    tables_dir, checkpoint, taxa_prefix,
+                                    min_boot, tax_levels, ctx.seed, verbose, log_path; db_sha256)
             R"load($checkpoint)"
             R"write_combined_table(taxa_df, index, seq_table_nochim, $tables_dir, $combined_file, $asv_file)"
             emit("Log: $log_path")
@@ -205,6 +158,10 @@
             R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
             try
                 emit("Assigning taxonomy")
+                # assignTaxonomy bootstraps by randomly subsampling kmers, so
+                # without a seed both the bootstrap values and the winning genus
+                # vary between runs on identical input.
+                R"set.seed($(ctx.seed), kind = 'Mersenne-Twister', normal.kind = 'Inversion', sample.kind = 'Rejection')"
                 _r_run_logged("taxa_result <- run_assign_taxonomy(seq_table_nochim, " *
                               "$(_r_lit(db_path)), list(multithread=$(_r_lit(multithread)), " *
                               "min_boot=$(_r_lit(min_boot)), levels=$(_r_lit(tax_levels))), " *
@@ -222,7 +179,7 @@
             emit("Log: $log_path")
         end
 
-        _write_section_hash(config_path, stage_sections(:dada2_assign_taxonomy), hash_file)
+        _write_section_hash(config_path, stage_sections(:dada2_assign_taxonomy), hash_file; snapshot=snap)
         emit("Checkpoint: $checkpoint")
 
         emit("Pipeline complete. Outputs:")

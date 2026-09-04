@@ -7,7 +7,7 @@ module JobQueue
 # In-memory job store. Single-user local server - no persistence needed.
     using Dates, UUIDs, JSON3
 
-export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
+export Job, JobStatus, JobConflict, submit_job!, get_job, list_jobs, cancel_job!,
         broadcast_event!, subscribe_events, unsubscribe_events
 
     @enum JobStatus queued running complete failed cancelled
@@ -23,7 +23,10 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
         finished_at :: Union{DateTime, Nothing}
         message     :: Union{String, Nothing}
         task        :: Union{Task, Nothing}
+        group       :: Union{String, Nothing}
     end
+    Job(id, type, study, run, stage, status, created_at, finished_at, message, task) =
+        Job(id, type, study, run, stage, status, created_at, finished_at, message, task, nothing)
 
     const _jobs      = Dict{String, Job}()
     const _jobs_lock = ReentrantLock()
@@ -81,11 +84,52 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
         end
     end
 
+    ## Per-run exclusivity
+    # Two pipeline or stage jobs on the same run write the same files: trimmed reads,
+    # vsearch hits, merged tables, the results database. Only the embedded-R DADA2
+    # steps serialise on the R lock; everything else would interleave, and a stage's
+    # skip check could read the other job's half-written output. A study-wide job
+    # touches every run in the study, so it conflicts with any job in that study.
+    struct JobConflict <: Exception
+        existing :: Job
+    end
+
+    Base.showerror(io::IO, e::JobConflict) = print(io,
+        "a $(e.existing.type) job ($(e.existing.id)) is already active for " *
+        (isnothing(e.existing.run) ? "study '$(e.existing.study)'" :
+                                     "run '$(e.existing.run)' of study '$(e.existing.study)'"))
+
+    const _RUN_SCOPED_TYPES = ("pipeline", "stage")
+
+    # The active job an exclusive submission would collide with, or nothing.
+    # "Active" is `!_is_settled`: a cancelled job whose task is still unwinding is
+    # still writing files. Caller must hold `_jobs_lock`.
+    # Runs are identified by group and name: Multiplex/Caecum and VESPA/Caecum are different runs.
+    function _conflicting_job(type::String, study, run, group=nothing)
+        type in _RUN_SCOPED_TYPES || return nothing
+        for job in values(_jobs)
+            job.type in _RUN_SCOPED_TYPES || continue
+            _is_settled(job) && continue
+            job.study == study || continue
+            (isnothing(job.run) || isnothing(run) || (job.run == run && job.group == group)) && return job
+        end
+        nothing
+    end
+
+    """
+        submit_job!(f, type; study, run, stage, exclusive=false) -> Job
+
+    Queue `f` as a background job. With `exclusive=true` a pipeline or stage job is
+    refused with `JobConflict` while another such job for the same run (or, for a
+    study-wide job, the same study) is active; the check and the insert happen under
+    one lock, so two simultaneous submissions cannot both pass it.
+    """
     function submit_job!(f::Function, type::String;
-                        study=nothing, run=nothing, stage=nothing)
+                        study=nothing, run=nothing, stage=nothing, group=nothing,
+                        exclusive::Bool=false)
         id  = _new_id()
         job = Job(id, type, study, run, stage,
-                queued, now(UTC), nothing, nothing, nothing)
+                queued, now(UTC), nothing, nothing, nothing, group)
         task = Task(() -> _run_job!(job, f))
         # As Threads.@spawn does, let the task run on any thread of the default pool.
         # It is created unscheduled and published under `_jobs_lock` before it starts,
@@ -93,6 +137,10 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
         # find nothing there for a job that is already running.
         task.sticky = false
         lock(_jobs_lock) do
+            if exclusive
+                existing = _conflicting_job(type, study, run, group)
+                isnothing(existing) || throw(JobConflict(existing))
+            end
             job.task  = task
             _jobs[id] = job
             _prune_finished!()
@@ -223,8 +271,7 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
         isempty(dropped) && return nothing
         # A subscriber that is closed, or too far behind to accept the message, is
         # disconnected: closing its channel ends its SSE loop, and the browser's
-        # EventSource reconnects and resynchronises rather than reading a stream with
-        # holes in it. A slow client thus degrades only itself.
+        # EventSource reconnects and resynchronises. A slow client degrades only itself.
         lock(_subscribers_lock) do
             filter!(ch -> !any(d -> d === ch, dropped), _subscribers)
         end
@@ -234,15 +281,13 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
         return nothing
     end
 
-    # Interpolating the fields by hand escaped only `message`, so a study, run, or
-    # stage name carrying a quote or a backslash emitted malformed JSON onto the
-    # event stream. JSON3 escapes every field, and `nothing` renders as null.
     function _job_json(j::Job)
         JSON3.write((
             id          = j.id,
             type        = j.type,
             study       = j.study,
             run         = j.run,
+            group       = j.group,
             stage       = j.stage,
             status      = string(j.status),
             created_at  = string(j.created_at),
@@ -266,6 +311,7 @@ export Job, JobStatus, submit_job!, get_job, list_jobs, cancel_job!,
             (isnothing(j.study) || isnothing(j.stage)) && return nothing
             JSON3.write((study  = j.study,
                          run    = j.run,
+                         group  = j.group,
                          stage  = j.stage,
                          status = string(j.status)))
         end

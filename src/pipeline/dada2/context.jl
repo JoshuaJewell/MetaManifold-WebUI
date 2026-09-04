@@ -114,15 +114,7 @@
     ## R function loader
     # Source the R helper functions into the current R session. Called by each
     # stage after its mtime skip check, so R is not loaded for skipped stages.
-    # When `ctx` is provided, emits the single-sample warning (once per run).
-    const _single_sample_warned = Ref(false)
     function _source_r_functions(ctx=nothing)
-        if !isnothing(ctx) && ctx.single_sample && !_single_sample_warned[]
-            _single_sample_warned[] = true
-            @warn "Only 1 sample found. Duplicating it to work around dada() " *
-                  "returning a bare object for single-file input. The duplicate " *
-                  "will be dropped from all outputs."
-        end
         functions_r = joinpath(@__DIR__, "dada2_functions.r")
         R"source($functions_r)"
     end
@@ -161,27 +153,26 @@
         primary_files = isempty(fwd_files) ? rev_files : fwd_files
         sample_names  = extract_sample_names(primary_files)
 
-        # Single-sample fallback: dada() returns a bare object (not a list) for a
-        # single input file, breaking makeSequenceTable() and sapply() downstream.
-        # Duplicate the paths so the pipeline sees 2 samples; the extra row is
-        # dropped in chimera_removal(). ASV calls are unaffected.
-        single_sample = length(sample_names) == 1
-        if single_sample
-            fwd_files    = isempty(fwd_files) ? fwd_files : repeat(fwd_files, 2)
-            rev_files    = isempty(rev_files) ? rev_files : repeat(rev_files, 2)
-            sample_names = [sample_names[1], sample_names[1] * "_dup"]
-        end
-
         filtered_dir = dirs["Filtered"]
-        fwd_out = mode != "reverse" ?
+        all_fwd_out = mode != "reverse" ?
             [joinpath(filtered_dir, s * "_R1_filt.fastq.gz") for s in sample_names] : String[]
-        rev_out = mode != "forward" ?
+        all_rev_out = mode != "forward" ?
             [joinpath(filtered_dir, s * "_R2_filt.fastq.gz") for s in sample_names] : String[]
 
-        in_fwd      = mode != "reverse" ? fwd_files : rev_files
-        out_fwd     = mode != "reverse" ? fwd_out   : rev_out
-        in_rev_arg  = mode == "paired"  ? rev_files : nothing
-        out_rev_arg = mode == "paired"  ? rev_out   : nothing
+        in_fwd      = mode != "reverse" ? fwd_files   : rev_files
+        out_fwd     = mode != "reverse" ? all_fwd_out : all_rev_out
+        in_rev_arg  = mode == "paired"  ? rev_files   : nothing
+        out_rev_arg = mode == "paired"  ? all_rev_out : nothing
+
+        # filterAndTrim writes no file for a sample with no reads left, so later
+        # stages work on the samples whose filtered files exist. `kept` indexes
+        # them in `sample_names`; before filtering has run it covers every sample.
+        has_out(i) = (isempty(all_fwd_out) || isfile(all_fwd_out[i])) &&
+                     (isempty(all_rev_out) || isfile(all_rev_out[i]))
+        kept = collect(eachindex(sample_names))
+        any(has_out, kept) && filter!(has_out, kept)
+        fwd_out = isempty(all_fwd_out) ? String[] : all_fwd_out[kept]
+        rev_out = isempty(all_rev_out) ? String[] : all_rev_out[kept]
 
         ckpts = Dict(
             "filter"  => joinpath(dirs["Checkpoints"], "ckpt_filter.RData"),
@@ -194,7 +185,11 @@
         # Run label for logging: last path component before /dada2
         run_label = basename(dirname(root))
 
-        (; cfg, verbose, seed, mode, dirs, sample_names, single_sample,
+        # `cfg` is the dada2 subtree, which is what every stage's parameters
+        # live under. `full_cfg` carries the whole document because the settings
+        # that are deliberately NOT per-stage - r_threads and the remote block -
+        # sit at the top level, and a stage cannot reach them through `cfg`.
+        (; cfg, full_cfg, verbose, seed, mode, dirs, sample_names, kept,
         fwd_files, rev_files, fwd_out, rev_out,
         in_fwd, out_fwd, in_rev_arg, out_rev_arg, ckpts, run_label)
     end

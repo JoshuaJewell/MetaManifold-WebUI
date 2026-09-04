@@ -7,7 +7,7 @@
 # any config changes made in the UI are picked up before execution. The
 # existing checkpoint/hash logic then skips stages whose inputs are unchanged.
 using JSON3, RCall
-using MetaManifold.RRuntime: with_r_lock
+using ..RRuntime: with_r_lock
 const Provenance = MetaManifold.Provenance
 
 ## Tagging helpers
@@ -17,10 +17,26 @@ const Provenance = MetaManifold.Provenance
 function _tagging_cfg(project, run_cfg::Dict)
     tag = get(run_cfg, "tagging", nothing)
     isnothing(tag) && return nothing
+
+    sets = Vector{String}(get(tag, "category_sets", String[]))
+    # Sets named by analysis.exclude_categories need their Category__ column
+    # written here too. The exclusion path itself builds its CASE inline and
+    # reads no column, and `load_results_db` recreates the database from
+    # scratch - so without this the column exists only if some chart happened to
+    # group by that set, and every merge rerun silently drops it again.
+    excl = get(get(run_cfg, "analysis", Dict()), "exclude_categories", [])
+    if excl isa AbstractVector
+        for e in excl
+            e isa AbstractDict || continue
+            name = get(e, "set", nothing)
+            isnothing(name) || push!(sets, string(name))
+        end
+    end
+
     Dict(
         "source"        => string(get(tag, "source", "VSEARCH")),
         "max_x"         => Int(get(tag, "max_x", -1)),
-        "category_sets" => Vector{String}(get(tag, "category_sets", String[])),
+        "category_sets" => unique(sets),
         "library_path"  => joinpath(project.config_dir, "composition.yml"),
     )
 end
@@ -94,9 +110,9 @@ function _probe_tool_cached(probe)
     _memo(() -> Provenance.probe_tool(probe), (:tool, probe.name, path, stamp))
 end
 
-# Probing is a phase, not a side effect scattered through the stages: a run that
-# cannot prove what produced it must fail before any compute, not forty minutes
-# into DADA2. `preflight` probes exactly the components this config will invoke.
+# Probing runs as one phase before any compute, so a run that cannot prove what
+# produced it fails before DADA2 starts. `preflight` probes exactly the components
+# this config will invoke.
 #
 # The database config is parsed once per process rather than once per stage, and the
 # database records are memoised too: without that, the study loop's concurrent runs
@@ -161,16 +177,36 @@ end
 # that dies midway must still leave the record of what it did manage to produce:
 # outputs on disk with no provenance is the one state this whole apparatus exists to
 # forbid, and it is exactly what a failing run would otherwise create.
-function _attest(f::Function, att, env, name::AbstractString)
+#
+# A stage that skipped leaves its earlier record alone: writing the current
+# environment over it would attribute old outputs to new tool versions.
+function _attest(f::Function, att, env, name::AbstractString; config_path::String)
     started = Provenance.timestamp()
+    ran_before = stage_run_count(config_path)
     try
         result = f()
-        Provenance.record_stage!(att, name, env; started)
+        stage_run_count(config_path) > ran_before &&
+            Provenance.record_stage!(att, name, env; started, outputs=_stage_outputs(result))
         return result
     catch
         Provenance.record_stage!(att, name, env; started, status="failed")
         rethrow()
     end
+end
+
+# The files a stage hands on, by content, for its provenance record.
+_output_paths(r::ASVResult)      = [r.fasta, r.count_table, r.taxonomy]
+_output_paths(r::OTUResult)      = [r.fasta, r.count_table]
+_output_paths(r::TaxonomyHits)   = [r.tsv]
+_output_paths(r::MergedTables)   = collect(values(r.tables))
+_output_paths(r::TrimmedReads)   = isdir(r.dir) ?
+    [joinpath(r.dir, f) for f in readdir(r.dir) if endswith(f, "_trimmed.fastq.gz")] : String[]
+_output_paths(r::Tuple)          = reduce(vcat, (_output_paths(x) for x in r); init=String[])
+_output_paths(_)                 = String[]
+
+function _stage_outputs(result)
+    [Dict{String,Any}("path" => p, "sha256" => Provenance.file_sha256(p))
+     for p in sort(unique(filter(isfile, _output_paths(result))))]
 end
 
 function _run_full_pipeline(study::String, run::String, db_config::String,
@@ -197,11 +233,11 @@ function _run_full_pipeline(study::String, run::String, db_config::String,
     # still produced cutadapt and DADA2 outputs, and those must not sit on disk
     # unaccounted for.
     try
-        trimmed = _attest(att, env, "cutadapt") do
+        trimmed = _attest(att, env, "cutadapt"; config_path) do
             cutadapt(project)
         end
 
-        asvs = _attest(att, env, "dada2") do
+        asvs = _attest(att, env, "dada2"; config_path) do
             _with_r_lock(run_label) do
                 dada2(project, trimmed;
                       taxonomy_db=classify_enabled ? dbs["$(db_name)_dada2"] : nothing,
@@ -210,13 +246,13 @@ function _run_full_pipeline(study::String, run::String, db_config::String,
         end
         @info "[$run_label] DADA2: Complete"
 
-        if cdhit_enabled
-            asvs = _attest(att, env, "cdhit") do
-                cdhit(project, asvs)
-            end
-        end
+        # cd-hit feeds only the collapsed merged_cdhit table; swarm, vsearch and
+        # the main merge read every DADA2 ASV so no reads fall out of them.
+        cd_asvs = cdhit_enabled ? _attest(att, env, "cdhit"; config_path) do
+            cdhit(project, asvs)
+        end : nothing
 
-        otus = swarm_enabled ? _attest(att, env, "swarm") do
+        otus = swarm_enabled ? _attest(att, env, "swarm"; config_path) do
             swarm(project, asvs)
         end : nothing
 
@@ -224,25 +260,28 @@ function _run_full_pipeline(study::String, run::String, db_config::String,
         # fetched before the stage is recorded, or its finish time would precede the
         # OTU search it claims to cover.
         asv_tax, otu_tax = if vsearch_enabled
-            _attest(att, env, "vsearch") do
+            _attest(att, env, "vsearch"; config_path) do
                 asv_task = Threads.@spawn(vsearch(project, asvs, dbs["$(db_name)_vsearch"]))
                 otu_task = (swarm_enabled && !isnothing(otus)) ?
                     Threads.@spawn(vsearch(project, otus, dbs["$(db_name)_vsearch"])) : nothing
+                # Wait for both before rethrowing, so a failed ASV search cannot leave the OTU search running.
+                tasks = filter(!isnothing, Any[asv_task, otu_task])
+                foreach(t -> (try wait(t) catch end), tasks)
                 (fetch(asv_task), isnothing(otu_task) ? nothing : fetch(otu_task))
             end
         else
             (nothing, nothing)
         end
 
-        merged = _attest(att, env, "merge_taxa") do
+        merged = _attest(att, env, "merge_taxa"; config_path) do
             asv_merged = _merge_taxa_routed(project, asvs, asv_tax, db_meta; vsearch_enabled)
-            if isnothing(otu_tax)
-                asv_merged
-            else
-                otu_merged = merge_taxa_otu(project, otus, otu_tax, db_meta)
-                MergedTables(merge(asv_merged.tables, otu_merged.tables))
-            end
+            tables = copy(asv_merged.tables)
+            isnothing(otu_tax) || merge!(tables, merge_taxa_otu(project, otus, otu_tax, db_meta).tables)
+            isnothing(cd_asvs) || merge!(tables, merge_taxa_cdhit(project, cd_asvs, db_meta).tables)
+            MergedTables(tables)
         end
+
+        _drop_disabled_tables(project.dir, run_cfg)
 
         # Load results into DuckDB
         swarm_dir = joinpath(project.dir, "swarm")
@@ -286,7 +325,7 @@ function _run_stage(study::String, run::String, stage::String,
         env = _preflight(run_cfg, db_config, dbs, db_name)
         att = _attestation(study, run, group, run_cfg, cfg_path)
         try
-            _attest(att, env, "fastqc") do
+            _attest(att, env, "fastqc"; config_path=cfg_path) do
                 multiqc(project)
             end
         finally
@@ -317,7 +356,7 @@ function _run_stage(study::String, run::String, stage::String,
     steps = _PIPELINE_ORDER[1:target_idx]
 
     # Bind this run's Attestation and environment to the shared stage recorder.
-    _record(f, name::AbstractString) = _attest(f, stage_att, stage_env, name)
+    _record(f, name::AbstractString) = _attest(f, stage_att, stage_env, name; config_path)
 
     try
     # cutadapt (no R)
@@ -327,25 +366,57 @@ function _run_stage(study::String, run::String, stage::String,
         end
     end
 
-    # DADA2 sub-stages share R state - run under a single lock
+    # DADA2 sub-stages, run under the shared R lock - but only the ones that
+    # actually evaluate R here. A stage running on the bioserver spends its time
+    # waiting on ssh, and holding the one embedded interpreter for that wait
+    # would serialise every other run's denoising behind a machine that is idle:
+    # the study route denoises runs on parallel threads precisely so they do not
+    # queue like that. Consecutive local steps still share a single acquisition,
+    # so nothing else about the locking changes.
     dada2_steps = filter(s -> s in ("prefilter_qc", "filter_trim", "learn_errors",
                                     "denoise", "filter_length", "chimera_removal",
                                     "assign_taxonomy"), steps)
     if !isempty(dada2_steps)
-        _with_r_lock(basename(run_dir), dada2_steps) do
-            for step in dada2_steps
-                _record(step) do
-                    if step == "assign_taxonomy"
-                        assign_taxonomy(config_path; input_dir, workspace_root=ws_root,
-                                        taxonomy_db=dbs["$(db_name)_dada2"])
-                        R"rm(list=ls()); gc()"
-                    else
-                        fn = getfield(DADA2, Symbol(step))
-                        fn(config_path; input_dir, workspace_root=ws_root)
-                        R"gc()"
-                    end
+        run_label = basename(run_dir)
+
+        run_step = function (step)
+            _record(step) do
+                if step == "assign_taxonomy"
+                    assign_taxonomy(config_path; input_dir, workspace_root=ws_root,
+                                    taxonomy_db=dbs["$(db_name)_dada2"])
+                    R"rm(list=ls()); gc()"
+                else
+                    fn = getfield(DADA2, Symbol(step))
+                    fn(config_path; input_dir, workspace_root=ws_root)
+                    R"gc()"
                 end
             end
+        end
+
+        # assign_taxonomy still evaluates R either way - it reads the chimera
+        # checkpoint to decide whether there is anything to classify, and joins
+        # the counts onto the result afterwards - so it counts as local work even
+        # when the classification itself runs on the server.
+        needs_r = step -> step == "assign_taxonomy" ||
+                          isnothing(DADA2._remote_target(stage_cfg, step))
+
+        # Walk the chain in maximal runs of like steps, so a local group is still
+        # covered by one acquisition and a remote group by none.
+        i = 1
+        while i <= length(dada2_steps)
+            j = i
+            while j < length(dada2_steps) && needs_r(dada2_steps[j + 1]) == needs_r(dada2_steps[i])
+                j += 1
+            end
+            group = dada2_steps[i:j]
+            if needs_r(dada2_steps[i])
+                _with_r_lock(run_label, group) do
+                    foreach(run_step, group)
+                end
+            else
+                foreach(run_step, group)
+            end
+            i = j + 1
         end
     end
 
@@ -376,10 +447,13 @@ function _run_stage(study::String, run::String, stage::String,
                     end
                 end
             end
-            _record("merge_taxa") do
-                asvs = _asvresult_from_disk(run_dir)
-                otus = swarm_enabled ? _oturesult_from_disk(run_dir) : nothing
-                _run_merge_taxa(project, asvs, otus, db_meta)
+            # merge_taxa follows as its own step when it is in the list.
+            if vsearch_enabled && !("merge_taxa" in steps)
+                _record("merge_taxa") do
+                    asvs = _asvresult_from_disk(run_dir)
+                    otus = swarm_enabled ? _oturesult_from_disk(run_dir) : nothing
+                    _run_merge_taxa(project, asvs, otus, db_meta)
+                end
             end
         elseif step == "merge_taxa"
             _record("merge_taxa") do
@@ -400,6 +474,14 @@ end
 
 ## Merge taxa helpers
 # Route to the correct merge_taxa variant based on available vsearch output.
+# load_results_db loads every CSV in merged/, so tables from a path that has
+# since been switched off are removed rather than reloaded as current.
+function _drop_disabled_tables(run_dir::String, run_cfg)
+    enabled(k, default) = get(get(run_cfg, k, Dict()), "enabled", default)
+    enabled("swarm", true) == false && rm(joinpath(run_dir, "merged", "merged_otu.csv"); force=true)
+    enabled("cdhit", false) == true || rm(joinpath(run_dir, "merged", "merged_cdhit.csv"); force=true)
+end
+
 function _merge_taxa_routed(project, asvs, asv_tax, db_meta; vsearch_enabled::Bool=true)
     if vsearch_enabled && !isnothing(asv_tax)
         merge_taxa(project, asvs, asv_tax, db_meta)
@@ -421,6 +503,15 @@ function _run_merge_taxa(project, asvs, otus, db_meta)
                    TaxonomyHits(asv_tax_path) : nothing
     asv_merged   = _merge_taxa_routed(project, asvs, asv_tax, db_meta; vsearch_enabled)
 
+    # The collapsed cd-hit table is written alongside the full one.
+    if get(get(run_cfg, "cdhit", Dict()), "enabled", false) == true
+        try
+            merge_taxa_cdhit(project, _asvresult_from_disk(run_dir; cdhit=true), db_meta)
+        catch e
+            @warn "Merge taxa (CD-HIT): skipped" exception=(e, catch_backtrace())
+        end
+    end
+
     if !isnothing(otus)
         otu_tax_path = joinpath(run_dir, "swarm", "vsearch", "taxonomy.tsv")
         if vsearch_enabled && isfile(otu_tax_path)
@@ -428,6 +519,7 @@ function _run_merge_taxa(project, asvs, otus, db_meta)
         end
     end
 
+    _drop_disabled_tables(run_dir, run_cfg)
     swarm_dir = joinpath(run_dir, "swarm")
     load_results_db(joinpath(run_dir, "merged");
                     swarm_dir = isdir(swarm_dir) ? swarm_dir : nothing,
@@ -436,14 +528,17 @@ function _run_merge_taxa(project, asvs, otus, db_meta)
 end
 
 ## Disk reconstruction helpers
-function _asvresult_from_disk(run_dir::String)
+# The ASVs a stage reads from disk: the DADA2 tables, or with `cdhit` the cd-hit
+# representatives and their collapsed counts, which only merged_cdhit uses.
+function _asvresult_from_disk(run_dir::String; cdhit::Bool=false)
     t = joinpath(run_dir, "dada2", "Tables")
-    # Prefer CD-HIT output if it exists (CD-HIT runs after DADA2)
-    cdhit_fasta = joinpath(run_dir, "cdhit", "asvs.fasta")
-    fasta = isfile(cdhit_fasta) ? cdhit_fasta : joinpath(t, "asvs.fasta")
-    ASVResult(fasta,
-              joinpath(t, "seqtab_nochim.csv"),
-              joinpath(t, "taxonomy.csv"))
+    dada = ASVResult(joinpath(t, "asvs.fasta"),
+                     joinpath(t, "seqtab_nochim.csv"),
+                     joinpath(t, "taxonomy.csv"))
+    cdhit || return dada
+    fasta  = joinpath(run_dir, "cdhit", "asvs.fasta")
+    counts = joinpath(run_dir, "cdhit", "collapsed_counts.csv")
+    (isfile(fasta) && isfile(counts)) ? ASVResult(fasta, counts, dada.taxonomy) : dada
 end
 
 function _oturesult_from_disk(run_dir::String)
@@ -453,22 +548,10 @@ function _oturesult_from_disk(run_dir::String)
     OTUResult(f, p)
 end
 
-function _mergedtables_from_disk(run_dir::String)
-    merge_dir = joinpath(run_dir, "merged")
-    tables    = Dict{String,String}()
-    isdir(merge_dir) || error("merge_taxa output not found - run merge_taxa first")
-    for f in readdir(merge_dir; join=true)
-        endswith(f, ".csv") || continue
-        tables[splitext(basename(f))[1]] = f
-    end
-    MergedTables(tables)
-end
 
 ## Routes
-function _db_config_path()
-    cfg = joinpath(dirname(ServerState.data_dir()), "config", "databases.yml")
-    isfile(cfg) ? cfg : joinpath(dirname(ServerState.data_dir()), "config", "ci", "databases.yml")
-end
+# One path for the editor and the pipeline; ensure_databases copies the defaults template there when missing.
+_db_config_path() = _databases_path()
 
 # The database key a run's config names. Mirrors Validation.validate_project and
 # Provenance.required_database, which both read this key with the same "pr2"
@@ -476,7 +559,7 @@ end
 # dada2.taxonomy.database, so a merged run config always carries one; the
 # fallback covers only a hand-written config that omits it.
 #
-# This is a property of the run, not a global constant. _load_dbs used to read a
+# This is a property of the run. _load_dbs used to read a
 # `default:` section that no databases.yml in the repository defines, so it always
 # answered "pr2" and silently ignored dada2.taxonomy.database while context.jl and
 # validate.jl both honoured it.
@@ -488,12 +571,24 @@ function _run_database(run_cfg::AbstractDict)
     string(get(tx, "database", "pr2"))
 end
 
-# Resolve every configured database once. ensure_databases already covers every
-# entry in the file, so which one a given run consults is decided per run by
-# _run_database, not here.
-function _load_dbs()
-    path = _db_config_path()
-    ensure_databases(path)
+# Resolve (and download if needed) only the databases these runs classify against.
+# Called inside the job, so a slow download never holds up the HTTP request.
+function _load_dbs(study::String, run_pairs)
+    keys = Set{String}()
+    for (grp, run) in run_pairs
+        cfg_path = write_run_config(_project_ctx(study, run, grp))
+        push!(keys, _run_database(YAML.load_file(cfg_path)))
+    end
+    ensure_databases(_db_config_path(); only=keys)
+end
+
+# 409 for a pipeline or stage request that would run alongside an active job on the
+# same run or study. The body names the job in the way so the UI can point at it.
+function _job_conflict_response(e::JobConflict)
+    json_error(409, "run_busy",
+        "Not started: $(sprint(showerror, e)). Wait for it to finish or cancel it first.";
+        detail=(; job_id=e.existing.id, type=e.existing.type,
+                  study=e.existing.study, run=e.existing.run, stage=e.existing.stage))
 end
 
 @post "/api/v1/studies/{study}/pipeline" function(req, study::String)
@@ -506,22 +601,20 @@ end
         [(g, r) for g in _group_names(study) for r in _group_run_names(study, g)]
     ]
     db_cfg  = _db_config_path()
-    dbs     = _load_dbs()
 
-    job = submit_job!("pipeline"; study) do
-        merged_results = Vector{Any}(undef, length(run_pairs))
+    job = try submit_job!("pipeline"; study, exclusive=true) do
+        dbs = _load_dbs(study, run_pairs)
+        failed = fill("", length(run_pairs))
 
         Threads.@threads for i in eachindex(run_pairs)
             grp, run = run_pairs[i]
             try
-                merged_results[i] = _run_full_pipeline(study, run, db_cfg, dbs; group=grp)
+                _run_full_pipeline(study, run, db_cfg, dbs; group=grp)
             catch e
                 @error "Pipeline failed for run '$run' (group=$(repr(grp)))" exception=(e, catch_backtrace())
-                merged_results[i] = nothing
+                failed[i] = isnothing(grp) ? run : "$grp/$run"
             end
         end
-
-        empty!(merged_results)
 
         # Consolidate the record. Each stage writes its own tool log, but nothing
         # gathers them: without this call `_TOOL_LOG_FILES` is a registry no one
@@ -530,25 +623,34 @@ end
         # runs must not be finalised individually here as well.
         projects = ProjectCtx[_project_ctx(study, r, g) for (g, r) in run_pairs]
         isempty(projects) || PipelineLog.write_combined_log(projects)
+
+        bad = filter(!isempty, failed)
+        isempty(bad) || error("$(length(bad)) of $(length(run_pairs)) runs failed: $(join(bad, ", "))")
+    end
+    catch e
+        e isa JobConflict || rethrow()
+        return _job_conflict_response(e)
     end
 
     json(_job_to_namedtuple(job))
 end
 
 @post "/api/v1/studies/{study}/runs/{run}/pipeline" function(req, study::String, run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                          "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     grp     = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
     db_cfg  = _db_config_path()
-    dbs     = _load_dbs()
 
-    job = submit_job!("pipeline"; study, run) do
+    job = try submit_job!("pipeline"; study, run, group=grp, exclusive=true) do
+        dbs = _load_dbs(study, [(grp, run)])
         result = _run_full_pipeline(study, run, db_cfg, dbs; group=grp)
         # Gather this run's tool logs into its pipeline.log; see the study route.
         PipelineLog.finalise_log(_project_ctx(study, run, grp))
         result
+    end
+    catch e
+        e isa JobConflict || rethrow()
+        return _job_conflict_response(e)
     end
 
     json(_job_to_namedtuple(job))
@@ -557,17 +659,19 @@ end
 @post "/api/v1/studies/{study}/runs/{run}/stages/{stage}" function(req, study::String,
                                                                         run::String,
                                                                         stage::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                          "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     stage in ALL_RUNNABLE_STAGES || return json_error(400, "unknown_stage", "Unknown stage: $stage")
     grp     = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
     db_cfg  = _db_config_path()
-    dbs     = _load_dbs()
 
-    job = submit_job!("stage"; study, run, stage) do
+    job = try submit_job!("stage"; study, run, stage, group=grp, exclusive=true) do
+        dbs = _load_dbs(study, [(grp, run)])
         _run_stage(study, run, stage, db_cfg, dbs; group=grp)
+    end
+    catch e
+        e isa JobConflict || rethrow()
+        return _job_conflict_response(e)
     end
 
     json(_job_to_namedtuple(job))

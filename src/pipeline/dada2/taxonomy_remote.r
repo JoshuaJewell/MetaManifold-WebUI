@@ -3,47 +3,45 @@
 # Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 # Standalone taxonomy assignment for remote execution.
-# Called by _assign_taxonomy_remote() in taxonomy.jl via SSH.
+# Called by assign_taxonomy() in taxonomy.jl via SSH, through _run_remote_stage().
 # All paths refer to the remote filesystem.
 #
 # Arguments (key=value):
 #   functions   path to dada2_functions.r
-#   ckpt        path to ckpt_chimera.RData
-#   db          path to taxonomy database
-#   tables      output directory for taxonomy CSV files
-#   save        path to write checkpoint.RData
+#   staging     staging directory on this host
+#   db          path to the taxonomy database; either uploaded under staging or
+#               a pre-existing path named by databases.yml dada2.remote_path
 #   prefix      taxonomy output prefix (e.g. "taxonomy")
-#   multithread number of threads
+#   multithread TRUE|FALSE|<integer>
 #   min_boot    minimum bootstrap threshold
 #   levels      comma-separated taxonomy level names
+#   seed        master RNG seed
 #   verbose     true|false
 
 args <- commandArgs(trailingOnly = TRUE)
-p <- list()
-for (a in args) {
-    kv <- strsplit(a, "=", fixed = TRUE)[[1]]
-    if (length(kv) >= 2) p[[kv[1]]] <- paste(kv[-1], collapse = "=")
-}
 
-required <- c("functions", "ckpt", "db", "tables", "save",
-               "prefix", "multithread", "min_boot", "levels")
-missing_args <- setdiff(required, names(p))
-if (length(missing_args) > 0)
-    stop("Missing required arguments: ", paste(missing_args, collapse = ", "))
+functions_path <- sub("^functions=", "", grep("^functions=", args, value = TRUE)[1])
+if (is.na(functions_path)) stop("Missing required argument: functions")
+source(functions_path)
 
-source(p[["functions"]])
+p <- parse_remote_args(args, required = c("functions", "staging", "db", "prefix",
+                                          "multithread", "min_boot", "levels", "seed"))
 
-load(p[["ckpt"]])
-dir.create(p[["tables"]], recursive = TRUE, showWarnings = FALSE)
+staging    <- p[["staging"]]
+tables_dir <- file.path(staging, "Tables")
+dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+
+load(file.path(staging, "ckpt_chimera.RData"))
 
 verbose     <- tolower(p[["verbose"]]) == "true"
-multithread <- if (tolower(p[["multithread"]]) %in% c("true", "false")) {
-    tolower(p[["multithread"]]) == "true"
-} else {
-    as.integer(p[["multithread"]])
-}
+multithread <- remote_multithread(p[["multithread"]])
 min_boot    <- as.integer(p[["min_boot"]])
 levels      <- strsplit(p[["levels"]], ",", fixed = TRUE)[[1]]
+
+# assignTaxonomy bootstraps by randomly subsampling kmers, so without a seed
+# both the bootstrap values and the winning genus vary between runs on identical
+# input. Seed here exactly as learn_errors and denoise do.
+set.seed(as.integer(p[["seed"]]), kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
 
 taxa_result <- run_assign_taxonomy(
     seq_table_nochim, p[["db"]],
@@ -51,7 +49,7 @@ taxa_result <- run_assign_taxonomy(
     verbose
 )
 taxa_df <- write_taxa_table(taxa_result$tax, taxa_result$boot, index,
-                             p[["tables"]], p[["prefix"]])
+                             tables_dir, p[["prefix"]])
 
-save(seq_table_nochim, index, taxa_df, file = p[["save"]])
+save(seq_table_nochim, index, taxa_df, file = file.path(staging, "checkpoint.RData"))
 message("Remote taxonomy assignment complete.")

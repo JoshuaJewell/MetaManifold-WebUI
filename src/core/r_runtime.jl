@@ -8,11 +8,10 @@
 # on spawned job threads, and the NMDS, PERMANOVA, and alpha-significance
 # analyses, which run on HTTP handler tasks.
 #
-# Guarding one interpreter with two separate locks is not mutual exclusion, it is
-# a data race. The pipeline resets the workspace with `rm(list=ls())` when it
-# acquires the runtime, so it will destroy the globals an analysis is midway
-# through evaluating; and a single user is enough to provoke it, since a pipeline
-# runs on a background thread while the browser stays live.
+# One lock guards the interpreter. The pipeline resets the workspace with
+# `rm(list=ls())` on acquire, which would destroy an analysis's globals
+# mid-evaluation, and a pipeline runs on a background thread while the browser
+# stays live.
 module RRuntime
 
 export RBusyError, with_r_lock, r_busy

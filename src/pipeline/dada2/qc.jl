@@ -29,6 +29,7 @@
                 return nothing
             end
         end
+        snap = _begin_section(config_path, "dada2.file_patterns", hash_file)
 
         R"rm(list=ls())"
         _source_r_functions(ctx)
@@ -37,15 +38,15 @@
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
         try
             emit("Plotting unfiltered quality profiles")
-            fwd_for_plot   = isempty(ctx.fwd_files) ? nothing : ctx.single_sample ? ctx.fwd_files[1:1] : ctx.fwd_files
-            rev_for_plot   = isempty(ctx.rev_files) ? nothing : ctx.single_sample ? ctx.rev_files[1:1] : ctx.rev_files
+            fwd_for_plot   = isempty(ctx.fwd_files) ? nothing : ctx.fwd_files
+            rev_for_plot   = isempty(ctx.rev_files) ? nothing : ctx.rev_files
             unfiltered_pdf = joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf")
             R"plot_quality_profiles($fwd_for_plot, $rev_for_plot, $unfiltered_pdf)"
 
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
-        _write_section_hash(config_path, "dada2.file_patterns", hash_file)
+        _write_section_hash(config_path, "dada2.file_patterns", hash_file; snapshot=snap)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_unfiltered.pdf"))")
         emit("Log: $log_path")
         nothing
@@ -78,6 +79,7 @@
                 return nothing
             end
         end
+        snap = _begin_section(config_path, stage_sections(:dada2_filter_trim), hash_file)
 
         R"rm(list=ls())"
         _source_r_functions(ctx)
@@ -89,8 +91,6 @@
         out_fwd   = ctx.out_fwd
         in_rev    = ctx.in_rev_arg
         out_rev   = ctx.out_rev_arg
-        fwd_out   = ctx.fwd_out
-        rev_out   = ctx.rev_out
 
         log_path = joinpath(ctx.dirs["Logs"], "filter_trim.log")
         open(log_path, "w") do io; println(io, "=== filter_trim ===\nconfig: $config_path") end
@@ -125,8 +125,13 @@
             end
 
             emit("Plotting filtered quality profiles")
-            fwd_filt = isempty(fwd_out) ? nothing : ctx.single_sample ? fwd_out[1:1] : fwd_out
-            rev_filt = isempty(rev_out) ? nothing : ctx.single_sample ? rev_out[1:1] : rev_out
+            # Samples with no reads left have no filtered file to plot.
+            fwd_written = filter(isfile, something(out_fwd, String[]))
+            rev_written = filter(isfile, something(out_rev, String[]))
+            isempty(fwd_written) && isempty(rev_written) &&
+                error("No sample has reads left after filter and trim; check trunc_len and max_ee")
+            fwd_filt = isempty(fwd_written) ? nothing : fwd_written
+            rev_filt = isempty(rev_written) ? nothing : rev_written
             filtered_pdf = joinpath(ctx.dirs["Figures"], "quality_filtered.pdf")
             R"plot_quality_profiles($fwd_filt, $rev_filt, $filtered_pdf)"
 
@@ -135,7 +140,7 @@
         finally
             R"tryCatch({ sink(type='message'); sink(); close(con) }, error = function(e) NULL)"
         end
-        _write_section_hash(config_path, stage_sections(:dada2_filter_trim), hash_file)
+        _write_section_hash(config_path, stage_sections(:dada2_filter_trim), hash_file; snapshot=snap)
         emit("Written: $(joinpath(ctx.dirs["Figures"], "quality_filtered.pdf"))")
         emit("Checkpoint: $(ctx.ckpts["filter"])")
         emit("Log: $log_path")

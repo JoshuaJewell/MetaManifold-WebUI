@@ -4,10 +4,8 @@
 # jobs.jl is `module JobQueue` inside `module Server`, so the server module is
 # included here exactly as test_routes.jl does; including it does not start the
 # HTTP listener.
-if !isdefined(Main, :Server)
-    include(joinpath(@__DIR__, "..", "..", "src", "server", "server.jl"))
-end
-JQ  = Main.Server.JobQueue
+using MetaManifold
+JQ  = MetaManifold.Server.JobQueue
 DBS = MetaManifold.DuckDBStore
 
 # A job is settled once it is terminal and its task has actually finished.
@@ -27,6 +25,73 @@ jq_wait_parked(ch::Channel) = timedwait(60.0; pollint=0.01) do
 end
 
 @testset "JobQueue" begin
+
+    ## Per-run exclusivity: two jobs writing one run's files must not overlap.
+    @testset "exclusive submission refuses overlapping pipeline and stage jobs" begin
+        gate = Channel{Nothing}(1)
+        blocking(study, run; type="stage") =
+            JQ.submit_job!(() -> take!(gate), type; study, run, stage="x", exclusive=true)
+
+        a = blocking("sX", "r1")
+        @test_throws JQ.JobConflict blocking("sX", "r1")                 # same run
+        @test_throws JQ.JobConflict blocking("sX", "r1"; type="pipeline") # stage vs pipeline, same run
+        @test_throws JQ.JobConflict blocking("sX", nothing; type="pipeline") # study-wide vs run job
+        b = blocking("sX", "r2")                                          # another run is fine
+        c = blocking("sY", "r1")                                          # another study is fine
+
+        # The conflict names the job in the way.
+        err = try blocking("sX", "r1"); nothing catch e; e end
+        @test err isa JQ.JobConflict && err.existing.id == a.id
+        @test occursin(a.id, sprint(showerror, err))
+
+        # Non-exclusive submission is unchanged (tests and downloads rely on it).
+        d = JQ.submit_job!(() -> nothing, "stage"; study="sX", run="r1")
+        @test d.status in (JQ.queued, JQ.running, JQ.complete)
+        @test jq_wait_settled(d) === :ok
+
+        # Other job types never conflict.
+        e = JQ.submit_job!(() -> nothing, "db_download"; exclusive=true)
+        @test jq_wait_settled(e) === :ok
+
+        for _ in 1:3; put!(gate, nothing); end
+        @test all(j -> jq_wait_settled(j) === :ok, (a, b, c))
+
+        # Once settled, the run is free again.
+        f = blocking("sX", "r1")
+        put!(gate, nothing)
+        @test jq_wait_settled(f) === :ok
+
+        # A study-wide job blocks every run in its study until it settles.
+        g = blocking("sZ", nothing; type="pipeline")
+        @test_throws JQ.JobConflict blocking("sZ", "anyrun")
+        put!(gate, nothing)
+        @test jq_wait_settled(g) === :ok
+    end
+
+    @testset "a cancelled job still unwinding keeps its run busy" begin
+        started = Channel{Nothing}(1)
+        release = Channel{Nothing}(1)
+        job = JQ.submit_job!("stage"; study="sC", run="r1", exclusive=true) do
+            put!(started, nothing)
+            try
+                take!(release)
+            catch
+                # Simulate cleanup that outlives the cancel request.
+                take!(release)
+            end
+        end
+        take!(started)
+        @test jq_wait_parked(release) === :ok
+        JQ.cancel_job!(job.id)
+        @test timedwait(() -> JQ.is_terminal(job.status), 30.0; pollint=0.01) === :ok
+        # Terminal, but its task has not finished: still active for exclusivity.
+        @test !jq_settled(job)
+        @test_throws JQ.JobConflict JQ.submit_job!(() -> nothing, "stage"; study="sC", run="r1", exclusive=true)
+        put!(release, nothing)
+        @test jq_wait_settled(job) === :ok
+        ok = JQ.submit_job!(() -> nothing, "stage"; study="sC", run="r1", exclusive=true)
+        @test jq_wait_settled(ok) === :ok
+    end
 
     ## Terminal states are terminal: no transition may leave complete, failed or
     ## cancelled, whatever the job's task subsequently tries to record.

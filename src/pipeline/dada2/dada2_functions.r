@@ -19,6 +19,16 @@ library(dplyr)
 library(tibble)
 # library(yaml)
 
+# BiocParallel defaults to MulticoreParam, which forks. ShortRead::qa(), reached
+# from plotQualityProfile(), dispatches through bplapply() and so forks children
+# out of the embedded R session. That R session lives inside a multithreaded
+# Julia process, and fork() carries over only the calling thread: any lock a
+# Julia thread happened to hold is inherited already locked, with no owner left
+# to release it. The children wedge, and the parent blocks forever in select()
+# waiting to collect them, holding the R lock and the whole pipeline with it.
+# SerialParam does the same work in-process, where there is nothing to deadlock.
+BiocParallel::register(BiocParallel::SerialParam())
+
 # Config loading/validation, workspace setup, and file discovery are now
 # handled by dada2.jl, passing resolved paths and values directly to R.
 
@@ -119,41 +129,40 @@ filter_by_length <- function(seq_table, band_min, band_max) {
 #   denoised  - poor error model fit
 #   merged    - insufficient overlap, mismatched truncation lengths
 #   nochim    - high chimera rate
+#
+# `kept` indexes the samples that still had reads after filtering; the dada,
+# merge and nochim columns cover only those, and the others are recorded as 0.
 compute_pipeline_stats <- function(filter_stats, dada_fwd, dada_rev, merged,
-                                   seq_table_nochim, sample_names, mode) {
+                                   seq_table_nochim, sample_names, mode,
+                                   kept = seq_along(sample_names)) {
   get_n <- function(x) sum(getUniques(x))
+  # dada() and mergePairs() return a bare object for a single input.
+  as_list <- function(x) if (inherits(x, "dada") || is.data.frame(x)) list(x) else x
+  spread <- function(values) {
+    out <- numeric(length(sample_names))
+    out[kept] <- values
+    out
+  }
 
   track <- as.data.frame(filter_stats)
   colnames(track) <- c("input", "filtered")
 
   if (mode %in% c("paired", "forward") && !is.null(dada_fwd)) {
-    track$denoisedF <- sapply(dada_fwd, get_n)
+    track$denoisedF <- spread(sapply(as_list(dada_fwd), get_n))
   }
   if (mode %in% c("paired", "reverse") && !is.null(dada_rev)) {
-    track$denoisedR <- sapply(dada_rev, get_n)
+    track$denoisedR <- spread(sapply(as_list(dada_rev), get_n))
   }
   if (mode == "paired" && !is.null(merged)) {
-    track$merged <- sapply(merged, get_n)
+    track$merged <- spread(sapply(as_list(merged), get_n))
   }
-  track$nochim <- rowSums(seq_table_nochim)
+  track$nochim <- if (nrow(seq_table_nochim) == length(kept)) spread(rowSums(seq_table_nochim)) else 0
 
   rownames(track) <- sample_names
   track
 }
 
 ## Taxonomy
-
-# Downloads the reference database if not already present.
-# The file is stored in the project's Taxonomy/ folder so it can be reused
-# across runs without re-downloading.
-fetch_taxonomy_db <- function(uri, local_dir) {
-  local_path <- file.path(local_dir, basename(uri))
-  if (!file.exists(local_path)) {
-    message("  Downloading taxonomy database: ", uri)
-    download.file(uri, local_path, mode = "wb")
-  }
-  local_path
-}
 
 # Assigns taxonomy to ASVs using a naive Bayesian classifier.
 # outputBootstraps is always TRUE so bootstrap confidence values (0-100 per
@@ -236,4 +245,43 @@ write_combined_table <- function(taxa_df, index, seq_table, tables_dir, tax_file
   write.csv(dplyr::left_join(index, seq_t, by = "Sequence"),
             file.path(tables_dir, asv_filename), quote = FALSE, row.names = FALSE)
   invisible(NULL)
+}
+
+## Remote stage helpers
+# Shared by the *_remote.r scripts, which Julia uploads alongside this file and
+# runs through Rscript on the bioserver. They are defined here rather than
+# repeated in each script so the four remote stages parse their arguments and
+# coerce their thread count identically.
+
+# Parses `key=value` command-line arguments into a named list, splitting on the
+# FIRST `=` only so a value may itself contain one. Stops when a required key is
+# absent, which is a great deal easier to read than the NULL dereference that
+# would otherwise surface several lines later.
+parse_remote_args <- function(args, required = character(0)) {
+  p <- list()
+  for (a in args) {
+    kv <- strsplit(a, "=", fixed = TRUE)[[1]]
+    if (length(kv) >= 2) p[[kv[1]]] <- paste(kv[-1], collapse = "=")
+  }
+  missing_args <- setdiff(required, names(p))
+  if (length(missing_args) > 0)
+    stop("Missing required arguments: ", paste(missing_args, collapse = ", "))
+  p
+}
+
+# DADA2's `multithread` is a union type: TRUE/FALSE select "every core" and
+# "one core", an integer pins the count. The value arrives over the command line
+# as text, so restore the distinction rather than passing a string, which DADA2
+# would reject as invalid and silently downgrade to a single thread.
+remote_multithread <- function(x) {
+  if (tolower(x) %in% c("true", "false")) tolower(x) == "true" else as.integer(x)
+}
+
+# Reads a newline-delimited manifest written by the Julia side. Sample names and
+# read paths travel this way instead of being interpolated into the ssh command
+# string, which a remote login shell would word-split and glob.
+read_manifest <- function(path) {
+  if (is.null(path) || !nzchar(path) || !file.exists(path)) return(character(0))
+  lines <- readLines(path, warn = FALSE)
+  lines[nzchar(lines)]
 }

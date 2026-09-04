@@ -30,14 +30,18 @@ export dada2, dada2_denoise, dada2_classify,
        filter_length, chimera_removal, assign_taxonomy
 
     import Downloads
+    using CodecZlib
     using Logging, RCall, YAML
     using ..PipelineTypes
     using ..PipelineLog
     using ..Databases
     using ..Config
     using ..Validation
+    using ..Tools: _run_killable
+    using ..RemoteExec: run_remote, checked_target
 
     include("dada2/context.jl")   # shared helpers and _pipeline_context
+    include("dada2/remote.jl")    # bioserver offload: _remote_target, _run_remote_stage
     include("dada2/qc.jl")        # prefilter_qc, filter_trim
     include("dada2/denoise.jl")   # learn_errors, denoise, filter_length
     include("dada2/chimera.jl")   # chimera_removal
@@ -75,7 +79,6 @@ export dada2, dada2_denoise, dada2_classify,
     - `checkpoint.RData`   - final R environment snapshot
     """
     function dada2(config_path::String; progress=nothing, input_dir=nothing, workspace_root=nothing, taxonomy_db=nothing)
-        _single_sample_warned[] = false
         R"rm(list=ls())"
         prefilter_qc(config_path; progress, input_dir, workspace_root)
         filter_trim(config_path; progress, input_dir, workspace_root); R"gc()"
@@ -92,8 +95,9 @@ export dada2, dada2_denoise, dada2_classify,
     Run all DADA2 stages up to and including chimera removal. Returns a
     `DenoisedASVs` wire type that can be passed to `dada2_classify()`.
 
-    Skips automatically if `ckpt_chimera.RData` is newer than both `dada2.yml`
-    and the trimmed reads. Individual stage skip guards apply for partial runs.
+    Skips when `ckpt_chimera.RData` is newer than the trimmed reads and every
+    denoising stage's config section hash still matches. Individual stage skip
+    guards apply for partial runs.
     """
     function dada2_denoise(project::ProjectCtx, trimmed::TrimmedReads; progress=nothing)
         config_path    = write_run_config(project)
