@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { errorMessage } from '../api/errorMessage'
 import { useToast } from '../components/Toast'
-import type { AnalysisRequest, AnnotationSource } from '../api/types'
+import type { AnalysisRequest, AnnotationSource, ColFilter } from '../api/types'
 
-export interface UseAnalysisOpts {
+interface UseAnalysisOpts {
   study: string
   run: string
   group?: string | null
@@ -14,13 +14,9 @@ export interface UseAnalysisOpts {
   source?: AnnotationSource
   colFilters?: Record<string, ColFilter>
   prefix?: string | null
-  /** Subgroup names for pool-by-group support. */
-  subgroups?: string[]
   /** When false, rank fetching is suppressed (e.g. table not yet ready). Default true. */
   enabled?: boolean
 }
-
-type ColFilter = { include?: string[]; min?: number; max?: number }
 
 export interface UseAnalysisResult {
   ranks: string[]
@@ -43,9 +39,11 @@ export function useAnalysis(opts: UseAnalysisOpts): UseAnalysisResult {
       setRanks([])
       return
     }
+    let cancelled = false
     api.analysis.ranks(study, run, { table, group: group ?? undefined, source })
-      .then(setRanks)
-      .catch(() => setRanks([]))
+      .then(r => { if (!cancelled) setRanks(r) })
+      .catch(() => { if (!cancelled) setRanks([]) })
+    return () => { cancelled = true }
   }, [study, run, group, source, table, enabled])
 
   const body = useMemo((): AnalysisRequest | null => {

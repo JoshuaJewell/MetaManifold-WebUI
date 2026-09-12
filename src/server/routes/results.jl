@@ -19,14 +19,46 @@ function _require_duckdb(study::String, run::String;
     dir
 end
 
+## Taxonomy sources
+# Keyed by database path and checked against its mtime, since run lists ask
+# for every run.
+const _sources_cache = Dict{String,Tuple{Float64,Vector{String}}}()
+const _sources_lock  = ReentrantLock()
+
+"""
+    _taxonomy_sources(study, run; group) -> Union{Vector{String},Nothing}
+
+The classifiers ("VSEARCH", "DADA2") whose taxonomy the run's merged table
+carries. Empty before the table exists; `nothing` when the database cannot be
+read, for example while a pipeline stage holds it.
+"""
+function _taxonomy_sources(study::String, run::String;
+                           group::Union{String,Nothing}=nothing)
+    dir = _require_duckdb(study, run; group)
+    isnothing(dir) && return String[]
+    db = joinpath(dir, "results.duckdb")
+    stamp = mtime(db)
+    hit = lock(() -> get(_sources_cache, db, nothing), _sources_lock)
+    !isnothing(hit) && hit[1] == stamp && return hit[2]
+    present = try
+        with_results_db(dir) do con
+            Set(string.(DataFrame(DBInterface.execute(con,
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'merged'")).column_name))
+        end
+    catch
+        return nothing
+    end
+    sources = MetaManifold.Categories.available_sources(present)
+    lock(() -> _sources_cache[db] = (stamp, sources), _sources_lock)
+    sources
+end
+
 ## Table catalogue
 @get "/api/v1/studies/{study}/runs/{run}/results/tables" function(req,
                                                                     study::String,
                                                                     run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
     dir = _require_duckdb(study, run; group)
     isnothing(dir) && return json([])
@@ -61,10 +93,8 @@ end
                                                                             run::String,
                                                                             table::String,
                                                                             column::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
 
     dir = _require_duckdb(study, run; group)
@@ -83,10 +113,8 @@ end
                                                                             study::String,
                                                                             run::String,
                                                                             table::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
 
     dir = _require_duckdb(study, run; group)
@@ -130,14 +158,50 @@ end
     json(presets)
 end
 
+# Translate one `type`-keyed preset entry into `_build_where` params and the
+# colFilters record the frontend restores. Shared by both apply paths so the two
+# cannot drift in which entry types they understand.
+#
+#   include / exclude   {column, type, values}
+#   min / max           {column, type, value}
+#   sample_reads        {type, min?, max?, basis?}  - drops sample columns, not
+#                       rows, so it contributes no row params; it is restored
+#                       under the reserved SAMPLE_READS_FILTER_KEY.
+function _apply_typed_preset_item!(params::Dict{String,String}, col_filters::Dict{String,Any}, item)
+    (item isa AbstractDict && haskey(item, "type")) || return
+    typ = string(get(item, "type", ""))
+    if typ == "sample_reads"
+        entry = Dict{String,Any}()
+        for field in ("min", "max", "basis")
+            v = get(item, field, nothing)
+            isnothing(v) || (entry[field] = v)
+        end
+        isempty(entry) || (col_filters[SAMPLE_READS_FILTER_KEY] = entry)
+        return
+    end
+    col_str = string(get(item, "column", ""))
+    isempty(col_str) && return
+    target = get!(col_filters, col_str, Dict{String,Any}())
+    if typ == "include" || typ == "exclude"
+        vals_str = [string(v) for v in get(item, "values", [])]
+        params[(typ == "include" ? "col_in." : "col_ex.") * col_str] = join(vals_str, "|")
+        target[typ] = vals_str
+    elseif typ == "min" || typ == "max"
+        val = get(item, "value", nothing)
+        isnothing(val) && return
+        params["col_$typ.$col_str"] = string(val)
+        target[typ] = val
+    end
+    isempty(target) && delete!(col_filters, col_str)
+    nothing
+end
+
 @post "/api/v1/studies/{study}/runs/{run}/results/tables/{table}/apply-preset" function(req,
                                                                                          study::String,
                                                                                          run::String,
                                                                                          table::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
 
     dir = _require_duckdb(study, run; group)
@@ -213,30 +277,11 @@ end
             for (col, vals) in col_include
                 vals_vec = sort!(collect(vals))
                 params["col_in.$col"] = join(vals_vec, "|")
-                col_filters[col] = Dict("include" => vals_vec)
+                col_filters[col] = Dict{String,Any}("include" => vals_vec)
             end
 
             for item in raw_filters
-                (item isa Dict && haskey(item, "type")) || continue
-                col_str = string(get(item, "column", ""))
-                isempty(col_str) && continue
-                typ = string(get(item, "type", ""))
-                if typ == "include"
-                    vals = get(item, "values", [])
-                    vals_str = [string(v) for v in vals]
-                    params["col_in.$col_str"] = join(vals_str, "|")
-                    col_filters[col_str] = Dict("include" => vals_str)
-                elseif typ == "min"
-                    val = get(item, "value", nothing)
-                    isnothing(val) && continue
-                    params["col_min.$col_str"] = string(val)
-                    get!(col_filters, col_str, Dict{String,Any}())["min"] = val
-                elseif typ == "max"
-                    val = get(item, "value", nothing)
-                    isnothing(val) && continue
-                    params["col_max.$col_str"] = string(val)
-                    get!(col_filters, col_str, Dict{String,Any}())["max"] = val
-                end
+                _apply_typed_preset_item!(params, col_filters, item)
             end
 
             rows_before = only(DataFrame(DBInterface.execute(con,
@@ -248,26 +293,7 @@ end
         end
     else
         for item in raw_filters
-            item isa Dict || continue
-            col_str = string(get(item, "column", ""))
-            isempty(col_str) && continue
-            typ = string(get(item, "type", ""))
-            if typ == "include"
-                vals = get(item, "values", [])
-                vals_str = [string(v) for v in vals]
-                params["col_in.$col_str"] = join(vals_str, "|")
-                col_filters[col_str] = Dict("include" => vals_str)
-            elseif typ == "min"
-                val = get(item, "value", nothing)
-                isnothing(val) && continue
-                params["col_min.$col_str"] = string(val)
-                get!(col_filters, col_str, Dict{String,Any}())["min"] = val
-            elseif typ == "max"
-                val = get(item, "value", nothing)
-                isnothing(val) && continue
-                params["col_max.$col_str"] = string(val)
-                get!(col_filters, col_str, Dict{String,Any}())["max"] = val
-            end
+            _apply_typed_preset_item!(params, col_filters, item)
         end
 
         with_results_db(dir) do con
@@ -300,7 +326,21 @@ end
     filter_list = OrderedDict{String,Any}[]
     for (col, f) in pairs(filters)
         col_str = string(col)
+
+        # The sample read-count bound is not a column filter; keep it whole,
+        # basis included, as its own entry type.
+        if col_str == SAMPLE_READS_FILTER_KEY
+            entry = OrderedDict{String,Any}("type" => "sample_reads")
+            for field in (:min, :max, :basis)
+                v = get(f, field, nothing)
+                isnothing(v) || (entry[string(field)] = v isa AbstractString ? string(v) : v)
+            end
+            length(entry) > 1 && push!(filter_list, entry)
+            continue
+        end
+
         include_vals = get(f, :include, nothing)
+        exclude_vals = get(f, :exclude, nothing)
         min_val = get(f, :min, nothing)
         max_val = get(f, :max, nothing)
 
@@ -308,6 +348,13 @@ end
             push!(filter_list, OrderedDict{String,Any}(
                 "column" => col_str, "type" => "include",
                 "values" => [string(v) for v in include_vals]))
+        end
+        # An exclusion (e.g. the Contaminant category) was previously dropped on
+        # save, so a preset silently re-admitted the rows it was built to hide.
+        if !isnothing(exclude_vals) && exclude_vals isa AbstractVector && !isempty(exclude_vals)
+            push!(filter_list, OrderedDict{String,Any}(
+                "column" => col_str, "type" => "exclude",
+                "values" => [string(v) for v in exclude_vals]))
         end
         if !isnothing(min_val)
             push!(filter_list, OrderedDict{String,Any}(
@@ -321,14 +368,35 @@ end
         end
     end
 
-    open(path, "w") do io
+    tmp = path * ".tmp"
+    open(tmp, "w") do io
         println(io, "# ", replace(string(description), '\n' => ' '))
         YAML.write(io, Dict("filters" => filter_list))
     end
+    mv(tmp, path; force=true)
 
     stem = splitext(filename)[1]
     label = replace(stem, "_" => " ") |> s -> replace(s, "." => " - ") |> titlecase
     json((; name=stem, label, file=filename, description=string(description)))
+end
+
+## Filtered table fetch (save and export)
+# The rows and columns the Tables view shows for the same filters: row filters,
+# sample read-count bounds, and a total order so the written file is identical
+# from one save to the next.
+function _filtered_table_df(con, table::String, columns::Vector{String},
+                            params::Dict{String,String},
+                            sort_by::Union{String,Nothing}, sort_dir::String)
+    (where, sql_params) = _build_where(params, columns)
+    all_count_cols = _sample_count_columns(con, table)
+    kept_counts = _retain_sample_columns(con, table, all_count_cols, params,
+                                         where, sql_params)
+    dropped = Set(setdiff(all_count_cols, kept_counts))
+    select_cols = isempty(dropped) ? columns : filter(c -> !(c in dropped), columns)
+    select_sql = join(["\"$c\"" for c in select_cols], ", ")
+    order = _total_order_clause(sort_by, sort_dir, select_cols, columns)
+    DataFrame(DBInterface.execute(con,
+        "SELECT $select_sql FROM \"$table\" $where $order", sql_params))
 end
 
 ## Save filtered table to merged directory
@@ -336,10 +404,8 @@ end
                                                                                 study::String,
                                                                                 run::String,
                                                                                 table::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
 
     dir = _require_duckdb(study, run; group)
@@ -352,6 +418,9 @@ end
     save_name = string(save_name)
     Validation.is_safe_name(save_name) || return json_error(400, "invalid_name",
         "Name must contain only letters, numbers, dots, hyphens, and underscores")
+    # Overwriting a pipeline table would make it newer than its inputs, so merge_taxa would never rebuild it.
+    save_name in ("merged", "merged_otu", "merged_cdhit", "cluster_membership") &&
+        return json_error(400, "reserved_name", "'$save_name' is a pipeline table; choose another name")
 
     params = _body_filter_params(body)
     sort_by  = get(params, "sort",     nothing)
@@ -360,9 +429,7 @@ end
     df = with_results_db(dir) do con
         columns = _duckdb_columns(con, table)
         isempty(columns) && return nothing
-        (where, sql_params) = _build_where(params, columns)
-        order = _order_clause(sort_by, sort_dir, columns)
-        DataFrame(DBInterface.execute(con, "SELECT * FROM \"$table\" $where $order", sql_params))
+        _filtered_table_df(con, table, columns, params, sort_by, sort_dir)
     end
 
     isnothing(df) && return json_error(404, "table_not_found",
@@ -373,7 +440,7 @@ end
 
     with_results_db_write(dir) do con
         DBInterface.execute(con,
-            "CREATE OR REPLACE TABLE \"$(save_name)\" AS SELECT * FROM read_csv_auto('$(output_path)', auto_detect=true)")
+            "CREATE OR REPLACE TABLE \"$(save_name)\" AS SELECT * FROM read_csv_auto($(MetaManifold.Categories._sql_str(output_path)), auto_detect=true)")
     end
 
     @info "Saved filtered table: $output_path ($(nrow(df)) rows)"
@@ -385,10 +452,8 @@ end
                                                                                   study::String,
                                                                                   run::String,
                                                                                   table::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
 
     dir = _require_duckdb(study, run; group)
@@ -399,18 +464,41 @@ end
     params = _body_filter_params(body)
     sort_by  = get(params, "sort",     nothing)
     sort_dir = get(params, "sort_dir", "asc")
+    heatmap = string(get(body, :heatmap, "none"))
+    heatmap in HEATMAP_MODES || return json_error(400, "bad_heatmap",
+        "heatmap must be one of $(join(HEATMAP_MODES, ", "))")
+    hide_zeros = Bool(get(body, :hide_zeros, false))
 
-    df = with_results_db(dir) do con
+    result = with_results_db(dir) do con
         columns = _duckdb_columns(con, table)
-        (where, sql_params) = _build_where(params, columns)
-        order = _order_clause(sort_by, sort_dir, columns)
-        DataFrame(DBInterface.execute(con,
-            "SELECT * FROM \"$table\" $where $order", sql_params))
+        isempty(columns) && return nothing
+        (_filtered_table_df(con, table, columns, params, sort_by, sort_dir),
+         _sample_count_columns(con, table))
+    end
+
+    isnothing(result) && return json_error(404, "table_not_found",
+                                                "Table '$table' not found in results database")
+    df, count_cols = result
+    present = Set(names(df))
+    count_cols = filter(in(present), count_cols)
+    fills = _count_fills(df, count_cols, heatmap)
+    if hide_zeros
+        for c in count_cols
+            df[!, c] = [v isa Real && v == 0 ? missing : v for v in df[!, c]]
+        end
     end
 
     tmp = tempname() * ".xlsx"
     try
         XLSX.writetable(tmp, df)
+        XLSX.openxlsx(tmp; mode="rw") do xf
+            sh = xf[1]
+            ncol(df) > 0 && XLSX.setFont(sh, 1, 1:ncol(df); bold=true)
+            # Row 1 holds the headers, so data row i sits on sheet row i + 1.
+            for (i, j, hex) in fills
+                _xlsx_fill!(sh, i + 1, j, hex)
+            end
+        end
         data = read(tmp)
         filename = string(get(body, :filename, "$(study)_$(run)_filtered.xlsx"))
         filename = replace(filename, r"[^\w._-]" => "_")  # strip unsafe chars
@@ -441,10 +529,8 @@ end
                                                                               study::String,
                                                                               run::String,
                                                                               table::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
     dir = _merge_dir(study, run; group)
     path = joinpath(dir, table * ".csv")
@@ -480,10 +566,8 @@ end
                                                                               study::String,
                                                                               run::String,
                                                                               otu::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
 
     dir = _require_duckdb(study, run; group)
@@ -505,7 +589,8 @@ end
                ORDER BY
                  regexp_extract(m."SeqName", '^[A-Za-z_]*'),
                  CASE WHEN regexp_extract(m."SeqName", '(\\d+)') = '' THEN 0
-                      ELSE CAST(regexp_extract(m."SeqName", '(\\d+)') AS INTEGER) END
+                      ELSE CAST(regexp_extract(m."SeqName", '(\\d+)') AS INTEGER) END,
+                 m."SeqName"
             """, [otu])
 
         columns = _duckdb_columns(con, "merged")
@@ -517,10 +602,8 @@ end
 @get "/api/v1/studies/{study}/runs/{run}/results/qc" function(req,
                                                                study::String,
                                                                run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
     run_dir = _run_project_dir(study, run; group)
     report = joinpath(run_dir, "QC", "multiqc_report.html")
@@ -533,10 +616,8 @@ end
 @get "/api/v1/studies/{study}/runs/{run}/results/dada2" function(req,
                                                                    study::String,
                                                                    run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
     run_dir = _run_project_dir(study, run; group)
     run_rel = isnothing(group) ? run : joinpath(group, run)
@@ -595,10 +676,8 @@ end
 @get "/api/v1/studies/{study}/runs/{run}/results/dada2/stats" function(req,
                                                                         study::String,
                                                                         run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
     stats_path = joinpath(_run_project_dir(study, run; group), "dada2", "Tables", "pipeline_stats.csv")
     isfile(stats_path) || return json_error(404, "not_found", "No pipeline stats found")
@@ -613,10 +692,8 @@ end
 @get "/api/v1/studies/{study}/runs/{run}/results/otu-counts" function(req,
                                                                        study::String,
                                                                        run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = _req_group(req)
 
     dir = _require_duckdb(study, run; group)
@@ -628,8 +705,8 @@ end
         "cluster_membership" in tables || return json((; counts=Dict{String,Int}()))
 
         df = DataFrame(DBInterface.execute(con,
-            """SELECT "OTU", COUNT(*) AS n FROM cluster_membership GROUP BY "OTU" """))
-        counts = Dict(string(row.OTU) => row.n for row in eachrow(df))
+            """SELECT "OTU", COUNT(*) AS n FROM cluster_membership GROUP BY "OTU" ORDER BY "OTU" """))
+        counts = OrderedDict(string(row.OTU) => row.n for row in eachrow(df))
         json((; counts))
     end
 end

@@ -23,12 +23,12 @@ using MetaManifold.Categories
     filters = Dict{String,Any}("bacteria" => Dict("filters" =>
         [Dict("column" => "Domain", "pattern" => "Bacteria", "action" => "keep")]))
     cats = [Dict("name" => "Bacteria", "filter" => "bacteria")]
-    case = Categories.category_case_when(cats, Set(["Domain"]), "VSEARCH"; filters)
+    case = Categories.category_case_when(cats, Set(["Domain", "Pident"]), "VSEARCH"; filters)
     @test occursin("ELSE 'Unassigned'", case)
     @test occursin("THEN 'Bacteria'", case)
 
     # Empty table_alias produces bare column references (for UPDATE SET contexts).
-    case_bare = Categories.category_case_when(cats, Set(["Domain"]), "VSEARCH";
+    case_bare = Categories.category_case_when(cats, Set(["Domain", "Pident"]), "VSEARCH";
                                               filters, table_alias = "")
     @test occursin("\"Domain\"", case_bare)
     @test !occursin("m.\"Domain\"", case_bare)
@@ -38,8 +38,8 @@ end
     db = DuckDB.DB()
     con = DBInterface.connect(db)
     DBInterface.execute(con, """CREATE TABLE merged AS SELECT * FROM (VALUES
-        ('asv1','Bacteria', 10),
-        ('asv2','Eukaryota', 5)) AS t("SeqName","Domain","A_s1")""")
+        ('asv1','Bacteria', 99.0, 10),
+        ('asv2','Eukaryota', 97.0, 5)) AS t("SeqName","Domain","Pident","A_s1")""")
     library = Dict{String,Any}(
         "filters" => Dict{String,Any}(
             "bacteria" => Dict("filters" => [Dict("column" => "Domain",
@@ -58,6 +58,8 @@ end
     @test "Category__default" in names(DataFrame(DBInterface.execute(con,
         "SELECT * FROM merged LIMIT 0")))
     @test all(!ismissing, rows.c)
+    # The classification itself, not merely its presence.
+    @test rows.c == ["Bacteria", "Other"]
 end
 
 @testset "apply_max_x! deletes high-X rows" begin
@@ -77,7 +79,7 @@ end
     db = DuckDB.DB()
     con = DBInterface.connect(db)
     DBInterface.execute(con, """CREATE TABLE merged AS SELECT * FROM (VALUES
-        ('asv1', 'Bacteria')) AS t("SeqName","Domain")""")
+        ('asv1', 'Bacteria', 99.0)) AS t("SeqName","Domain","Pident")""")
     library = Dict{String,Any}(
         "filters" => Dict{String,Any}(
             "bacteria" => Dict("filters" => [Dict("column" => "Domain",
@@ -122,7 +124,7 @@ end
         ('asv2', 'Clostridia',  5)) AS t("SeqName","Class","A_s1")""")
 
     # Bare-column CASE mirrors the fragment analysis appends to a WHERE clause.
-    case = Categories.category_case_when(cats, Set(["SeqName","Class","A_s1"]),
+    case = Categories.category_case_when(cats, Set(["SeqName","Class","A_s1","Pident"]),
                                          "VSEARCH"; filters,
                                          table_alias="", strict=true)
     @test case !== nothing
@@ -154,7 +156,7 @@ end
 
     # Realisable once the whitelist column (Genus) exists. Retained is a branch;
     # Contaminant is the filterless catch-all (the ELSE label).
-    case = Categories.category_case_when(cats, Set(["SeqName", "Domain", "Genus"]),
+    case = Categories.category_case_when(cats, Set(["SeqName", "Domain", "Genus", "Pident"]),
                                          "VSEARCH"; filters,
                                          table_alias="", strict=true)
     @test case !== nothing
@@ -179,7 +181,7 @@ end
     @test kept.s == ["asv1"]
 
     # Missing the whitelist column: not realisable, so nothing is dropped.
-    @test Categories.category_case_when(cats, Set(["SeqName", "Domain"]), "VSEARCH";
+    @test Categories.category_case_when(cats, Set(["SeqName", "Domain", "Pident"]), "VSEARCH";
                                         filters, table_alias="", strict=true) === nothing
 
     # filter_column_refs surfaces the whitelist column, source-translated.
@@ -194,7 +196,7 @@ end
         [Dict("column" => "Class", "pattern" => "Craniata", "action" => "keep")]))
     cats = [Dict("name" => "Keep", "filter" => "vertebrates"),
             Dict("name" => "Rest")]  # no filter: catch-all
-    case = Categories.category_case_when(cats, Set(["SeqName", "Class"]), "VSEARCH";
+    case = Categories.category_case_when(cats, Set(["SeqName", "Class", "Pident"]), "VSEARCH";
                                          filters, table_alias="")
     @test occursin("THEN 'Keep'", case)
     @test occursin("ELSE 'Rest'", case)
@@ -203,8 +205,42 @@ end
     # With no filtered branch at all, a filterless set is just the catch-all
     # literal (non-strict) and nothing under strict (no branch to trust).
     only_rest = [Dict("name" => "Rest")]
-    @test Categories.category_case_when(only_rest, Set(["Class"]), "VSEARCH";
+    @test Categories.category_case_when(only_rest, Set(["Class", "Pident"]), "VSEARCH";
                                         filters, table_alias="") == "'Rest'"
-    @test Categories.category_case_when(only_rest, Set(["Class"]), "VSEARCH";
+    @test Categories.category_case_when(only_rest, Set(["Class", "Pident"]), "VSEARCH";
                                         filters, table_alias="", strict=true) === nothing
+end
+
+@testset "source resolution refuses a taxonomy the table does not carry" begin
+    filters = Dict{String,Any}("bact" => Dict("filters" =>
+        [Dict("column" => "Domain", "pattern" => "Bacteria", "action" => "keep")]))
+    cats = [Dict("name" => "Bacteria", "filter" => "bact"), Dict("name" => "Rest")]
+
+    # Three layouts merge_taxa produces (see the note at the top of categories.jl).
+    both      = Set(["SeqName", "Domain", "Domain_dada2", "Pident", "Domain_boot"])
+    no_vs     = Set(["SeqName", "Domain", "Domain_boot"])       # vsearch disabled
+    no_dada2  = Set(["SeqName", "Domain", "Pident"])            # DADA2 classify off
+
+    @test Categories.available_sources(both)     == ["VSEARCH", "DADA2"]
+    @test Categories.available_sources(no_vs)    == ["DADA2"]
+    @test Categories.available_sources(no_dada2) == ["VSEARCH"]
+    @test Categories.available_sources(Set(["SeqName", "A_s1"])) == String[]
+
+    @test Categories.rank_col("Domain", "VSEARCH", both)  == "Domain"
+    @test Categories.rank_col("Domain", "DADA2",   both)  == "Domain_dada2"
+    @test Categories.rank_col("Domain", "DADA2",   no_vs) == "Domain"   # plain names are DADA2's
+    @test isnothing(Categories.rank_col("Domain", "VSEARCH", no_vs))
+    @test isnothing(Categories.rank_col("Domain", "DADA2",   no_dada2))
+
+    # DADA2 on a vsearch-free table reads the plain columns.
+    case = Categories.category_case_when(cats, no_vs, "DADA2"; filters, table_alias="")
+    @test occursin("\"Domain\"", case) && occursin("THEN 'Bacteria'", case)
+
+    # VSEARCH on the same table refuses: display gets the neutral Unassigned
+    # literal (not the set's catch-all, which would label every row with a real
+    # category), and a strict caller gets nothing so no rows are dropped.
+    @test (@test_logs (:warn,) match_mode=:any Categories.category_case_when(
+        cats, no_vs, "VSEARCH"; filters, table_alias="")) == "'Unassigned'"
+    @test (@test_logs (:warn,) match_mode=:any Categories.category_case_when(
+        cats, no_vs, "VSEARCH"; filters, table_alias="", strict=true)) === nothing
 end

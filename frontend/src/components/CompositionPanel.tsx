@@ -2,11 +2,12 @@
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
+import { useAnalysisSource } from './analysisSource'
 import { errorMessage } from '../api/errorMessage'
 import { DataTable } from './DataTable'
 import { NameDialog } from './NameDialog'
-import { TaxaCompositionChart } from './TaxaCompositionChart'
 import { useToast } from './Toast'
+import { discoverResultsTables, type AnalysisOption } from './annotationShared'
 import type {
   AnnotationSource, CategorySet, ColFilter, CompositionBuildResult,
   TableQuery,
@@ -16,7 +17,7 @@ import type {
 const UNASSIGNED_COLOUR = '#95a5a6'
 
 export function CompositionPanel({
-  study, run, group, subgroups, source,
+  study, run, group, subgroups, source: configuredSource,
 }: {
   study: string
   run: string
@@ -26,8 +27,9 @@ export function CompositionPanel({
   // run config cascade. Passed by RunView; defaults to VSEARCH when absent.
   source?: AnnotationSource
 }) {
+  // The analysis tab's classifier wins over the run's configured one.
+  const source = useAnalysisSource() ?? configuredSource
   const toast = useToast()
-  // Resolve the effective source: prefer the caller-supplied pipeline value, then VSEARCH.
   const effectiveSource: AnnotationSource = source ?? 'VSEARCH'
 
   //## Category set selection
@@ -37,7 +39,41 @@ export function CompositionPanel({
   //## Sub-group scope: null = All, or a specific sub-group name
   const [subgroup, setSubgroup] = useState<string | null>(null)
 
-  //## Summary state (replaces build result; fetched on mount and on selection change)
+  //## Results table and breakdown, with the same choices as the composition chart
+  const [tableOptions, setTableOptions] = useState<AnalysisOption[]>([])
+  const [table, setTable] = useState('merged')
+  const [tag, setTag] = useState<'rank' | 'category'>('category')
+  const [ranks, setRanks] = useState<string[]>([])
+  const [rank, setRank] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    discoverResultsTables(study, run, group ?? null).then(opts => {
+      if (cancelled) return
+      setTableOptions(opts)
+      setTable(current => opts.some(o => o.key === current) ? current
+        : opts.some(o => o.key === 'merged') ? 'merged' : opts[0]?.key ?? current)
+    })
+    return () => { cancelled = true }
+  }, [study, run, group])
+
+  useEffect(() => {
+    if (tag !== 'rank') return
+    let cancelled = false
+    api.analysis.ranks(study, run, { table, group: group ?? null, ...(source ? { source } : {}) })
+      .then(rs => {
+        if (cancelled) return
+        setRanks(rs)
+        // Deepest rank by default, matching the chart route's default.
+        setRank(current => current && rs.includes(current) ? current : rs[rs.length - 1] ?? null)
+      })
+      .catch(() => { if (!cancelled) setRanks([]) })
+    return () => { cancelled = true }
+  }, [study, run, group, table, tag])
+
+  const byCategory = tag === 'category'
+
+  //## Summary state
   const [summary, setSummary] = useState<CompositionBuildResult | null>(null)
 
   //## Live colour editing
@@ -73,8 +109,8 @@ export function CompositionPanel({
     [categoryColourMap, colourOverrides],
   )
 
-  // Recording an edit that returns a category to its set colour clears the
-  // override rather than storing a no-op, so Save reflects only real change.
+  // Returning a category to its set colour drops the override, so Save
+  // reflects only real changes.
   const setCategoryColour = useCallback((name: string, colour: string) => {
     setColourOverrides(prev => {
       const base = categoryColourMap[name]
@@ -162,43 +198,76 @@ export function CompositionPanel({
     api.composition.categorySets().then(setCategorySets).catch(() => {})
   }, [])
 
-  //## Fetch summary whenever study/run/group/catSet/subgroup changes
+  //## Fetch the summary whenever its scope or breakdown changes
   useEffect(() => {
     setSummary(null)
-    api.composition.summary(study, run,
-      { category_set: selectedCatSet, subgroup }, group ?? null)
-      .then(setSummary)
-      .catch(() => setSummary(null))
-  }, [study, run, group, selectedCatSet, subgroup])
+    if (!byCategory && !rank) return
+    let cancelled = false
+    api.composition.summary(study, run, {
+      category_set: selectedCatSet, subgroup, table, tag,
+      value: byCategory ? selectedCatSet : rank!,
+      ...(source ? { source } : {}),
+    }, group ?? null)
+      .then(r => { if (!cancelled) setSummary(r) })
+      .catch(() => { if (!cancelled) setSummary(null) })
+    return () => { cancelled = true }
+  }, [study, run, group, selectedCatSet, subgroup, table, tag, rank, byCategory, source])
 
   //## Paginated table fetchers (include selectedCatSet so the backend tags the right column)
   const fetcher = useCallback(
     (q: TableQuery) =>
-      api.composition.query(study, run, effectiveSource, q, group, selectedCatSet),
-    [study, run, effectiveSource, group, selectedCatSet],
+      api.composition.query(study, run, effectiveSource, q, group, selectedCatSet, table),
+    [study, run, effectiveSource, group, selectedCatSet, table],
   )
 
   const distinctFetcher = useCallback(
     (column: string, activeFilters?: Record<string, ColFilter>, keywordFilter?: string) =>
       api.composition.distinct(study, run, effectiveSource, column, activeFilters,
-        group, selectedCatSet, keywordFilter),
-    [study, run, effectiveSource, group, selectedCatSet],
+        group, selectedCatSet, keywordFilter, table),
+    [study, run, effectiveSource, group, selectedCatSet, table],
   )
 
   return (
     <div className="card">
-      {/* Category set and sub-group selectors */}
+      {/* Table, breakdown and sub-group selectors */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <label style={{ fontWeight: 600, fontSize: '.85rem' }}>Categories:</label>
+        <label style={{ fontWeight: 600, fontSize: '.85rem' }}>Table:</label>
         <select
-          value={selectedCatSet}
-          onChange={e => setSelectedCatSet(e.target.value)}
+          value={table}
+          onChange={e => setTable(e.target.value)}
           style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid var(--color-border)' }}
         >
-          {categorySets.map(cs => (
-            <option key={cs.name} value={cs.name}>{cs.label}</option>
-          ))}
+          {tableOptions.length === 0 && <option value={table}>{table}</option>}
+          {tableOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
         </select>
+        <label style={{ fontWeight: 600, fontSize: '.85rem' }}>Tag by:</label>
+        <select
+          value={tag}
+          onChange={e => setTag(e.target.value as 'rank' | 'category')}
+          style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid var(--color-border)' }}
+        >
+          <option value="category">Category</option>
+          <option value="rank">Rank</option>
+        </select>
+        {byCategory ? (
+          <select
+            value={selectedCatSet}
+            onChange={e => setSelectedCatSet(e.target.value)}
+            style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid var(--color-border)' }}
+          >
+            {categorySets.map(cs => (
+              <option key={cs.name} value={cs.name}>{cs.label}</option>
+            ))}
+          </select>
+        ) : (
+          <select
+            value={rank ?? ''}
+            onChange={e => setRank(e.target.value)}
+            style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid var(--color-border)' }}
+          >
+            {ranks.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        )}
         {(subgroups ?? []).length >= 2 && (
           <>
             <label style={{ fontWeight: 600, fontSize: '.85rem' }}>Sub-group:</label>
@@ -222,8 +291,8 @@ export function CompositionPanel({
           <table style={{ borderCollapse: 'collapse', fontSize: '.82rem', width: '100%', maxWidth: 600 }}>
             <thead>
               <tr style={{ borderBottom: '2px solid var(--color-border)' }}>
-                <th style={{ textAlign: 'center', padding: '4px 10px' }}>Colour</th>
-                <th style={{ textAlign: 'left', padding: '4px 10px' }}>Category</th>
+                {byCategory && <th style={{ textAlign: 'center', padding: '4px 10px' }}>Colour</th>}
+                <th style={{ textAlign: 'left', padding: '4px 10px' }}>{byCategory ? 'Category' : rank}</th>
                 <th style={{ textAlign: 'right', padding: '4px 10px' }}>Rows</th>
                 <th style={{ textAlign: 'right', padding: '4px 10px' }}>Reads</th>
                 <th style={{ textAlign: 'right', padding: '4px 10px' }}>%</th>
@@ -232,7 +301,7 @@ export function CompositionPanel({
             <tbody>
               {Object.entries(summary.categories).map(([name, stats]) => (
                 <tr key={name} style={{ borderBottom: '1px solid var(--color-border)' }}>
-                  <td style={{ padding: '3px 10px', textAlign: 'center' }}>
+                  {byCategory && <td style={{ padding: '3px 10px', textAlign: 'center' }}>
                     {savableCategories.has(name) ? (
                       <input
                         type="color"
@@ -244,7 +313,7 @@ export function CompositionPanel({
                                  borderRadius: 4, background: 'none', cursor: 'pointer', verticalAlign: 'middle' }}
                       />
                     ) : (
-                      // Catch-all bucket: a fixed swatch, not an editable, unsavable colour.
+                      // Catch-all bucket with a fixed swatch.
                       <span
                         title={`${name} (fixed colour)`}
                         style={{ display: 'inline-block', width: 26, height: 20,
@@ -252,8 +321,8 @@ export function CompositionPanel({
                                  background: effectiveColourMap[name] ?? UNASSIGNED_COLOUR, verticalAlign: 'middle' }}
                       />
                     )}
-                  </td>
-                  <td style={{ padding: '3px 10px', fontWeight: 600, color: effectiveColourMap[name] ?? 'var(--color-fg)' }}>
+                  </td>}
+                  <td style={{ padding: '3px 10px', fontWeight: 600, color: 'var(--color-fg)' }}>
                     {name}
                   </td>
                   <td style={{ padding: '3px 10px', textAlign: 'right' }}>{stats.rows.toLocaleString()}</td>
@@ -262,7 +331,7 @@ export function CompositionPanel({
                 </tr>
               ))}
               <tr style={{ borderTop: '2px solid var(--color-border)', fontWeight: 600 }}>
-                <td style={{ padding: '3px 10px' }}></td>
+                {byCategory && <td style={{ padding: '3px 10px' }}></td>}
                 <td style={{ padding: '3px 10px' }}>Total</td>
                 <td style={{ padding: '3px 10px', textAlign: 'right' }}>{summary.total_rows.toLocaleString()}</td>
                 <td style={{ padding: '3px 10px', textAlign: 'right' }}>{summary.total_reads.toLocaleString()}</td>
@@ -272,14 +341,14 @@ export function CompositionPanel({
           </table>
 
           {/* Colour action row: persist the pending overrides into the set */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+          {byCategory && <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
             <button
               className="btn btn-primary"
               onClick={handleSaveCatSet}
               disabled={catSetBusy || !hasPendingColours}
               title="Overwrite the selected category set with the edited colours"
             >
-              {catSetBusy ? 'Saving...' : 'Save'}
+              {catSetBusy ? 'Saving…' : 'Save'}
             </button>
             <button
               className="btn"
@@ -287,11 +356,11 @@ export function CompositionPanel({
               disabled={catSetBusy}
               title="Save the edited colours as a new category set"
             >
-              Save as...
+              Save as…
             </button>
             {selectedCatSet !== 'default' && (
               <button
-                className="btn"
+                className="btn btn-danger"
                 onClick={handleDeleteCatSet}
                 disabled={catSetBusy}
                 title="Delete the selected category set"
@@ -302,29 +371,17 @@ export function CompositionPanel({
             {hasPendingColours && (
               <span style={{ fontSize: '.78rem', color: 'var(--color-muted-fg)' }}>Unsaved colour changes</span>
             )}
-          </div>
+          </div>}
         </div>
       )}
 
       {/* Data table */}
       <DataTable
-        key={`comp:${study}/${run}/${group ?? ''}/${effectiveSource}/${selectedCatSet}`}
-        storageKey={`comp:${study}/${run}/${group ?? ''}/${effectiveSource}/${selectedCatSet}`}
+        key={`comp:${study}/${run}/${group ?? ''}/${effectiveSource}/${table}/${selectedCatSet}`}
+        storageKey={`comp:${study}/${run}/${group ?? ''}/${effectiveSource}/${table}/${selectedCatSet}`}
         fetcher={fetcher}
         distinctFetcher={distinctFetcher}
       />
-
-      {/* Unified composition chart: controlled subgroup from the panel-level selector */}
-      <div style={{ marginTop: 24 }}>
-        <TaxaCompositionChart
-          study={study}
-          run={run}
-          group={group ?? null}
-          subgroups={subgroups}
-          defaultTag="category"
-          subgroup={subgroup}
-        />
-      </div>
 
       {showSaveAs && (
         <NameDialog

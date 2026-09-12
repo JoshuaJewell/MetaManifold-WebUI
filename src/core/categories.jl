@@ -24,8 +24,70 @@ const _RANK_PAIRS = [
     ("Species",    "Species_dada2"),
 ]
 
+const _DADA2_SUFFIX = "_dada2"
+
+# `Pident` is written by `merge_taxonomy_counts` for every vsearch hit and by
+# nothing else, so its presence is the marker that vsearch taxonomy is in the
+# table. Three layouts reach this code:
+#
+#   both enabled        plain ranks = VSEARCH, `<rank>_dada2` = DADA2, Pident, *_boot
+#   vsearch disabled    plain ranks = DADA2,   no _dada2, no Pident, *_boot
+#   dada2 classify off  plain ranks = VSEARCH, no _dada2, Pident,     no *_boot
+#
+# The plain rank columns therefore mean different things depending on whether
+# vsearch ran, which is what these helpers exist to resolve.
+const _VSEARCH_MARKER = "Pident"
+
+"""
+    vsearch_available(present) -> Bool
+
+Whether the table carries vsearch taxonomy, i.e. whether the plain rank columns
+are VSEARCH's rather than DADA2's.
+"""
+vsearch_available(present) = _VSEARCH_MARKER in present
+
+"""
+    rank_col(rank, source, present) -> Union{String,Nothing}
+
+Resolve the column holding `source`'s taxonomy for `rank`, given the column
+names actually `present`. Returns `nothing` when the table carries no taxonomy
+from that source - callers must treat that as an error rather than reading the
+other source's column, which would silently mislabel one method's calls as the
+other's.
+"""
+function rank_col(rank::AbstractString, source::AbstractString, present)
+    r = String(rank)
+    if source == "VSEARCH"
+        # vsearch always writes the plain names, and only writes them when it ran.
+        return (vsearch_available(present) && r in present) ? r : nothing
+    elseif source == "DADA2"
+        d = r * _DADA2_SUFFIX
+        d in present && return d
+        # No suffixed column. The plain names are DADA2's only when vsearch did
+        # not run; otherwise they are vsearch's and DADA2 simply is not here.
+        return (!vsearch_available(present) && r in present) ? r : nothing
+    end
+    nothing
+end
+
+"""
+    available_sources(present) -> Vector{String}
+
+Which taxonomy sources the table actually carries, in ("VSEARCH", "DADA2")
+order. Empty when the table has no taxonomy at all - which happens when vsearch
+is disabled and DADA2 classification is skipped.
+"""
+function available_sources(present)
+    ranks = first.(_RANK_PAIRS)
+    filter(["VSEARCH", "DADA2"]) do src
+        any(r -> !isnothing(rank_col(r, src, present)), ranks)
+    end
+end
+
 # Return the column name used in the composed table for a category set.
-column_name(set_name::AbstractString) = "Category__" * String(set_name)
+# A named source gets its own column, so both classifiers' tags can sit in one table.
+column_name(set_name::AbstractString, source::Union{Nothing,AbstractString}=nothing) =
+    "Category__" * String(set_name) * (isnothing(source) ? "" : "__" * String(source))
 
 ## Filter to SQL translation
 
@@ -38,10 +100,21 @@ _sql_str(s) = "'" * replace(string(s), "'" => "''") * "'"
 # for DADA2 taxonomy columns become their _dada2 equivalents.
 # Subdivision is not in RANK_HIERARCHY but exists in merged tables and is
 # handled explicitly here.
-function col_translate_map(source::String)
+#
+# Pass `present` (the columns the table actually has) wherever it is known: it
+# resolves each rank against the table's actual layout. Without it the mapping
+# is the naive suffix rule, which names columns that need not exist.
+function col_translate_map(source::String, present=nothing)
+    isnothing(present) && return Dict{String,String}(
+        vs => (source == "VSEARCH" ? vs : da) for (vs, da) in _RANK_PAIRS)
+
     m = Dict{String,String}()
     for (vs, da) in _RANK_PAIRS
-        m[vs] = source == "VSEARCH" ? vs : da
+        resolved = rank_col(vs, source, present)
+        # Not in the table for this source: keep the naive name so the caller's
+        # own "column missing" handling reports the rank it asked for, rather
+        # than quietly substituting the other source's column.
+        m[vs] = isnothing(resolved) ? (source == "VSEARCH" ? vs : da) : resolved
     end
     m
 end
@@ -99,10 +172,11 @@ function filter_to_sql_conditions(filter_config::Dict, col_set::Set{String},
                 match_expr = "CAST($r AS VARCHAR) LIKE '%$(pat_esc)%'"
             end
 
+            # A NULL value counts as no match.
             if action == "keep"
-                push!(conditions, match_expr)
+                push!(conditions, "COALESCE($match_expr, FALSE)")
             else  # exclude
-                push!(conditions, "NOT ($match_expr)")
+                push!(conditions, "NOT COALESCE($match_expr, FALSE)")
             end
 
         # Type-based rules (min/max/include)
@@ -185,9 +259,20 @@ returned so the caller drops nothing rather than the wrong rows.
 function category_case_when(categories::Vector, merged_col_set::Set{String},
                             source::String; filters::Dict,
                             table_alias::String="m", strict::Bool=false)
-    col_map = col_translate_map(source)
+    col_map = col_translate_map(source, merged_col_set)
     branches = String[]
     catchall = "Unassigned"
+
+    # A source the table does not carry must not silently borrow the other
+    # source's columns: on a vsearch-free table the plain rank names hold DADA2
+    # taxonomy, and a VSEARCH-sourced filter naming "Genus" would match against
+    # it as though vsearch had run. Refuse instead, loudly.
+    avail = available_sources(merged_col_set)
+    if !(source in avail)
+        @warn "category_case_when: the table carries no $source taxonomy, so nothing " *
+              "can be categorised from it. Set the source to one this run produced." source available=avail
+        return strict ? nothing : _sql_str(catchall)
+    end
 
     # Resolve filter names against stringified keys. A caller that builds this
     # dict itself, rather than taking it from CompositionLibrary.load, may hold a
@@ -256,7 +341,7 @@ through as the `filters` a category's classification resolves against.
 """
 function write_category_columns!(con, table::String, source::String,
                                  set_names::Vector{String};
-                                 library::Dict)
+                                 library::Dict, suffixed::Bool=false)
     cols = Set(string.(DataFrame(DBInterface.execute(con,
         "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
         [table])).column_name))
@@ -279,7 +364,7 @@ function write_category_columns!(con, table::String, source::String,
         # Use empty alias: UPDATE runs against the bare table, no FROM alias.
         case = category_case_when(cats, cols, source;
                                   filters, table_alias="")
-        colname = column_name(set_name)
+        colname = column_name(set_name, suffixed ? source : nothing)
         DBInterface.execute(con,
             "ALTER TABLE \"$table\" ADD COLUMN IF NOT EXISTS \"$colname\" VARCHAR")
         DBInterface.execute(con,
@@ -325,13 +410,13 @@ the whole composition library Dict; see `write_category_columns!`.
 """
 function ensure_columns!(con, table::String, source::String,
                          set_names::Vector{String};
-                         library::Dict)
+                         library::Dict, suffixed::Bool=false)
     present = Set(string.(DataFrame(DBInterface.execute(con,
         "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
         [table])).column_name))
-    missing_sets = filter(s -> !(column_name(s) in present), set_names)
+    missing_sets = filter(s -> !(column_name(s, suffixed ? source : nothing) in present), set_names)
     isempty(missing_sets) && return nothing
-    write_category_columns!(con, table, source, missing_sets; library)
+    write_category_columns!(con, table, source, missing_sets; library, suffixed)
     nothing
 end
 

@@ -79,7 +79,9 @@ end
 """Extract the optional `group` query parameter from a request."""
 function _req_group(req)
     g = get(queryparams(req), "group", nothing)
-    isnothing(g) || isempty(g) ? nothing : g
+    (isnothing(g) || isempty(g)) && return nothing
+    _valid_name(g) || throw(BadRequest("Invalid group name: $(repr(g))"))
+    g
 end
 
 function _sample_names(study::String, run::String)
@@ -95,15 +97,15 @@ function _sample_names(study::String, run::String)
             prefix = replace(basename(child), " " => "_") * "_"
             for f in child_files
                 (endswith(f, "_R1.fastq.gz") || endswith(f, "_R1_001.fastq.gz")) || continue
-                push!(names, prefix * replace(f, r"_R1(_001)?\.fastq\.gz$" => ""))
+                push!(names, prefix * Tools._lane_free(replace(f, r"_R1(_001)?\.fastq\.gz$" => "")))
             end
         end
-        return sort(names)
+        return sort(unique(names))
     end
 
     files = filter(f -> endswith(f, "_R1.fastq.gz") || endswith(f, "_R1_001.fastq.gz"),
                    readdir(d))
-    map(f -> replace(f, r"_R1(_001)?\.fastq\.gz$" => ""), files)
+    unique(map(f -> Tools._lane_free(replace(f, r"_R1(_001)?\.fastq\.gz$" => "")), files))
 end
 
 function _active_job_count(study::String)
@@ -143,11 +145,8 @@ end
 ## Name validation
 # Valid entity names: letters, digits, hyphens, underscores, dots.
 # No slashes, no leading dots (hidden files), no empty strings.
-function _valid_name(name::String)::Bool
-    !isempty(name) &&
-    !startswith(name, ".") &&
-    name != "." && name != ".." &&
-    occursin(r"^[A-Za-z0-9_\-\.]+$", name)
+function _valid_name(name::AbstractString)::Bool
+    !startswith(name, ".") && Validation.is_safe_name(name)
 end
 
 ## Active-job guard

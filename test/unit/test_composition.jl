@@ -6,10 +6,9 @@
 # is then called directly with varying sub-group arguments and its output is
 # asserted against the same row/read totals the old build asserted.
 
-if !isdefined(Main, :Server)
-    include(joinpath(@__DIR__, "..", "..", "src", "server", "server.jl"))
-end
-SV = Main.Server
+using MetaManifold
+SV = MetaManifold.Server
+_saved_root = SV.ServerState._root[]
 
 @testset "Composition build" begin
 
@@ -52,6 +51,7 @@ SV = Main.Server
                     CREATE TABLE merged (
                         "SeqName" VARCHAR,
                         "Domain"  VARCHAR,
+                        "Pident"  DOUBLE,
                         "A_s1"    BIGINT,
                         "A_s2"    BIGINT,
                         "B_s1"    BIGINT
@@ -59,11 +59,29 @@ SV = Main.Server
                 """)
                 DBInterface.execute(con, """
                     INSERT INTO merged VALUES
-                        ('asv1','Eukaryota',10,0,0),
-                        ('asv2','Eukaryota', 0,0,50),
-                        ('asv3','Eukaryota', 5,0,5),
-                        ('asv4','Bacteria',  7,3,0),
-                        ('asv5','',          0,0,1)
+                        ('asv1','Eukaryota',99.0,10,0,0),
+                        ('asv2','Eukaryota',98.0, 0,0,50),
+                        ('asv3','Eukaryota',97.0, 5,0,5),
+                        ('asv4','Bacteria', 96.0, 7,3,0),
+                        ('asv5','',         NULL, 0,0,1)
+                """)
+                ## A second results table with a Genus rank, for table/rank selection.
+                DBInterface.execute(con, """
+                    CREATE TABLE sub_t (
+                        "SeqName" VARCHAR,
+                        "Domain"  VARCHAR,
+                        "Genus"   VARCHAR,
+                        "Pident"  DOUBLE,
+                        "A_s1"    BIGINT,
+                        "B_s1"    BIGINT
+                    )
+                """)
+                DBInterface.execute(con, """
+                    INSERT INTO sub_t VALUES
+                        ('a1','Eukaryota','Hexamastix',99.0,4,0),
+                        ('a2','Eukaryota','Hexamastix',98.0,1,2),
+                        ('a3','Eukaryota','',          97.0,0,3),
+                        ('a4','Eukaryota','Blasto',    96.0,0,0)
                 """)
             finally
                 DBInterface.close!(con); close(db)
@@ -115,6 +133,38 @@ SV = Main.Server
             rNone = SV._composition_summary(study, run, "absent_set", nothing)
             @test rNone.status == 404
             @test decode(rNone)["error"] == "category_set_not_found"
+
+            ## Rank tagging on another table: blank genus counts as Unclassified,
+            ## and a row with no reads in scope drops out.
+            rG = SV._composition_summary(study, run, "test_set", nothing;
+                                         table="sub_t", tag="rank", value="Genus")
+            @test rG.status == 200
+            dG = decode(rG)
+            @test dG["table"] == "sub_t" && dG["tag"] == "rank" && dG["value"] == "Genus"
+            @test dG["total_rows"] == 3 && dG["total_reads"] == 10
+            @test dG["categories"]["Hexamastix"]["rows"]  == 2
+            @test dG["categories"]["Hexamastix"]["reads"] == 7
+            @test dG["categories"]["Unclassified"]["reads"] == 3
+            @test !haskey(dG["categories"], "Blasto")
+
+            rGA = decode(SV._composition_summary(study, run, "test_set", "A";
+                                                 table="sub_t", tag="rank", value="Genus"))
+            @test String.(collect(keys(rGA["categories"]))) == ["Hexamastix"]
+            @test rGA["total_reads"] == 5
+
+            ## Category tagging on another table backfills that table's column.
+            rC = decode(SV._composition_summary(study, run, "test_set", nothing; table="sub_t"))
+            @test rC["categories"]["Eukaryota"]["reads"] == 10
+            @test rC["tag"] == "category" && rC["value"] == "test_set"
+
+            @test decode(SV._composition_summary(study, run, "test_set", nothing;
+                                                 table="sub_t", tag="rank", value="Nope"))["error"] == "bad_rank"
+            @test decode(SV._composition_summary(study, run, "test_set", nothing;
+                                                 tag="colour"))["error"] == "bad_tag"
+            @test decode(SV._composition_summary(study, run, "test_set", nothing;
+                                                 table="absent"))["error"] == "table_not_found"
+            @test decode(SV._composition_summary(study, run, "test_set", nothing;
+                                                 table="x;drop"))["error"] == "invalid_table"
         finally
             rm(tmp; recursive=true, force=true)
         end
@@ -279,3 +329,6 @@ SV = Main.Server
     end
 
 end
+
+# Testsets above point the server at temporary roots.
+SV.ServerState._root[] = _saved_root

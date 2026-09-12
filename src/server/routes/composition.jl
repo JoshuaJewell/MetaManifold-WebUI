@@ -4,7 +4,8 @@
 # Routes: organism composition - category-based classification of ASVs/OTUs
 # for relative abundance analysis across broad organism groups.
 using JSON3, CSV, DataFrames, OrderedCollections, DuckDB, DBInterface, YAML
-using MetaManifold.Categories, MetaManifold.CompositionLibrary
+using ..Categories, ..CompositionLibrary
+using ..Analysis: pinned_segment_order
 
 # Catch-all bucket for taxa matching no category, and its fixed legend colour.
 const _UNASSIGNED_CATEGORY = "Unassigned"
@@ -18,13 +19,7 @@ end
 _library() = CompositionLibrary.load(_library_path())
 
 # Write the whole library back to config/composition.yml.
-function _write_library(lib::Dict)
-    path = _library_path()
-    mkpath(dirname(path))
-    open(path, "w") do io
-        YAML.write(io, lib)
-    end
-end
+_write_library(lib::Dict) = _atomic_write_yaml(_library_path(), lib)
 
 # List the category sets defined in the composition library.
 function _list_category_sets()
@@ -49,7 +44,7 @@ end
 
 # Save a filter config verbatim into the library. Returns the saved filter
 # config, or an HTTP.Response error.
-function _save_filter(name::String, config::AbstractDict)
+function _save_filter_unlocked(name::String, config::AbstractDict)
     lib = _library()
     lib["filters"][name] = config
     result = _save_library(lib)
@@ -60,7 +55,7 @@ end
 
 # Remove a filter from the library; refuses when a set still references it,
 # naming the referencing sets. Returns the deleted name, or an HTTP.Response.
-function _delete_filter(name::String)
+function _delete_filter_unlocked(name::String)
     lib = _library()
     users = CompositionLibrary.filter_in_use(lib, name)
     isempty(users) || return json_error(409, "filter_in_use",
@@ -77,7 +72,7 @@ end
 # builder's direct-save path, distinct from `_save_category_set`'s
 # save-as-a-recolour path used by the existing category-sets routes. Returns
 # the saved set config, or an HTTP.Response error.
-function _save_composition_set(name::String, config::AbstractDict)
+function _save_composition_set_unlocked(name::String, config::AbstractDict)
     lib = _library()
     lib["sets"][name] = config
     result = _save_library(lib)
@@ -89,7 +84,8 @@ end
 ## Filter to SQL translation
 # These helpers now delegate to the Categories module, which is self-contained
 # and does not depend on FuncDBAnnotation or server-state globals.
-_col_translate_map(source::String) = Categories.col_translate_map(source)
+_col_translate_map(source::String, present=nothing) =
+    Categories.col_translate_map(source, present)
 
 _filter_to_sql_conditions(filter_config::Dict, col_set::Set{String},
                           table_alias::String;
@@ -99,75 +95,95 @@ _filter_to_sql_conditions(filter_config::Dict, col_set::Set{String},
 ## Live composition summary
 
 """
-    _composition_summary(study, run, category_set_name, subgroup; group) -> HTTP.Response
+    _composition_summary(study, run, category_set_name, subgroup;
+                         group, params, table="merged", tag="category", value) -> HTTP.Response
 
-Compute a live composition summary directly from the merged results table.
-Ensures the `Category__<set>` column exists (lazily writing it when absent),
-then groups by that column to produce per-category row and read counts.
+Per-label row and read counts for one results table. `tag` follows the chart
+routes: `"category"` groups by the `Category__<value>` column (backfilled when
+absent), `"rank"` groups by the taxonomy rank `value`, blank ranks counting as
+Unclassified as in `aggregate_by_taxon`.
 
 `subgroup` is either `nothing` (all sample columns) or a prefix string
 (columns matching `"<prefix>_"`). Returns a 400 when the subgroup prefix
 matches no sample columns.
 
 The returned JSON matches the `CompositionBuildResult` frontend type:
-`{ table, source, category_set, total_rows, total_reads, categories }`.
+`{ table, source, category_set, tag, value, total_rows, total_reads, categories }`.
 """
 function _composition_summary(study::String, run::String, category_set_name::String,
                                subgroup::Union{String,Nothing};
-                               group::Union{String,Nothing}=nothing)
-    merge_dir = _require_duckdb(study, run; group)
-    isnothing(merge_dir) && return json_error(404, "no_results",
-        "No results database for run '$run' - run the pipeline first")
-
-    # The name is interpolated into a quoted SQL identifier below, via
-    # `Categories.column_name`. Membership of the library is not by itself a
-    # character guarantee: it holds only because every API write charset-checks the
-    # key. Re-assert the guard here so the safety of this SQL does not depend on an
-    # invariant enforced in another module.
-    Validation.is_safe_name(category_set_name) ||
-        return json_error(400, "invalid_name",
-            "Category set name must contain only letters, numbers, dots, hyphens, and underscores")
+                               group::Union{String,Nothing}=nothing,
+                               params::Dict{String,String}=Dict{String,String}(),
+                               table::String="merged",
+                               tag::String="category",
+                               value::String=category_set_name)
+    tag in ("category", "rank") || return json_error(400, "bad_tag",
+        "tag must be 'category' or 'rank'")
+    Validation.is_safe_name(table) || return json_error(400, "invalid_table",
+        "Table name must contain only letters, numbers, dots, hyphens, and underscores")
 
     lib = _library()
-    haskey(lib["sets"], category_set_name) || return json_error(404, "category_set_not_found",
-        "Category set '$category_set_name' not found")
+    if tag == "category"
+        # The name is interpolated into a quoted SQL identifier below, via
+        # `Categories.column_name`. Library membership holds only because every
+        # API write charset-checks the key, so the guard is repeated here.
+        Validation.is_safe_name(value) ||
+            return json_error(400, "invalid_name",
+                "Category set name must contain only letters, numbers, dots, hyphens, and underscores")
+        haskey(lib["sets"], value) || return json_error(404, "category_set_not_found",
+            "Category set '$value' not found")
+    end
 
     source = _tagging_source(study, run; group)
-    col = Categories.column_name(category_set_name)
 
-    with_results_db_write(merge_dir) do con
-        # Ensure the category column is present; backfill when absent.
-        Categories.ensure_columns!(con, "merged", source, [category_set_name];
-                                   library=lib)
+    _with_analysis_results_table(study, run, table; group,
+                                 readonly = tag != "category") do con, columns
+        label_expr = if tag == "category"
+            Categories.ensure_columns!(con, table, source, [value]; library=lib, suffixed=_suffixed())
+            "\"$(_category_column(value))\""
+        else
+            rank_col = _rank_column(columns, value)
+            isnothing(rank_col) && return json_error(400, "bad_rank",
+                "Unknown rank '$value' in table '$table'")
+            "COALESCE(NULLIF(TRIM(\"$rank_col\"), ''), 'Unclassified')"
+        end
 
-        all_sample_cols = Analysis.sample_columns(con, "merged")
+        all_sample_cols = Analysis.sample_columns(con, table)
 
         # Resolve the retained sample columns for the requested subgroup.
         retained = _filter_by_prefix(all_sample_cols, subgroup)
         isempty(retained) && return json_error(400, "no_subgroup_samples",
-            "Sub-group selection '$(something(subgroup, ""))' matches no sample columns in 'merged'")
+            "Sub-group selection '$(something(subgroup, ""))' matches no sample columns in '$table'")
+
+        # The summary applies no row filters, so both read-count bases measure
+        # the same thing here: each sample's whole library.
+        retained = _retain_sample_columns(con, table, retained, params, "", Any[])
+        isempty(retained) && return json_error(400, "no_samples",
+            "No samples pass the sample read-count filter")
 
         # Per-row read sum (for the WHERE clause) and per-group read sum (for SELECT).
         row_sum  = join(["COALESCE(\"$c\", 0)" for c in retained], " + ")
         grp_sum  = join(["COALESCE(SUM(\"$c\"), 0)" for c in retained], " + ")
 
-        # Exclude rows whose read sum across the retained columns is zero, then
-        # group by category. The HAVING clause drops any category whose aggregate
-        # is also zero (defensive; the WHERE should already prevent this).
+        # Rows with no reads in the retained columns are excluded; HAVING drops
+        # any label whose aggregate is zero.
         sql = """
-            SELECT \"$col\" AS cat, COUNT(*) AS rows, ($grp_sum) AS reads
-            FROM merged
+            SELECT $label_expr AS cat, COUNT(*) AS rows, ($grp_sum) AS reads
+            FROM \"$table\"
             WHERE ($row_sum) > 0
-            GROUP BY \"$col\"
+            GROUP BY cat
             HAVING ($grp_sum) > 0
+            ORDER BY reads DESC, cat ASC
         """
         df = DataFrame(DBInterface.execute(con, sql))
 
         total_rows  = sum(df.rows;  init=0)
         total_reads = sum(df.reads; init=0)
 
+        # Reads descending, but pinned as the figure legends pin them, so a
+        # category holds one place across the whole view.
         cat_stats = OrderedDict{String,Any}()
-        for row in eachrow(df)
+        for row in eachrow(df[pinned_segment_order(string.(df.cat)), :])
             cat_stats[string(row.cat)] = Dict(
                 "rows"          => Int(row.rows),
                 "reads"         => Int(row.reads),
@@ -177,11 +193,14 @@ function _composition_summary(study::String, run::String, category_set_name::Str
         end
 
         json(Dict(
-            "table"        => "merged",
+            "table"        => table,
             "source"       => source,
             "category_set" => category_set_name,
+            "tag"          => tag,
+            "value"        => value,
             "total_rows"   => total_rows,
             "total_reads"  => total_reads,
+            "samples"      => retained,
             "categories"   => cat_stats,
         ))
     end
@@ -254,7 +273,7 @@ end
 # category name, and write the updated set into the library at
 # `config/composition.yml`. Returns the saved set summary, or an
 # `HTTP.Response` error mirroring the route's failure modes.
-function _save_category_set(name::String, base::String,
+function _save_category_set_unlocked(name::String, base::String,
                             colours::Dict{String,String};
                             label::Union{String,Nothing}=nothing,
                             description::Union{String,Nothing}=nothing)
@@ -306,7 +325,7 @@ end
 
 # Remove a set from the library; `default` is protected. Returns the deleted
 # name, or an `HTTP.Response` error.
-function _delete_category_set(name::String)
+function _delete_category_set_unlocked(name::String)
     Validation.is_safe_name(name) || return json_error(400, "invalid_name",
         "Name must contain only letters, numbers, dots, hyphens, and underscores")
     name == "default" && return json_error(400, "protected_set",
@@ -346,25 +365,27 @@ end
     json((; deleted=result))
 end
 
-# Live composition summary: compute per-category row and read counts from the
-# merged table, ensuring the Category__ column exists first.
+# Live composition summary: per-label row and read counts for a results table
+# (default merged), by category set or by rank.
 @post "/api/v1/studies/{study}/runs/{run}/composition/summary" function(req,
                                                                          study::String,
                                                                          run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-        "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-        "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
 
     body = JSON3.read(String(req.body))
     category_set = string(get(body, :category_set, "default"))
     subgroup = let s = get(body, :subgroup, nothing)
         isnothing(s) ? nothing : string(s)
     end
+    table = string(get(body, :table, "merged"))
+    tag   = string(get(body, :tag, "category"))
+    value = string(get(body, :value, category_set))
 
     try
         _composition_summary(study, run, category_set, subgroup;
-                             group=_req_group(req))
+                             group=_req_group(req), params=_body_filter_params(body),
+                             table, tag, value)
     catch e
         @error "Composition summary failed" study run category_set subgroup exception=(e, catch_backtrace())
         json_error(500, "composition_summary_failed",
@@ -372,7 +393,8 @@ end
     end
 end
 
-# Query merged table (paginated), ensuring the requested category set column exists.
+# Paginated query of a results table (default merged), ensuring the requested
+# category set column exists.
 @post "/api/v1/studies/{study}/runs/{run}/composition/{source}/query" function(req,
                                                                                 study::String,
                                                                                 run::String,
@@ -384,19 +406,20 @@ end
     body = JSON3.read(String(req.body))
     category_set = string(get(body, :category_set, "default"))
 
-    merge_dir = _require_duckdb(study, run; group)
-    isnothing(merge_dir) && return json_error(404, "no_results",
-        "No results database for run '$run' - run the pipeline first")
+    table = string(get(body, :table, "merged"))
+    Validation.is_safe_name(table) || return json_error(400, "invalid_table",
+        "Table name must contain only letters, numbers, dots, hyphens, and underscores")
 
     tag_src = _tagging_source(study, run; group)
-    with_results_db_write(merge_dir) do con
-        Categories.ensure_columns!(con, "merged", tag_src, [category_set];
-                                   library=_library())
-        _duckdb_paginated_query(con, "merged", body)
+    _with_analysis_results_table(study, run, table; group, readonly=false) do con, _
+        Categories.ensure_columns!(con, table, tag_src, [category_set];
+                                   library=_library(), suffixed=_suffixed())
+        _duckdb_paginated_query(con, table, body)
     end
 end
 
-# Distinct values for a merged-table column; ensures category column when requested.
+# Distinct values for a results-table column (default merged); ensures the
+# category column when requested.
 @post "/api/v1/studies/{study}/runs/{run}/composition/{source}/distinct/{column}" function(req,
                                                                                             study::String,
                                                                                             run::String,
@@ -409,16 +432,21 @@ end
     body = JSON3.read(String(req.body))
     category_set = string(get(body, :category_set, "default"))
 
-    merge_dir = _require_duckdb(study, run; group)
-    isnothing(merge_dir) && return json_error(404, "no_results",
-        "No results database for run '$run' - run the pipeline first")
+    table = string(get(body, :table, "merged"))
+    Validation.is_safe_name(table) || return json_error(400, "invalid_table",
+        "Table name must contain only letters, numbers, dots, hyphens, and underscores")
 
     tag_src = _tagging_source(study, run; group)
-    with_results_db_write(merge_dir) do con
-        Categories.ensure_columns!(con, "merged", tag_src, [category_set];
-                                   library=_library())
-        _duckdb_distinct(con, "merged", column, body)
+    _with_analysis_results_table(study, run, table; group, readonly=false) do con, _
+        Categories.ensure_columns!(con, table, tag_src, [category_set];
+                                   library=_library(), suffixed=_suffixed())
+        _duckdb_distinct(con, table, column, body)
     end
 end
 
-
+## Library edits hold the config lock so a load-modify-write cannot interleave with another save.
+_save_filter(args...; kwargs...) = lock(() -> _save_filter_unlocked(args...; kwargs...), _config_file_lock)
+_delete_filter(args...; kwargs...) = lock(() -> _delete_filter_unlocked(args...; kwargs...), _config_file_lock)
+_save_composition_set(args...; kwargs...) = lock(() -> _save_composition_set_unlocked(args...; kwargs...), _config_file_lock)
+_save_category_set(args...; kwargs...) = lock(() -> _save_category_set_unlocked(args...; kwargs...), _config_file_lock)
+_delete_category_set(args...; kwargs...) = lock(() -> _delete_category_set_unlocked(args...; kwargs...), _config_file_lock)
