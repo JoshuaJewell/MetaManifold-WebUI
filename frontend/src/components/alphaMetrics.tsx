@@ -164,8 +164,7 @@ function titleText(t: unknown): string | undefined {
 }
 
 /** Isolate a single alpha metric as a standalone single-panel figure, titled by
- *  that metric. Each pane then carries its own single axis, so the cosmetics
- *  editor styles it without any subplot selectors. */
+ *  that metric, with its own single axis. */
 export function extractAlphaPanel(figure: unknown, metric: AlphaMetric): unknown {
   if (!figure || typeof figure !== 'object') return figure
   const raw = figure as PlotlyFigure

@@ -5,19 +5,18 @@
 
 using CSV, DataFrames
 
-using MetaManifold.Analysis: alpha_chart, pipeline_stats_chart,
+using ..Analysis: alpha_chart,
                              sample_columns, taxonomy_levels, taxon_column, filtered_counts,
                              aggregate_by_taxon, combined_counts_across_runs,
                              alpha_boxplot, nmds_chart, run_nmds, run_permanova, r_available,
                              sequence_column_name, normalise_counts, venn_taxa_present,
-                             pool_columns, auto_min_depth, bar_chart
-using MetaManifold.Categories, MetaManifold.CompositionLibrary
+                             pool_columns, auto_min_depth, bar_chart, faceted_bar_chart,
+                             natural_sort
+using ..Categories, ..CompositionLibrary
 
 function _validate_run_request(study::String, run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                 "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                      "Run '$run' not found")
+    study in _study_names() || return json_error(404, "study_not_found", "Study '$study' not found")
+    run in _all_run_names(study) || return json_error(404, "run_not_found", "Run '$run' not found")
     nothing
 end
 
@@ -43,7 +42,7 @@ end
     table = get(body, :table, "merged")
     params = _body_filter_params(body)
     cfg_cache = Dict{Tuple{String,String,String}, Any}()
-    (norm_method, norm_depth) = _analysis_normalisation(study; run, group, config_cache=cfg_cache)
+    norm = _alpha_normalisation(study; run, group, config_cache=cfg_cache)
 
     prefix = let p = get(body, :prefix, nothing); isnothing(p) ? nothing : string(p) end
 
@@ -52,22 +51,17 @@ end
         isempty(scols) && return json_error(400, "no_samples", "No sample columns found in table '$table'")
         exclude_conditions = _exclusion_conditions(study, run, group, columns; surface="diversity", config_cache=cfg_cache)
         where_clause, where_params = _analysis_where_clause(params, columns; exclude_conditions)
-        mat = filtered_counts(con, table, scols, where_clause, where_params)
-        (; mat, kept) = normalise_counts(mat; method=norm_method, depth=norm_depth,
-                                         seed=_study_seed(study))
-        scols = scols[kept]
+        scols = _retain_sample_columns(con, table, scols, params, where_clause, where_params)
         isempty(scols) && return json_error(400, "no_samples",
-                                            "All samples dropped below normalisation depth")
+                                            "No samples pass the sample read-count filter")
+        mat = filtered_counts(con, table, scols, where_clause, where_params)
+        alpha = alpha_diversity(mat; norm.method, norm.depth,
+                                seed=_study_seed(study), norm.iterations)
+        scols = scols[alpha.kept]
+        isempty(scols) && return json_error(400, "no_samples",
+                                            "All samples fall below the normalisation depth")
 
-        r = Int[]; sh = Float64[]; si = Float64[]
-        for i in eachindex(scols)
-            counts = round.(Int, mat[i, :])
-            push!(r, richness(counts))
-            push!(sh, shannon(counts))
-            push!(si, simpson(counts))
-        end
-
-        fig = alpha_chart(scols, r, sh, si)
+        fig = alpha_chart(scols, alpha.richness, alpha.shannon, alpha.simpson; short_labels=true)
         HTTP.Response(200, ["Content-Type" => "application/json"],
                       body=JSON3.write(fig))
     end
@@ -130,6 +124,18 @@ end
 # Resolves label column, applies scope/pooling, drops zero-read rows, and returns
 # (segment_labels, sample_names, counts_matrix) or an error dict.
 #
+# Counts are raw read sums per (label, sample), and the chart routes plot them
+# as they come. Depth normalisation (rarefy/SRS) is deliberately NOT applied
+# here, unlike the alpha/NMDS/PERMANOVA surfaces: those estimate richness and
+# distance, which are biased by uneven sampling effort, so equalising library
+# size earns its cost there. A composition bar answers "how many reads, and in
+# what proportions", and rarefying breaks both halves of that. It rescales every
+# sample to the smallest positive library in the set, so the absolute bars stop
+# being read counts and all stand at the same height; and it quantises the
+# relative bars to multiples of 1/depth. A single shallow sample is enough to
+# do it -- a 4-read library drags every other sample down to a 4-read total,
+# which renders as bars that look like a count of four ASVs.
+#
 # Parameters:
 #   con              - DuckDB connection (already open on the annotation table)
 #   table            - table name
@@ -162,36 +168,8 @@ function _chart_data(con, table::String, columns::Vector{String},
     isempty(scols) && return json_error(400, "no_samples",
                                         "No sample columns for the requested scope")
 
-    # Resolve label column.
-    label_col = if tag == "rank"
-        if isempty(value)
-            levels = taxonomy_levels(con, table)
-            isempty(levels) && return json_error(400, "no_taxonomy",
-                                                 "No taxonomy columns found")
-            col = taxon_column(columns, last(levels))
-            isnothing(col) && return json_error(400, "bad_rank",
-                                                "Unknown rank '$(last(levels))'")
-            col
-        else
-            col = taxon_column(columns, value)
-            isnothing(col) && return json_error(400, "bad_rank",
-                                                "Unknown rank '$value'")
-            col
-        end
-    else
-        # Ensure the Category__ column exists (lazy backfill for old runs).
-        Categories.ensure_columns!(con, table, source, [value];
-                                   library=_chart_library())
-        col = Categories.column_name(value)
-        # Verify the column now exists; it may still be absent when the set
-        # config file does not exist (ensure_columns! skips missing sets).
-        present = Set(string.(DataFrame(DBInterface.execute(con,
-            "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
-            [table])).column_name))
-        col in present || return json_error(404, "category_set_not_found",
-                                            "Category set '$value' not found")
-        col
-    end
+    label_col = _label_column(con, table, columns, tag, value, source)
+    label_col isa HTTP.Response && return label_col
 
     # For categories, never collapse into "Other".
     effective_top_n = (tag == "category") ? typemax(Int) : top_n
@@ -221,6 +199,34 @@ function _chart_data(con, table::String, columns::Vector{String},
     (; segment_labels, sample_names=scols, counts, effective_top_n)
 end
 
+# The column a chart groups rows by: a rank of the request's classifier, or a
+# category set's tags (backfilled for older runs). Returns the column name or an
+# HTTP error response.
+function _label_column(con, table::String, columns::Vector{String},
+                       tag::String, value::String, tag_source::String)
+    if tag == "rank"
+        rank = if isempty(value)
+            levels = taxonomy_levels(con, table)
+            isempty(levels) && return json_error(400, "no_taxonomy", "No taxonomy columns found")
+            last(levels)
+        else
+            value
+        end
+        col = _rank_column(columns, rank)
+        isnothing(col) || return col
+        src = _analysis_source()
+        return json_error(400, "bad_rank", isnothing(src) ? "Unknown rank '$rank'" :
+                                           "Table '$table' has no $src taxonomy at rank '$rank'")
+    end
+    Categories.ensure_columns!(con, table, tag_source, [value];
+                               library=_chart_library(), suffixed=_suffixed())
+    col = _category_column(value)
+    # Still absent when the set is missing from the library (ensure_columns! skips it).
+    col in _duckdb_columns(con, table) ||
+        return json_error(404, "category_set_not_found", "Category set '$value' not found")
+    col
+end
+
 ## Per-run unified chart
 @post "/api/v1/studies/{study}/runs/{run}/analysis/chart" function(req,
                                                                     study::String,
@@ -236,13 +242,12 @@ end
     top_n    = Int(get(body, :top_n, 15))
     relative = Bool(get(body, :relative, true))
     mode     = string(get(body, :mode, "stacked"))
+    keep_empty = Bool(get(body, :keep_empty, false))
     subgroup = let v = get(body, :subgroup, nothing)
         (isnothing(v) || v === nothing) ? nothing : string(v)
     end
     params = _body_filter_params(body)
     cfg_cache = Dict{Tuple{String,String,String}, Any}()
-    (norm_method, norm_depth) = _analysis_normalisation(study; run, group,
-                                                         config_cache=cfg_cache)
 
     # Resolve sub-group prefixes for pooling (used when subgroup == "__pool__").
     run_data_dir = joinpath(ServerState.data_dir(), study,
@@ -260,6 +265,10 @@ end
         exclude_conditions = _exclusion_conditions(study, run, group, columns; surface, config_cache=cfg_cache)
         where_clause, where_params = _analysis_where_clause(params, columns;
                                                              exclude_conditions)
+        all_scols = _retain_sample_columns(con, table, all_scols, params,
+                                           where_clause, where_params)
+        isempty(all_scols) && return json_error(400, "no_samples",
+                                                "No samples pass the sample read-count filter")
 
         # Source resolves the taxonomy side for category backfill; rank charts ignore it.
         tag_source = tag == "category" ? _tagging_source(study, run; group) : ""
@@ -269,44 +278,18 @@ end
                              pool_groups, run, top_n, tag_source)
         result isa HTTP.Response && return result
 
-        # normalise_counts expects samples x features; counts is segments x samples,
-        # so transpose, normalise, transpose back.
-        counts_t = permutedims(result.counts)
-        norm = normalise_counts(counts_t; method=norm_method, depth=norm_depth,
-                                seed=_study_seed(study))
-        isempty(norm.kept) && return json_error(400, "no_samples",
-                                                "All samples dropped below normalisation depth")
-        counts  = permutedims(norm.mat)
-        scols   = result.sample_names[norm.kept]
+        # Composition bars plot raw read sums: see the note on _chart_data.
+        counts = result.counts
+        scols  = result.sample_names
 
         colour_for = (tag == "category") ? _category_colour_for(value) : nothing
+        # Pooled bars are sub-group names, not samples: nothing to trim.
         fig = bar_chart(result.segment_labels, scols, counts;
-                        top_n=result.effective_top_n, relative, mode, colour_for)
+                        top_n=result.effective_top_n, relative, mode, colour_for,
+                        keep_empty, short_labels = subgroup != "__pool__")
         HTTP.Response(200, ["Content-Type" => "application/json"],
                       body=JSON3.write(fig))
     end
-end
-
-## Pipeline stats
-@get "/api/v1/studies/{study}/runs/{run}/analysis/pipeline-stats" function(req,
-                                                                            study::String,
-                                                                            run::String)
-    err = _validate_run_request(study, run)
-    !isnothing(err) && return err
-    group = _req_group(req)
-    run_dir = _run_project_dir(study, run; group)
-    stats_csv = joinpath(run_dir, "dada2", "Tables", "pipeline_stats.csv")
-    isfile(stats_csv) || return json_error(404, "no_stats",
-                                                "No pipeline stats - run DADA2 first")
-
-    stats_df = CSV.read(stats_csv, DataFrame)
-    first_col = names(stats_df)[1]
-    first_col != "sample" && rename!(stats_df, first_col => "sample")
-
-    fig = pipeline_stats_chart(stats_df)
-    isnothing(fig) && return json_error(400, "no_data", "Empty stats table")
-    HTTP.Response(200, ["Content-Type" => "application/json"],
-                  body=JSON3.write(fig))
 end
 
 ## Taxonomy ranks discovery
@@ -320,8 +303,9 @@ end
     isnothing(dir) && return json([])
 
     table = get(HTTP.queryparams(req), "table", "merged")
-    _with_analysis_results_table(study, run, table; group) do con, _columns
-        json(taxonomy_levels(con, table))
+    _with_analysis_results_table(study, run, table; group) do con, columns
+        # Only the ranks the requested classifier actually has.
+        json(filter(r -> !isnothing(_rank_column(columns, r)), taxonomy_levels(con, table)))
     end
 end
 
@@ -335,6 +319,9 @@ function _resolve_run_duckdb(study::String, run_spec)
     group  = _opt_string(run_spec, :group)
     prefix = _opt_string(run_spec, :prefix)
     source = _opt_string(run_spec, :source)
+    # Names come from the request body, so they must name a run of this study.
+    isnothing(group) || (_valid_name(group) && group in _group_names(study)) || return nothing
+    run_name in _all_run_names(study) || return nothing
     dir = _require_duckdb(study, run_name; group)
     isnothing(dir) && return nothing
     label = if !isnothing(prefix)
@@ -486,16 +473,29 @@ function _exclusion_conditions(study::String, run, group, columns::Vector{String
     conds
 end
 
-function _analysis_normalisation(study::String;
-                                  run::Union{String,Nothing}=nothing,
-                                  group::Union{String,Nothing}=nothing,
-                                  config_cache::Union{Dict,Nothing}=nothing)
+# How alpha diversity normalises counts before richness, Shannon and Simpson.
+function _alpha_normalisation(study::String;
+                              run::Union{String,Nothing}=nothing,
+                              group::Union{String,Nothing}=nothing,
+                              config_cache::Union{Dict,Nothing}=nothing)
     resolved = _resolved_run_config(study, run, group, config_cache)
-    method_entry = get(resolved, "analysis.normalisation",       (; value="none", source="default"))
-    depth_entry  = get(resolved, "analysis.normalisation_depth", (; value=0,      source="default"))
-    method = String(get(method_entry, :value, "none"))
-    depth  = Int(get(depth_entry,  :value, 0))
-    (method, depth)
+    val(k, d) = something(get(get(resolved, k, (; value=d)), :value, d), d)
+    (; method = String(val("analysis.alpha.normalisation", "none")),
+       depth = Int(val("analysis.alpha.depth", 0)),
+       iterations = Int(val("analysis.alpha.rarefaction_iterations", 1)))
+end
+
+# How NMDS and PERMANOVA prepare counts for Bray-Curtis. hellinger is a
+# transform; rarefy and srs are depth normalisation.
+function _beta_normalisation(study::String;
+                             run::Union{String,Nothing}=nothing,
+                             group::Union{String,Nothing}=nothing,
+                             config_cache::Union{Dict,Nothing}=nothing)
+    resolved = _resolved_run_config(study, run, group, config_cache)
+    val(k, d) = something(get(get(resolved, k, (; value=d)), :value, d), d)
+    method = String(val("analysis.beta.normalisation", "hellinger"))
+    method == "hellinger" ? (; method="none", depth=0, transform="hellinger") :
+                            (; method, depth=Int(val("analysis.beta.depth", 0)), transform="none")
 end
 
 function _analysis_where_clause(params, columns::Vector{String};
@@ -548,6 +548,7 @@ function _study_alpha_plot_config(study::String)
         annotate_significance = Bool(get_value("analysis.alpha.annotate_significance", false)),
         pairwise_brackets = Bool(get_value("analysis.alpha.pairwise_brackets", false)),
         paired_samples = Bool(get_value("analysis.alpha.paired_samples", false)),
+        paired_lines = Bool(get_value("analysis.alpha.paired_lines", false)),
         significance_test = String(get_value("analysis.alpha.significance_test", "kruskal_wallis")),
     )
 end
@@ -612,6 +613,7 @@ function _collect_cross_run_asvs(study::String, runs_spec, table, params; aggreg
     run_data = Tuple{String, Vector{String}, DataFrame}[]
     group_labels = String[]
     run_labels = String[]
+    individual_ids = String[]
     missing_seq = false
     cfg_cache = Dict{Tuple{String,String,String}, Any}()
 
@@ -630,6 +632,8 @@ function _collect_cross_run_asvs(study::String, runs_spec, table, params; aggreg
 
             exclude_conditions = _exclusion_conditions(study, resolved.run, resolved.group, columns; surface="diversity", config_cache=cfg_cache)
             where_clause, where_params = _analysis_where_clause(params, columns; exclude_conditions)
+            scols = _retain_sample_columns(con, table, scols, params, where_clause, where_params)
+            isempty(scols) && return
             seq_filter = isempty(where_clause) ?
                 "WHERE \"$seq_col\" IS NOT NULL AND TRIM(\"$seq_col\") != ''" :
                 "$where_clause AND \"$seq_col\" IS NOT NULL AND TRIM(\"$seq_col\") != ''"
@@ -639,6 +643,7 @@ function _collect_cross_run_asvs(study::String, runs_spec, table, params; aggreg
                 SELECT "$seq_col" AS "sequence", $sum_exprs
                 FROM "$table" $seq_filter
                 GROUP BY "$seq_col"
+                ORDER BY "$seq_col"
             """
             df = DataFrame(DBInterface.execute(con, sql, where_params))
             nrow(df) == 0 && return
@@ -648,10 +653,11 @@ function _collect_cross_run_asvs(study::String, runs_spec, table, params; aggreg
             run_label = _resolved_run_label(resolved)
             append!(group_labels, fill(group_label, length(scols)))
             append!(run_labels, fill(run_label, length(scols)))
+            append!(individual_ids, [_comparison_sample_id(s, resolved) for s in scols])
         end
     end
 
-    run_data, group_labels, run_labels, missing_seq
+    run_data, group_labels, run_labels, individual_ids, missing_seq
 end
 
 function _drop_empty_samples(mat::Matrix{Float64}, aligned::AbstractVector...)
@@ -698,7 +704,7 @@ end
 
     compare_mode = length(unique(_resolved_run_label(r) for r in resolved_specs)) > 1 ? :run : :subgroup
     cfg_cache = Dict{Tuple{String,String,String}, Any}()
-    (norm_method, norm_depth_cfg) = _analysis_normalisation(study)
+    norm = _alpha_normalisation(study)
 
     # First pass: collect raw matrices (fetched inside annotation DB closures)
     collected = Tuple{Matrix{Float64}, Vector{String}, Any}[]
@@ -708,6 +714,8 @@ end
             isempty(scols) && return
             exclude_conditions = _exclusion_conditions(study, resolved.run, resolved.group, columns; surface="diversity", config_cache=cfg_cache)
             where_clause, where_params = _analysis_where_clause(params, columns; exclude_conditions)
+            scols = _retain_sample_columns(con, table, scols, params, where_clause, where_params)
+            isempty(scols) && return
             mat = filtered_counts(con, table, scols, where_clause, where_params)
             push!(collected, (mat, scols, resolved))
         end
@@ -715,29 +723,24 @@ end
 
     isempty(collected) && return json_error(400, "no_data", "No data found for any run")
 
-    norm_depth = _resolve_cross_run_depth(norm_method, norm_depth_cfg,
+    norm_depth = _resolve_cross_run_depth(norm.method, norm.depth,
                                           (mat for (mat, _, _) in collected))
 
     seed = _study_seed(study)
 
     # Second pass: normalise each run's matrix and compute diversity metrics
     groups = Dict{String, NamedTuple{(:sample_ids, :richness, :shannon, :simpson),
-                                     Tuple{Vector{String}, Vector{Int}, Vector{Float64}, Vector{Float64}}}}()
+                                     Tuple{Vector{String}, Vector{Float64}, Vector{Float64}, Vector{Float64}}}}()
     for (raw_mat, raw_scols, resolved) in collected
-        (; mat, kept) = normalise_counts(raw_mat; method=norm_method, depth=norm_depth, seed)
-        scols = raw_scols[kept]
+        alpha = alpha_diversity(raw_mat; norm.method, depth=norm_depth, seed,
+                                norm.iterations)
+        scols = raw_scols[alpha.kept]
         isempty(scols) && continue
 
-        r = Int[]; sh = Float64[]; si = Float64[]
-        for i in eachindex(scols)
-            counts = round.(Int, mat[i, :])
-            push!(r, richness(counts))
-            push!(sh, shannon(counts))
-            push!(si, simpson(counts))
-        end
+        r, sh, si = alpha.richness, alpha.shannon, alpha.simpson
         sample_ids = [_comparison_pair_key(s, resolved; mode=compare_mode) for s in scols]
         label = compare_mode == :run ? _resolved_run_label(resolved) : _resolved_group_label(resolved)
-        bucket = get!(groups, label, (; sample_ids=String[], richness=Int[], shannon=Float64[], simpson=Float64[]))
+        bucket = get!(groups, label, (; sample_ids=String[], richness=Float64[], shannon=Float64[], simpson=Float64[]))
         append!(bucket.sample_ids, sample_ids)
         append!(bucket.richness, r)
         append!(bucket.shannon, sh)
@@ -753,6 +756,7 @@ end
                         annotate_significance=alpha_cfg.annotate_significance,
                         pairwise_brackets=alpha_cfg.pairwise_brackets,
                         paired_samples=alpha_cfg.paired_samples,
+                        paired_lines=alpha_cfg.paired_lines,
                         significance_test=alpha_cfg.significance_test)
     HTTP.Response(200, ["Content-Type" => "application/json"],
                   body=JSON3.write(fig))
@@ -776,9 +780,9 @@ end
     table = get(body, :table, "merged")
     params = _body_filter_params(body)
     aggregate = Bool(get(body, :aggregate, false))
-    (norm_method, norm_depth) = _analysis_normalisation(study)
+    (norm_method, norm_depth, transform) = _beta_normalisation(study)
 
-    run_data, group_labels, run_name_labels, missing_seq = _collect_cross_run_asvs(study, runs_spec, table, params; aggregate)
+    run_data, group_labels, run_name_labels, _, missing_seq = _collect_cross_run_asvs(study, runs_spec, table, params; aggregate)
 
     missing_seq && return json_error(400, "no_sequence_data",
                                          "Table '$table' does not contain a DNA sequence column required for cross-run NMDS/PERMANOVA (expected `sequence` or `Sequence`, as in `merged` or `asv_counts`)")
@@ -797,7 +801,7 @@ end
     size(mat, 1) < 3 && return json_error(400, "too_few_samples",
                                                "Need at least 3 non-empty samples for NMDS")
 
-    coords, stress = run_nmds(mat; seed=_study_seed(study))
+    coords, stress = run_nmds(mat; seed=_study_seed(study), transform)
     any(isnan, coords) && return json_error(500, "nmds_failed", "NMDS computation failed")
 
     # Use a single visual dimension when only one factor varies; otherwise encode
@@ -833,29 +837,32 @@ end
     table = get(body, :table, "merged")
     params = _body_filter_params(body)
     aggregate = Bool(get(body, :aggregate, false))
-    (norm_method, norm_depth) = _analysis_normalisation(study)
+    (norm_method, norm_depth, transform) = _beta_normalisation(study)
 
-    run_data, group_labels, run_labels, missing_seq = _collect_cross_run_asvs(study, runs_spec, table, params; aggregate)
+    run_data, group_labels, run_labels, individual_ids, missing_seq = _collect_cross_run_asvs(study, runs_spec, table, params; aggregate)
 
     missing_seq && return json_error(400, "no_sequence_data",
                                          "Table '$table' does not contain a DNA sequence column required for cross-run NMDS/PERMANOVA (expected `sequence` or `Sequence`, as in `merged` or `asv_counts`)")
     length(run_data) < 2 && return json_error(400, "too_few_runs",
                                                    "Need data from at least 2 runs")
     mat, all_samples, _, _ = combined_asv_counts_across_runs(run_data)
-    (filtered, kept, total) = _drop_empty_samples(mat, all_samples, group_labels, run_labels)
-    mat, all_samples, group_labels, run_labels = filtered
+    (filtered, kept, total) = _drop_empty_samples(mat, all_samples, group_labels, run_labels, individual_ids)
+    mat, all_samples, group_labels, run_labels, individual_ids = filtered
     kept < total && @info "PERMANOVA: dropped $(total - kept) empty samples before analysis"
     (filtered, nkept) = _apply_normalisation(mat, norm_method, norm_depth,
                                              _study_seed(study),
-                                             all_samples, group_labels, run_labels)
-    mat, all_samples, group_labels, run_labels = filtered
+                                             all_samples, group_labels, run_labels, individual_ids)
+    mat, all_samples, group_labels, run_labels, individual_ids = filtered
     nkept < kept &&
         @info "PERMANOVA: dropped $(kept - nkept) samples below normalisation depth"
     size(mat, 1) < 3 && return json_error(400, "too_few_samples",
                                                "Need at least 3 non-empty samples for PERMANOVA")
 
+    # Samples from the same individual are not exchangeable, so permutations
+    # stay within each individual's block.
     metadata = DataFrame(sample=all_samples, group=group_labels, run=run_labels)
-    result = run_permanova(mat, metadata; seed=_study_seed(study))
+    result = run_permanova(mat, metadata; seed=_study_seed(study), transform,
+                           blocks=individual_ids)
     isnothing(result) && return json_error(500, "permanova_failed", "PERMANOVA computation failed")
     hasproperty(result, :message) && return json_error(500, "permanova_failed",
                                                            "PERMANOVA computation failed: $(result.message)")
@@ -875,15 +882,16 @@ end
     top_n    = Int(get(body, :top_n, 15))
     relative = Bool(get(body, :relative, true))
     mode     = string(get(body, :mode, "stacked"))
+    keep_empty = Bool(get(body, :keep_empty, false))
     subgroup = let v = get(body, :subgroup, nothing)
         (isnothing(v) || v === nothing) ? nothing : string(v)
     end
     params   = _body_filter_params(body)
-    (norm_method, norm_depth_cfg) = _analysis_normalisation(study)
     cfg_cache = Dict{Tuple{String,String,String}, Any}()
 
     # Collect per-run aggregated counts.
     collected = Tuple{String, Vector{String}, DataFrame}[]
+    first_error = Ref{Union{HTTP.Response,Nothing}}(nothing)
     effective_top_n = (tag == "category") ? typemax(Int) : top_n
 
     for spec in runs_spec
@@ -901,29 +909,15 @@ end
             exclude_conditions = _exclusion_conditions(study, resolved.run, resolved.group, columns; surface, config_cache=cfg_cache)
             where_clause, where_params = _analysis_where_clause(params, columns;
                                                                 exclude_conditions)
+            scols = _retain_sample_columns(con, table, scols, params,
+                                           where_clause, where_params)
+            isempty(scols) && return nothing
 
-            label_col = if tag == "rank"
-                r = isempty(value) ? begin
-                        levels = taxonomy_levels(con, table)
-                        isempty(levels) && return nothing
-                        last(levels)
-                    end : value
-                col = taxon_column(columns, string(r))
-                isnothing(col) && return json_error(400, "bad_rank",
-                                                    "Unknown rank '$r'")
-                col
-            else
-                # The tagging source backfills Category__ columns for older runs.
-                tag_source = _tagging_source(study, resolved.run; group=resolved.group)
-                Categories.ensure_columns!(con, table, tag_source, [value];
-                                           library=_chart_library())
-                col = Categories.column_name(value)
-                # Guard: skip this run if the category column is absent (set config missing).
-                present = Set(string.(DataFrame(DBInterface.execute(con,
-                    "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
-                    [table])).column_name))
-                col in present || return nothing
-                col
+            label_col = _label_column(con, table, columns, tag, value,
+                                      _tagging_source(study, resolved.run; group=resolved.group))
+            if label_col isa HTTP.Response
+                isnothing(first_error[]) && (first_error[] = label_col)
+                return nothing
             end
 
             agg = aggregate_by_taxon(con, table, scols, label_col,
@@ -944,21 +938,12 @@ end
         end
     end
 
-    isempty(collected) && return json_error(400, "no_data", "No data found for any run")
+    isempty(collected) && return something(first_error[], json_error(400, "no_data", "No data found for any run"))
 
     # Combine across runs via the existing helper.
     mat, all_samples, segment_labels, run_labels = combined_counts_across_runs(collected)
 
-    # Normalise (samples x segments).
-    norm_depth = _resolve_cross_run_depth(norm_method, norm_depth_cfg, (mat,))
-    seed = _study_seed(study)
-    (; mat, kept) = normalise_counts(mat; method=norm_method, depth=norm_depth, seed)
-    all_samples = all_samples[kept]
-    run_labels  = run_labels[kept]
-    isempty(kept) && return json_error(400, "no_samples",
-                                            "All samples dropped below normalisation depth")
-
-    # Transpose to segments x samples.
+    # Transpose to segments x samples. Raw read sums: see the note on _chart_data.
     counts = permutedims(mat)
 
     # Zero-read guard on the combined matrix.
@@ -970,16 +955,153 @@ end
     end
 
     # Pool: cross-run always pools by run label when subgroup == "__pool__" or by default.
+    # Pool on each sample's own run label rather than `pool_columns`' name-prefix
+    # match: only a pooled run's sub-group columns carry a "<label>_" prefix, so
+    # the prefix match sent every sample of an ordinary run to "Other" and
+    # folded all the runs being compared into that one indistinguishable bar.
     unique_labels = unique(run_labels)
-    if isnothing(subgroup) || subgroup == "__pool__"
-        scols, counts = pool_columns(all_samples, counts, unique_labels)
+    pooled = isnothing(subgroup) || subgroup == "__pool__"
+    if pooled
+        scols  = unique_labels
+        counts = reduce(hcat, [vec(sum(counts[:, run_labels .== l], dims=2))
+                               for l in unique_labels])
     else
         scols = all_samples
     end
 
+    # Pooled bars keep the order the runs were selected in and their full labels.
     colour_for = (tag == "category") ? _category_colour_for(value) : nothing
     fig = bar_chart(segment_labels, scols, counts;
-                    top_n=effective_top_n, relative, mode, colour_for)
+                    top_n=effective_top_n, relative, mode, colour_for, keep_empty,
+                    natural_order = !pooled, short_labels = !pooled)
+    HTTP.Response(200, ["Content-Type" => "application/json"],
+                  body=JSON3.write(fig))
+end
+
+## Faceted composition grid
+# The dimensions a facet axis can be keyed on. "run" and "group" are the study's
+# own structure; "subgroup" is the per-prefix split of a pooled run.
+const _FACET_DIMENSIONS = Set(["run", "group", "subgroup"])
+
+const _FACET_UNSET = Dict("group" => "(ungrouped)", "subgroup" => "(all)")
+
+# The value a resolved run spec takes on one facet dimension. A spec that carries
+# no group or prefix still needs a cell to live in, so it gets an explicit
+# placeholder rather than being dropped from the grid.
+function _facet_value(resolved, dimension::String)
+    if dimension == "run"
+        resolved.run
+    elseif dimension == "group"
+        something(resolved.group, _FACET_UNSET["group"])
+    else
+        something(resolved.prefix, _FACET_UNSET["subgroup"])
+    end
+end
+
+# Fold the run specs that share a facet cell into one panel. Sample column names
+# are unique only within their own run, so once a cell draws on more than one
+# spec the names are qualified with the spec label; left bare, two runs' samples
+# that happen to share a name would collapse onto one categorical slot.
+#
+# `counts` comes back samples-by-segments, the orientation
+# `combined_counts_across_runs` produces; the caller transposes it to the
+# segments-by-samples that `faceted_bar_chart` plots.
+function _facet_panel(row::String, col::String,
+                      entries::Vector{Tuple{String, Vector{String}, DataFrame}})
+    mat, sample_names, segment_labels, entry_labels = combined_counts_across_runs(entries)
+    qualified = length(entries) > 1 ?
+        ["$(entry_labels[i])/$(sample_names[i])" for i in eachindex(sample_names)] :
+        sample_names
+    (; row, col, segment_labels, sample_names=qualified, counts=mat)
+end
+
+@post "/api/v1/studies/{study}/analysis/chart-facet" function(req, study::String)
+    study in _study_names() || return json_error(404, "study_not_found",
+                                                     "Study '$study' not found")
+    body = JSON3.read(String(req.body))
+    runs_spec = get(body, :runs, [])
+    isempty(runs_spec) && return json_error(400, "no_runs", "Provide at least one run")
+
+    table      = string(get(body, :table, "merged"))
+    tag        = string(get(body, :tag, "rank"))
+    value      = string(get(body, :value, ""))
+    top_n      = Int(get(body, :top_n, 15))
+    relative   = Bool(get(body, :relative, true))
+    mode       = string(get(body, :mode, "stacked"))
+    keep_empty = Bool(get(body, :keep_empty, false))
+    row_dim    = string(get(body, :rows, "run"))
+    col_dim    = string(get(body, :cols, "subgroup"))
+
+    row_dim in _FACET_DIMENSIONS || return json_error(400, "bad_facet",
+        "Unknown row facet '$row_dim' (expected run, group or subgroup)")
+    col_dim in _FACET_DIMENSIONS || return json_error(400, "bad_facet",
+        "Unknown column facet '$col_dim' (expected run, group or subgroup)")
+    row_dim == col_dim && return json_error(400, "bad_facet",
+        "Row and column facets must differ; both are '$row_dim'")
+
+    params = _body_filter_params(body)
+    cfg_cache = Dict{Tuple{String,String,String}, Any}()
+    effective_top_n = (tag == "category") ? typemax(Int) : top_n
+
+    # Collect each expanded spec's aggregated counts into its facet cell.
+    cells = Dict{Tuple{String,String}, Vector{Tuple{String, Vector{String}, DataFrame}}}()
+    first_error = Ref{Union{HTTP.Response,Nothing}}(nothing)
+    for spec in _expand_comparison_run_specs(study, runs_spec)
+        resolved = _resolve_run_duckdb(study, spec)
+        isnothing(resolved) && continue
+        _with_resolved_results_table(resolved, table; readonly = tag != "category") do con, columns
+            scols = _filter_by_prefix(sample_columns(con, table), resolved.prefix)
+            isempty(scols) && return nothing
+
+            surface = tag == "category" ? "composition" : "taxa"
+            exclude_conditions = _exclusion_conditions(study, resolved.run, resolved.group,
+                                                       columns; surface, config_cache=cfg_cache)
+            where_clause, where_params = _analysis_where_clause(params, columns;
+                                                                exclude_conditions)
+            scols = _retain_sample_columns(con, table, scols, params,
+                                           where_clause, where_params)
+            isempty(scols) && return nothing
+
+            label_col = _label_column(con, table, columns, tag, value,
+                                      _tagging_source(study, resolved.run; group=resolved.group))
+            if label_col isa HTTP.Response
+                isnothing(first_error[]) && (first_error[] = label_col)
+                return nothing
+            end
+
+            agg = aggregate_by_taxon(con, table, scols, label_col, where_clause, where_params)
+            nrow(agg) == 0 && return nothing
+
+            cell = (_facet_value(resolved, row_dim), _facet_value(resolved, col_dim))
+            push!(get!(cells, cell, Tuple{String, Vector{String}, DataFrame}[]),
+                  (resolved.label, scols, agg))
+            nothing
+        end
+    end
+
+    isempty(cells) && return something(first_error[], json_error(400, "no_data", "No data found for any run"))
+
+    panels = [_facet_panel(row, col, entries) for ((row, col), entries) in cells]
+
+    # Raw read sums, panel by panel: see the note on _chart_data. Every panel is
+    # on the one read-count scale already, which is what makes a grid comparable.
+    prepared = NamedTuple[]
+    for p in panels
+        isempty(p.sample_names) && continue
+        counts = permutedims(p.counts)               # segments x samples
+        push!(prepared, (; p.row, p.col, p.segment_labels, p.sample_names, counts))
+    end
+    isempty(prepared) && return json_error(400, "no_samples",
+                                           "No samples in any facet panel")
+
+    row_labels = natural_sort(unique(String[p.row for p in prepared]))
+    col_labels = natural_sort(unique(String[p.col for p in prepared]))
+
+    colour_for = (tag == "category") ? _category_colour_for(value) : nothing
+    fig = faceted_bar_chart(prepared, row_labels, col_labels;
+                            top_n=effective_top_n, relative, mode, colour_for,
+                            keep_empty, row_title=row_dim, col_title=col_dim,
+                            short_labels=true)
     HTTP.Response(200, ["Content-Type" => "application/json"],
                   body=JSON3.write(fig))
 end
@@ -1039,7 +1161,7 @@ end
             levels = taxonomy_levels(con, table)
             isempty(levels) && return
             effective_rank = rank in levels ? rank : last(levels)
-            rank_col = taxon_column(columns, effective_rank)
+            rank_col = _rank_column(columns, effective_rank)
             isnothing(rank_col) && return
 
             scols = _filter_by_prefix(sample_columns(con, table), resolved.prefix)
@@ -1048,6 +1170,9 @@ end
             exclude_conditions = _exclusion_conditions(study, resolved.run, resolved.group, columns; surface="venn", config_cache=cfg_cache)
             where_clause, where_params = _analysis_where_clause(params, columns;
                                                                 exclude_conditions)
+            scols = _retain_sample_columns(con, table, scols, params,
+                                           where_clause, where_params)
+            isempty(scols) && return nothing
             taxa = venn_taxa_present(con, table, scols, rank_col,
                                      where_clause, where_params)
             push!(conditions, (; group=resolved.group, run=resolved.run,

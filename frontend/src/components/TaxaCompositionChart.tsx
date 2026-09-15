@@ -2,12 +2,13 @@
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { useAnalysisSource } from './analysisSource'
 import { errorMessage } from '../api/errorMessage'
-import { ChartCustomiser } from './ChartCustomiser'
+import { AnalysisChart } from './AnalysisChart'
 import { useToast } from './Toast'
-import type { CategorySet, ComparisonRunSpec } from '../api/types'
+import { FACET_DIMENSIONS, type CategorySet, type ComparisonRunSpec, type FacetDimension } from '../api/types'
 
-//## Select / checkbox style tokens (matching ComparisonPanel.tsx)
+//## Select / checkbox style tokens (matching DiversityPanel.tsx)
 const SELECT_STYLE: React.CSSProperties = {
   padding: '4px 8px',
   borderRadius: 4,
@@ -44,6 +45,7 @@ export function TaxaCompositionChart({
   // requests and the chart's internal sub-group selector is hidden.
   subgroup?: string | null
 }) {
+  const source = useAnalysisSource()
   const toast = useToast()
 
   //## Tag selector: 'rank' or 'category'
@@ -61,6 +63,11 @@ export function TaxaCompositionChart({
   //## Shared controls
   const [relative, setRelative] = useState(true)
   const [mode, setMode] = useState<'stacked' | 'grouped'>('stacked')
+  const [keepEmpty, setKeepEmpty] = useState(false)
+  // Grid layout: one panel per (row dimension value, column dimension value).
+  const [facet, setFacet] = useState(false)
+  const [facetRows, setFacetRows] = useState<FacetDimension>('run')
+  const [facetCols, setFacetCols] = useState<FacetDimension>('subgroup')
   // null = All, "__pool__" = Pool, any other string = a specific sub-group.
   // When controlledSubgroup is provided, the internal selector is suppressed
   // and this state is ignored in favour of the prop.
@@ -74,10 +81,16 @@ export function TaxaCompositionChart({
 
   //## Derived flags
   const isCrossRun = runs !== undefined && runs.length > 0
+  // Faceting splits the selected runs across two dimensions, so it is only on
+  // offer where several runs are in play.
+  const canFacet = isCrossRun
+  const isFaceted = canFacet && facet
   // Show the internal sub-group selector only when not controlled externally, and
-  // when subgroups has >= 2 entries or we are in cross-run mode.
+  // when subgroups has >= 2 entries or we are in cross-run mode. A facet grid
+  // decides the scoping itself, so the selector would only contradict it.
   const showSubgroupSelector =
-    !isControlled && (isCrossRun || (subgroups !== undefined && subgroups.length >= 2))
+    !isControlled && !isFaceted &&
+    (isCrossRun || (subgroups !== undefined && subgroups.length >= 2))
   const effectiveTable = table ?? 'merged'
   // Stable scalars for the reference run and group, shared by both single-run
   // and cross-run paths. These are primitive values so the rank-fetch effect
@@ -113,6 +126,11 @@ export function TaxaCompositionChart({
     }).catch(() => {})
   }, [tag])
 
+  // Panel rows in the rendered figure, read back from the layout Plotly grid.
+  // A single bar chart carries no grid, hence the fallback of one row.
+  const gridRows =
+    (figure as { layout?: { grid?: { rows?: number } } } | null)?.layout?.grid?.rows ?? 1
+
   //## Compute handler
   const handleShow = async () => {
     const value = tag === 'rank' ? rank : catSet
@@ -130,18 +148,25 @@ export function TaxaCompositionChart({
         value,
         relative,
         mode,
-        subgroup: subgroup ?? null,
+        keep_empty: keepEmpty,
         ...(tag === 'rank' ? { top_n: topN } : {}),
       }
-      if (isCrossRun) {
-        const result = await api.analysis.chartCompare(study, {
+      if (isFaceted) {
+        setFigure(await api.analysis.chartFacet(study, {
           ...body,
           runs: runs!,
-        })
-        setFigure(result)
+          rows: facetRows,
+          cols: facetCols,
+        }))
+      } else if (isCrossRun) {
+        setFigure(await api.analysis.chartCompare(study, {
+          ...body,
+          subgroup: subgroup ?? null,
+          runs: runs!,
+        }))
       } else {
-        const result = await api.analysis.chart(study, run!, body, group)
-        setFigure(result)
+        setFigure(await api.analysis.chart(study, run!,
+          { ...body, subgroup: subgroup ?? null, ...(source ? { source } : {}) }, group))
       }
     } catch (err) {
       toast.error(`Chart failed: ${errorMessage(err)}`)
@@ -170,6 +195,7 @@ export function TaxaCompositionChart({
         {/* Value selector: ranks when tag='rank', category sets when tag='category' */}
         {tag === 'rank' ? (
           <select
+            aria-label="Rank"
             value={rank ?? ''}
             onChange={e => setRank(e.target.value)}
             style={SELECT_STYLE}
@@ -178,6 +204,7 @@ export function TaxaCompositionChart({
           </select>
         ) : (
           <select
+            aria-label="Category set"
             value={catSet}
             onChange={e => setCatSet(e.target.value)}
             style={SELECT_STYLE}
@@ -210,6 +237,16 @@ export function TaxaCompositionChart({
           </label>
         )}
 
+        {/* Keep zero-read samples as blank slots on the axis */}
+        <label style={LABEL_STYLE} title="Show samples with no reads as blank slots on the axis">
+          <input
+            type="checkbox"
+            checked={keepEmpty}
+            onChange={e => setKeepEmpty(e.target.checked)}
+          />
+          Show empty
+        </label>
+
         {/* Relative checkbox */}
         <label style={LABEL_STYLE}>
           <input
@@ -222,6 +259,7 @@ export function TaxaCompositionChart({
 
         {/* Stacked / Grouped selector */}
         <select
+          aria-label="Bar mode"
           value={mode}
           onChange={e => setMode(e.target.value as 'stacked' | 'grouped')}
           style={SELECT_STYLE}
@@ -229,6 +267,55 @@ export function TaxaCompositionChart({
           <option value="stacked">Stacked</option>
           <option value="grouped">Grouped</option>
         </select>
+
+        {/* Facet grid: one panel per (row value, column value) pair */}
+        {canFacet && (
+          <label style={LABEL_STYLE} title="Split the selected runs into a grid of panels">
+            <input
+              type="checkbox"
+              checked={facet}
+              onChange={e => setFacet(e.target.checked)}
+            />
+            Grid
+          </label>
+        )}
+        {isFaceted && (
+          <>
+            <label style={LABEL_STYLE}>
+              Rows:
+              <select
+                value={facetRows}
+                onChange={e => {
+                  const next = e.target.value as FacetDimension
+                  setFacetRows(next)
+                  // The two axes must name different dimensions, so bump the other one.
+                  if (next === facetCols) {
+                    setFacetCols(FACET_DIMENSIONS.find(d => d !== next)!)
+                  }
+                }}
+                style={SELECT_STYLE}
+              >
+                {FACET_DIMENSIONS.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </label>
+            <label style={LABEL_STYLE}>
+              Columns:
+              <select
+                value={facetCols}
+                onChange={e => {
+                  const next = e.target.value as FacetDimension
+                  setFacetCols(next)
+                  if (next === facetRows) {
+                    setFacetRows(FACET_DIMENSIONS.find(d => d !== next)!)
+                  }
+                }}
+                style={SELECT_STYLE}
+              >
+                {FACET_DIMENSIONS.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </label>
+          </>
+        )}
 
         {/* Internal sub-group selector: hidden when the prop controls the value */}
         {showSubgroupSelector && (
@@ -251,17 +338,16 @@ export function TaxaCompositionChart({
           onClick={handleShow}
           disabled={loading || (tag === 'rank' ? !rank : !catSet)}
         >
-          {loading ? 'Computing...' : 'Show'}
+          {loading ? 'Computing…' : 'Show'}
         </button>
       </div>
 
-      {/* Chart output */}
+      {/* A grid needs headroom for its rows. */}
       {figure != null && (
-        <ChartCustomiser
+        <AnalysisChart
           study={study}
-          chartType={tag === 'rank' ? 'taxa_bar' : 'composition'}
           figure={figure}
-          heightRatio={0.3}
+          heightRatio={Math.min(0.3 * gridRows, 0.9)}
         />
       )}
     </div>

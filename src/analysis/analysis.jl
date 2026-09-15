@@ -5,13 +5,15 @@ module Analysis
 
 using DataFrames, JSON3, DuckDB, DBInterface, RCall
 using ..DiversityMetrics: richness, shannon, simpson, normalise_counts,
-                          auto_min_depth
+                          auto_min_depth, transform_counts
 using ..RRuntime: with_r_lock, RBusyError
 
 export sample_columns, filtered_counts, filtered_df, taxonomy_levels, taxon_column,
        aggregate_by_taxon, combined_counts_across_runs, combined_asv_counts_across_runs,
        sequence_column_name, pool_columns,
-       alpha_chart, bar_chart, taxa_bar_chart, pipeline_stats_chart,
+       alpha_chart, bar_chart, taxa_bar_chart,
+       faceted_bar_chart,
+       natural_less, natural_sort, short_sample_labels, pinned_segment_order,
        alpha_boxplot, nmds_chart,
        run_nmds, run_permanova, r_available,
        venn_taxa_present
@@ -24,8 +26,16 @@ Identify per-sample count columns in a DuckDB table.
 Returns all numeric columns except known non-count names.
 """
 function sample_columns(con, table::String)
+    # ORDER BY ordinal_position, not the engine's own: information_schema is a
+    # view over catalog state and an unordered SELECT against it is free to
+    # change order between sessions. The order this returns is the sample order
+    # of every chart axis, and - because rarefy and SRS walk the matrix rows in
+    # it, drawing from one seeded stream - it also decides which random draws
+    # each sample receives. An unstable order silently changes normalised
+    # diversity values on identical data.
     result = DataFrame(DBInterface.execute(con,
-        "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ?", [table]))
+        "SELECT column_name, data_type FROM information_schema.columns " *
+        "WHERE table_name = ? ORDER BY ordinal_position", [table]))
     non_count = Set([
         "SeqName", "Pident", "Accession", "rRNA", "Organellum", "specimen",
         "sequence", "OTU", "ASV",
@@ -97,6 +107,28 @@ function taxon_column(columns::Union{Vector{String}, AbstractSet{String}}, rank:
     nothing
 end
 
+## Deterministic row order
+# Identity columns, in preference order. Mirrors `_IDENTITY_COLUMNS` in
+# src/server/routes/duckdb_helpers.jl; both exist because the two layers reach
+# the same tables and neither may depend on the other.
+const _IDENTITY_COLUMNS = ("SeqName", "OTU", "ASV", "sequence")
+
+"""
+    _identity_order_clause(con, table) -> String
+
+An `ORDER BY` on the table's identity column, or on `rowid` when it has none,
+so an otherwise unordered SELECT returns its rows in the same order every time.
+"""
+function _identity_order_clause(con, table::String)
+    present = Set(string.(DataFrame(DBInterface.execute(con,
+        "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+        [table])).column_name))
+    for c in _IDENTITY_COLUMNS
+        c in present && return "ORDER BY \"$c\""
+    end
+    "ORDER BY rowid"
+end
+
 """
     filtered_counts(con, table, sample_cols, where_clause, where_params) -> Matrix{Float64}
 
@@ -106,7 +138,14 @@ Rows = samples, columns = ASV/OTU rows matching the filter.
 function filtered_counts(con, table::String, sample_cols::Vector{String},
                          where_clause::String, where_params::Vector)
     col_sql = join(["\"$c\"" for c in sample_cols], ", ")
-    sql = "SELECT $col_sql FROM \"$table\" $where_clause"
+    # The feature (column) order of the returned matrix is the order DuckDB
+    # hands the rows back in, which a parallel filtered scan does not fix. It
+    # does not matter to richness, Shannon or Simpson, which are permutation
+    # invariant - but rarefy assigns its seeded draws to feature *indices*, so a
+    # reordering redistributes the subsampled reads and changes every metric
+    # computed from them. Order by the table's identity column to pin it.
+    order = _identity_order_clause(con, table)
+    sql = "SELECT $col_sql FROM \"$table\" $where_clause $order"
     result = DataFrame(DBInterface.execute(con, sql, where_params))
     nrow(result) == 0 && return zeros(Float64, length(sample_cols), 0)
     n_features = nrow(result)
@@ -128,7 +167,7 @@ Return the full filtered table as a DataFrame.
 """
 function filtered_df(con, table::String,
                      where_clause::String, where_params::Vector)
-    sql = "SELECT * FROM \"$table\" $where_clause"
+    sql = "SELECT * FROM \"$table\" $where_clause $(_identity_order_clause(con, table))"
     DataFrame(DBInterface.execute(con, sql, where_params))
 end
 
@@ -144,7 +183,8 @@ function aggregate_by_taxon(con, table::String, sample_cols::Vector{String},
         SELECT COALESCE(NULLIF(TRIM("$rank"), ''), 'Unclassified') AS taxon, $sum_exprs
         FROM "$table" $where_clause
         GROUP BY taxon
-        ORDER BY ($(join(["SUM(COALESCE(\"$c\", 0))" for c in sample_cols], " + "))) DESC
+        ORDER BY ($(join(["SUM(COALESCE(\"$c\", 0))" for c in sample_cols], " + "))) DESC,
+                 taxon ASC
     """
     DataFrame(DBInterface.execute(con, sql, where_params))
 end
@@ -302,6 +342,99 @@ function _apply_grey!(colours::Vector{String}, labels::Vector{String})
     end
 end
 
+## Sample and segment ordering
+"""
+    natural_less(a, b) -> Bool
+
+Order strings with embedded numbers by value, so "Caecum_2c" precedes
+"Caecum_10c". Digit runs compare numerically, everything else as text; exact
+ties on that key fall back to plain string order, keeping the order total.
+"""
+function natural_less(a::AbstractString, b::AbstractString)
+    ta = [m.match for m in eachmatch(r"[0-9]+|[^0-9]+", a)]
+    tb = [m.match for m in eachmatch(r"[0-9]+|[^0-9]+", b)]
+    for (x, y) in zip(ta, tb)
+        xd = isdigit(first(x))
+        yd = isdigit(first(y))
+        if xd && yd
+            nx = lstrip(x, '0')
+            ny = lstrip(y, '0')
+            length(nx) != length(ny) && return length(nx) < length(ny)
+            nx != ny && return nx < ny
+        elseif xd != yd
+            return xd
+        elseif x != y
+            return x < y
+        end
+    end
+    length(ta) != length(tb) && return length(ta) < length(tb)
+    a < b
+end
+
+natural_sort(names) = sort(collect(names); lt=natural_less)
+
+# Segments pinned to the ends of the legend and the stack, whatever their totals.
+const _SEGMENTS_FIRST = ["Protozoa"]
+const _SEGMENTS_LAST  = ["Unassigned"]
+
+"""
+    pinned_segment_order(labels) -> Vector{Int}
+
+Permutation that moves pinned segments to the ends -- Protozoa first,
+Unassigned last -- keeping every other segment in its existing (abundance)
+order. Shared by the chart legends and the composition summary so a category
+sits in the same place wherever it is listed.
+"""
+function pinned_segment_order(labels::AbstractVector{<:AbstractString})
+    first_idx = [i for p in _SEGMENTS_FIRST for i in eachindex(labels) if labels[i] == p]
+    last_idx  = [i for p in _SEGMENTS_LAST  for i in eachindex(labels) if labels[i] == p]
+    pinned = Set(vcat(first_idx, last_idx))
+    vcat(first_idx, [i for i in eachindex(labels) if !(i in pinned)], last_idx)
+end
+
+## Sample label display
+# A name split on boundaries between digit runs, letter runs and single other
+# characters, so trimming shared tokens can never cut "20" down to "0".
+_label_tokens(s::AbstractString) = [m.match for m in eachmatch(r"[0-9]+|[A-Za-z]+|.", s)]
+
+"""
+    short_sample_labels(names) -> Vector{String}
+
+Drop the leading and trailing tokens every name shares. Within one panel those
+are carried by the context the chart already shows (run, sub-group, grid
+header), so "Large_Intestine_20l_m" in a Large_Intestine panel of the Multiplex
+run reads "20", and across a whole run "Caecum_1c_m" reads "Caecum_1c".
+
+Names are returned unchanged when there are fewer than two of them (nothing to
+compare against) or when trimming would leave an empty or ambiguous label.
+"""
+function short_sample_labels(names::AbstractVector{<:AbstractString})
+    out = String.(names)
+    length(out) < 2 && return out
+    toks = _label_tokens.(out)
+    minlen = minimum(length, toks)
+    p = 0
+    while p < minlen && all(t -> t[p + 1] == toks[1][p + 1], toks)
+        p += 1
+    end
+    s = 0
+    while s < minlen - p && all(t -> t[end - s] == toks[1][end - s], toks)
+        s += 1
+    end
+    (p == 0 && s == 0) && return out
+    short = [String(strip(c -> !(isletter(c) || isnumeric(c)), join(t[(p + 1):(end - s)])))
+             for t in toks]
+    (any(isempty, short) || !allunique(short)) && return out
+    short
+end
+
+# The x values and hover text for a sample axis: shortened labels on the axis,
+# the full sample name on hover so the source column stays identifiable.
+function _sample_axis(names::AbstractVector{<:AbstractString}, shorten::Bool)
+    full = String.(names)
+    (shorten ? short_sample_labels(full) : full, full)
+end
+
 ## Alpha diversity chart
 """
     alpha_chart(sample_names, richness, shannon, simpson) -> Dict
@@ -309,17 +442,23 @@ end
 Three-panel bar chart of alpha diversity metrics per sample.
 """
 function alpha_chart(sample_names::Vector{String},
-                     richness_values::Vector{Int},
+                     richness_values::AbstractVector{<:Real},
                      shannon_values::Vector{Float64},
-                     simpson_values::Vector{Float64})
+                     simpson_values::Vector{Float64};
+                     short_labels::Bool=false)
     colour = _palette_hex(1)[1]
+    order = sortperm(sample_names; lt=natural_less)
+    x, full = _sample_axis(sample_names[order], short_labels)
+    richness_values = richness_values[order]
+    shannon_values = shannon_values[order]
+    simpson_values = simpson_values[order]
     metrics = [
         ("y",  "x",  "Richness (observed ASVs)", Float64.(richness_values)),
         ("y2", "x2", "Shannon index",            shannon_values),
         ("y3", "x3", "Gini-Simpson (1 - D)",       simpson_values),
     ]
     traces = [Dict{String,Any}(
-        "type" => "bar", "x" => sample_names, "y" => vals,
+        "type" => "bar", "x" => x, "hovertext" => full, "y" => vals,
         "xaxis" => xax, "yaxis" => yax,
         "showlegend" => false, "marker" => Dict("color" => colour),
     ) for (yax, xax, _, vals) in metrics]
@@ -330,9 +469,11 @@ function alpha_chart(sample_names::Vector{String},
         "yaxis"  => Dict("title" => "Richness (observed ASVs)"),
         "yaxis2" => Dict("title" => "Shannon index"),
         "yaxis3" => Dict("title" => "Gini-Simpson (1 - D)"),
-        "xaxis"  => Dict("tickangle" => -45),
-        "xaxis2" => Dict("tickangle" => -45),
-        "xaxis3" => Dict("title" => "Sample", "tickangle" => -45),
+        # Categorical: a shortened label such as "20" would otherwise be read
+        # as a number and placed on a linear axis.
+        "xaxis"  => Dict("tickangle" => -45, "type" => "category"),
+        "xaxis2" => Dict("tickangle" => -45, "type" => "category"),
+        "xaxis3" => Dict("title" => "Sample", "tickangle" => -45, "type" => "category"),
     )
     Dict("data" => traces, "layout" => layout)
 end
@@ -382,13 +523,21 @@ end
 
 ## Generic bar chart
 """
-    bar_chart(segment_labels, sample_names, counts; top_n, relative, mode, colour_for) -> Dict
+    bar_chart(segment_labels, sample_names, counts; top_n, relative, mode, colour_for, keep_empty) -> Dict
 
 Label-agnostic stacked or grouped bar chart.
 `counts` is a segments-by-samples matrix.
 `mode` is "stacked" or "grouped"; sets Plotly barmode to "stack" or "group".
 `colour_for` is an optional `label -> hex` function; when `nothing`, the
 built-in palette plus grey for Other/Unclassified/Unassigned is used.
+`keep_empty` retains samples with no reads as an empty slot on the category
+axis, so a missing sample reads as a gap.
+`natural_order` sorts samples by `natural_less` ("x_2" before "x_10"); pass
+`false` where the caller's order is itself meaningful, such as runs pooled in
+the order they were selected.  `short_labels` trims the name tokens every
+sample shares (see `short_sample_labels`), keeping the full name as hover text.
+Segments are ordered by total, except that Protozoa is pinned first and
+Unassigned last.
 """
 function bar_chart(segment_labels::Vector{String},
                    sample_names::Vector{String},
@@ -396,13 +545,23 @@ function bar_chart(segment_labels::Vector{String},
                    top_n::Int=15,
                    relative::Bool=true,
                    mode::String="stacked",
-                   colour_for=nothing)
+                   colour_for=nothing,
+                   keep_empty::Bool=false,
+                   natural_order::Bool=true,
+                   short_labels::Bool=false)
     n_segments = length(segment_labels)
 
-    # Drop samples (columns) that contain no data before plotting.
+    if natural_order
+        sample_order = sortperm(sample_names; lt=natural_less)
+        sample_names = sample_names[sample_order]
+        counts = counts[:, sample_order]
+    end
+
+    # Drop samples (columns) that contain no data before plotting, unless the
+    # caller asked to keep them as blanks.
     col_totals = vec(sum(counts, dims=1))
     empty_mask = col_totals .== 0
-    if any(empty_mask)
+    if any(empty_mask) && !keep_empty
         dropped = sample_names[empty_mask]
         @info "bar_chart: dropping $(length(dropped)) empty sample column(s)" samples=dropped
         keep_cols = .!empty_mask
@@ -423,6 +582,9 @@ function bar_chart(segment_labels::Vector{String},
         counts = counts[order, :]
         final_labels = segment_labels[order]
     end
+    pinned = pinned_segment_order(final_labels)
+    counts = counts[pinned, :]
+    final_labels = final_labels[pinned]
 
     if relative
         col_sums = vec(sum(counts, dims=1))
@@ -444,16 +606,21 @@ function bar_chart(segment_labels::Vector{String},
     title_text = relative ? "Composition" : "Composition (absolute)"
     barmode = (mode == "grouped" || mode == "group") ? "group" : "stack"
 
+    x, full = _sample_axis(sample_names, short_labels)
     traces = [Dict{String,Any}(
         "type" => "bar", "name" => final_labels[i],
-        "x" => sample_names, "y" => collect(counts[i, :]),
+        "x" => x, "hovertext" => full, "y" => collect(counts[i, :]),
         "marker" => Dict("color" => colours[i]),
     ) for i in 1:n_final]
 
     layout = Dict{String,Any}(
         "barmode" => barmode,
         "title" => Dict("text" => title_text),
-        "xaxis" => Dict("title" => "Sample", "tickangle" => -45),
+        # A retained empty sample is an all-zero bar, which Plotly only reserves a
+        # slot for on a categorical axis; left to infer, it would collapse the gap
+        # the caller asked to see.
+        "xaxis" => Dict{String,Any}("title" => "Sample", "tickangle" => -45,
+                                    "type" => "category"),
         "yaxis" => Dict{String,Any}("title" => ylabel),
         "legend" => Dict("traceorder" => "normal"),
     )
@@ -474,50 +641,183 @@ Delegates to `bar_chart` with palette colouring and stacked mode.
 function taxa_bar_chart(taxon_labels::Vector{String},
                         sample_names::Vector{String},
                         counts::Matrix{Float64};
-                        top_n::Int=15, relative::Bool=true)
+                        top_n::Int=15, relative::Bool=true,
+                        keep_empty::Bool=false)
     bar_chart(taxon_labels, sample_names, counts;
-              top_n=top_n, relative=relative, mode="stacked", colour_for=nothing)
+              top_n=top_n, relative=relative, mode="stacked", colour_for=nothing,
+              keep_empty=keep_empty)
 end
 
-## Pipeline stats chart
-const _STAGE_ORDER = ["input", "filtered", "denoisedF", "denoisedR", "merged", "nochim"]
-const _STAGE_LABELS = Dict(
-    "input" => "Input", "filtered" => "Filtered",
-    "denoisedF" => "Denoised (F)", "denoisedR" => "Denoised (R)",
-    "merged" => "Merged", "nochim" => "Chimera-free",
-)
-
+## Faceted bar chart
 """
-    pipeline_stats_chart(stats_df) -> Dict
+    faceted_bar_chart(panels, row_labels, col_labels; kwargs...) -> Dict
 
-Grouped bar chart of read counts at each DADA2 pipeline stage.
-`stats_df` must have a `sample` column plus stage count columns.
+Grid of bar charts, one panel per (row, col) pair -- a 2x2 of compositions when
+two runs are crossed with two groups, and any other rectangle besides.
+
+`panels` is a vector of named tuples
+`(; row, col, segment_labels, sample_names, counts)` where `counts` is a
+segments-by-samples matrix.  A (row, col) pair with no entry renders as an empty
+panel, so an absent combination shows as a hole in the grid.
+
+Samples within a panel are sorted by `natural_less`.  With `short_labels`, each
+panel's sample names lose the tokens they all share -- in a Caecum panel of one
+run, "Caecum_12c_m" reads "12" -- since the row and column headers already say
+what was trimmed; the full name remains the hover text.
+
+Segment selection is global: the top-N cut and the label-to-colour
+assignment are computed once over the pooled totals, so a taxon carries the same
+colour in every panel and the legend describes the whole figure.  Every panel
+carries a trace for every retained segment, zero-filled where the segment is
+absent, which keeps the legend complete however sparse an individual panel is.
 """
-function pipeline_stats_chart(stats_df::DataFrame)
-    all_cols = names(stats_df)
-    stage_cols = [c for c in _STAGE_ORDER if c in all_cols]
-    reads_cols = sort([c for c in all_cols if startswith(c, "reads_")])
-    append!(stage_cols, reads_cols)
-    isempty(stage_cols) && return nothing
+function faceted_bar_chart(panels::Vector{<:NamedTuple},
+                           row_labels::Vector{String},
+                           col_labels::Vector{String};
+                           top_n::Int=15,
+                           relative::Bool=true,
+                           mode::String="stacked",
+                           colour_for=nothing,
+                           keep_empty::Bool=false,
+                           row_title::String="",
+                           col_title::String="",
+                           short_labels::Bool=false)
+    n_rows = length(row_labels)
+    n_cols = length(col_labels)
+    (n_rows == 0 || n_cols == 0) && return Dict("data" => Any[], "layout" => Dict{String,Any}())
 
-    sample_names = String.(stats_df.sample)
-    stage_labels = [get(_STAGE_LABELS, c, c) for c in stage_cols]
-    colours = _palette_hex(length(sample_names))
+    by_cell = Dict{Tuple{String,String}, Any}()
+    for p in panels
+        by_cell[(String(p.row), String(p.col))] = p
+    end
 
-    traces = [Dict{String,Any}(
-        "type" => "bar", "name" => sample_names[si],
-        "x" => stage_labels,
-        "y" => [let v = stats_df[si, Symbol(c)]; ismissing(v) ? 0.0 : Float64(v) end
-                for c in stage_cols],
-        "marker" => Dict("color" => colours[si]),
-    ) for si in eachindex(sample_names)]
+    # Global segment ordering across every panel.
+    totals = Dict{String, Float64}()
+    for p in panels
+        for (i, label) in enumerate(p.segment_labels)
+            totals[label] = get(totals, label, 0.0) + sum(@view p.counts[i, :])
+        end
+    end
+    ordered = sort(collect(keys(totals)); by = l -> (-totals[l], l))
+    collapse = length(ordered) > top_n
+    final_labels = collapse ? vcat(ordered[1:top_n], ["Other"]) : ordered
+    final_labels = final_labels[pinned_segment_order(final_labels)]
+    isempty(final_labels) && return Dict("data" => Any[], "layout" => Dict{String,Any}())
+    keep_set = Set(collapse ? ordered[1:top_n] : ordered)
+    row_of = Dict(l => i for (i, l) in enumerate(final_labels))
+    other_row = collapse ? row_of["Other"] : 0
 
+    n_final = length(final_labels)
+    if isnothing(colour_for)
+        colours = _palette_hex(n_final)
+        _apply_grey!(colours, final_labels)
+    else
+        colours = [colour_for(final_labels[i]) for i in 1:n_final]
+    end
+
+    barmode = (mode == "grouped" || mode == "group") ? "group" : "stack"
+    ylabel = relative ? "Relative abundance" : "Read count"
+
+    traces = Any[]
     layout = Dict{String,Any}(
-        "barmode" => "group",
-        "title" => Dict("text" => "Reads through pipeline stages"),
-        "xaxis" => Dict("title" => "Pipeline stage", "tickangle" => -45),
-        "yaxis" => Dict("title" => "Read count"),
+        "barmode" => barmode,
+        "title" => Dict("text" => relative ? "Composition" : "Composition (absolute)"),
+        "grid" => Dict("rows" => n_rows, "columns" => n_cols,
+                       "pattern" => "independent"),
+        # Room for the title above the column headers.
+        "margin" => Dict("l" => 60, "r" => 30, "t" => 90, "b" => 50),
+        "legend" => Dict("traceorder" => "normal"),
     )
+    annotations = Any[]
+
+    for (ri, rlabel) in enumerate(row_labels), (ci, clabel) in enumerate(col_labels)
+        # Plotly's independent grid fills row-major, so panel n owns axis pair n.
+        panel_idx = (ri - 1) * n_cols + ci
+        suffix = panel_idx == 1 ? "" : string(panel_idx)
+        xaxis_key = "xaxis$suffix"
+        yaxis_key = "yaxis$suffix"
+
+        cell = get(by_cell, (rlabel, clabel), nothing)
+        sample_names = isnothing(cell) ? String[] : String.(cell.sample_names)
+        sample_order = sortperm(sample_names; lt=natural_less)
+        sample_names = sample_names[sample_order]
+        counts = zeros(Float64, n_final, length(sample_names))
+        if !isnothing(cell)
+            for (i, label) in enumerate(cell.segment_labels)
+                target = label in keep_set ? row_of[label] : other_row
+                target == 0 && continue
+                for (j, src) in enumerate(sample_order)
+                    counts[target, j] += cell.counts[i, src]
+                end
+            end
+        end
+
+        # Per-panel empty-sample handling, matching bar_chart's contract.
+        if !isempty(sample_names)
+            col_totals = vec(sum(counts, dims=1))
+            empty_mask = col_totals .== 0
+            if any(empty_mask) && !keep_empty
+                keep_cols = .!empty_mask
+                counts = counts[:, keep_cols]
+                sample_names = sample_names[keep_cols]
+            end
+        end
+
+        if relative && !isempty(sample_names)
+            col_sums = vec(sum(counts, dims=1))
+            for j in eachindex(col_sums)
+                col_sums[j] > 0 && (counts[:, j] ./= col_sums[j])
+            end
+        end
+
+        x, full = _sample_axis(sample_names, short_labels)
+        for i in 1:n_final
+            push!(traces, Dict{String,Any}(
+                "type" => "bar", "name" => final_labels[i],
+                "x" => x, "hovertext" => full,
+                "y" => isempty(sample_names) ? Float64[] : collect(counts[i, :]),
+                "xaxis" => "x$suffix", "yaxis" => "y$suffix",
+                "legendgroup" => final_labels[i],
+                "showlegend" => panel_idx == 1,
+                "marker" => Dict("color" => colours[i]),
+            ))
+        end
+
+        layout[xaxis_key] = Dict{String,Any}(
+            "type" => "category", "tickangle" => -45,
+            # Only the bottom row carries the sample-axis title; repeating it in
+            # every panel crowds the grid without adding information.
+            "title" => ri == n_rows ? "Sample" : "",
+        )
+        yaxis = Dict{String,Any}("title" => ci == 1 ? ylabel : "")
+        (relative && barmode == "stack") && (yaxis["range"] = [0, 1])
+        layout[yaxis_key] = yaxis
+
+        # Column headers above the top row, row headers to the right of the last.
+        if ri == 1
+            header = isempty(col_title) ? clabel : "$col_title: $clabel"
+            push!(annotations, Dict{String,Any}(
+                "text" => "<b>$header</b>",
+                "xref" => "x$suffix domain", "yref" => "y$suffix domain",
+                "x" => 0.5, "y" => 1.04,
+                "xanchor" => "center", "yanchor" => "bottom",
+                "showarrow" => false,
+            ))
+        end
+        if ci == n_cols
+            header = isempty(row_title) ? rlabel : "$row_title: $rlabel"
+            push!(annotations, Dict{String,Any}(
+                "text" => "<b>$header</b>",
+                "xref" => "x$suffix domain", "yref" => "y$suffix domain",
+                "x" => 1.02, "y" => 0.5,
+                "xanchor" => "left", "yanchor" => "middle",
+                "textangle" => 90,
+                "showarrow" => false,
+            ))
+        end
+    end
+
+    layout["annotations"] = annotations
     Dict("data" => traces, "layout" => layout)
 end
 
@@ -560,24 +860,57 @@ function _paired_metric_map(sample_ids::Vector{String}, values::Vector{Float64})
     Dict(k => sum(v) / length(v) for (k, v) in buckets)
 end
 
+# Line segments joining each biological sample to itself across the groups it
+# appears in, drawn on one panel's axes. Pairing uses the same sample-id keys the
+# paired significance tests use, so the lines show exactly the pairs the test
+# consumed: a sample present in only one group contributes to neither.
+#
+# A sample repeated within one group is averaged, matching `_paired_metric_map`,
+# so each sample contributes at most one vertex per group and the path stays a
+# function of the group axis.
+function _paired_line_traces(group_labels::Vector{String},
+                             metric_maps::Vector{Dict{String, Float64}},
+                             xaxis::String, yaxis::String)
+    appearances = Dict{String, Int}()
+    for m in metric_maps, sid in keys(m)
+        appearances[sid] = get(appearances, sid, 0) + 1
+    end
+
+    traces = Any[]
+    for sid in sort(collect(keys(appearances)))
+        appearances[sid] >= 2 || continue
+        xs = String[]
+        ys = Float64[]
+        for (i, m) in enumerate(metric_maps)
+            haskey(m, sid) || continue
+            push!(xs, group_labels[i])
+            push!(ys, m[sid])
+        end
+        push!(traces, Dict{String,Any}(
+            "type" => "scatter", "mode" => "lines",
+            "x" => xs, "y" => ys,
+            "xaxis" => xaxis, "yaxis" => yaxis,
+            "line" => Dict("color" => "rgba(70,70,70,0.45)", "width" => 1),
+            "hoverinfo" => "text",
+            "text" => fill(sid, length(xs)),
+            "showlegend" => false,
+        ))
+    end
+    traces
+end
+
 _no_significance() = (nothing, DataFrame(group1=String[], group2=String[], p=Float64[]))
 
-# A boxplot is worth drawing even without its significance annotations, so when a
-# pipeline run is holding the R runtime we degrade to an unannotated chart rather
-# than failing the whole request.
+# Waits for the R runtime like the other R analyses. While a pipeline run holds
+# it, RBusyError reaches the server, which reports the chart as unavailable
+# until the run completes.
 function _alpha_significance(values::Vector{Float64},
                              labels::Vector{String},
                              sample_ids::Vector{String};
                              pairwise::Bool=false,
                              paired_samples::Bool=false)
-    try
-        _ensure_r() || return _no_significance()
-        _alpha_significance_r(values, labels, sample_ids; pairwise, paired_samples)
-    catch e
-        e isa RBusyError || rethrow()
-        @warn "Alpha significance skipped: the R runtime is busy with a pipeline run"
-        _no_significance()
-    end
+    _ensure_r() || return _no_significance()
+    _alpha_significance_r(values, labels, sample_ids; pairwise, paired_samples)
 end
 
 function _alpha_significance_r(values::Vector{Float64},
@@ -730,13 +1063,17 @@ function _add_pairwise_annotations!(layout::Dict{String,Any},
     layout[yaxis_layout_key] = axis
 end
 
-function alpha_boxplot(groups::Vector{Tuple{String, Vector{String}, Vector{Int}, Vector{Float64}, Vector{Float64}}};
+function alpha_boxplot(groups::AbstractVector{<:Tuple{String, Vector{String}, AbstractVector{<:Real}, Vector{Float64}, Vector{Float64}}};
                        show_points::Bool=true,
                        annotate_significance::Bool=false,
                        pairwise_brackets::Bool=false,
                        paired_samples::Bool=false,
+                       paired_lines::Bool=false,
                        significance_test::String="kruskal_wallis")
     colours = _palette_hex(length(groups))
+    # Paired lines must terminate on the points they join, so the jitter that
+    # otherwise spreads overlapping points is switched off while they are drawn.
+    jitter_points = show_points && !paired_lines
     panels = [
         ("y", "x", "yaxis", "y",  "Richness (observed ASVs)", 1),
         ("y2", "x2", "yaxis2", "y2", "Shannon index",          2),
@@ -771,7 +1108,7 @@ function alpha_boxplot(groups::Vector{Tuple{String, Vector{String}, Vector{Int},
                 "line" => Dict("color" => line_colour, "width" => 2),
                 "fillcolor" => fill_colour,
                 "boxpoints" => show_points ? "all" : false,
-                "jitter" => show_points ? 0.35 : 0.0,
+                "jitter" => jitter_points ? 0.35 : 0.0,
                 "pointpos" => show_points ? 0.0 : 0.0,
                 "marker" => Dict(
                     "color" => show_points ? _hex_to_rgba(line_colour, 0.8) : line_colour,
@@ -783,6 +1120,16 @@ function alpha_boxplot(groups::Vector{Tuple{String, Vector{String}, Vector{Int},
                 "legendgroup" => label,
             ))
         end
+        if paired_lines && length(groups) >= 2
+            metric_maps = Dict{String, Float64}[
+                _paired_metric_map(sample_ids,
+                                   pi == 1 ? Float64.(richness_values) :
+                                   pi == 2 ? shannon_values : simpson_values)
+                for (_, sample_ids, richness_values, shannon_values, simpson_values) in groups
+            ]
+            append!(traces, _paired_line_traces(
+                [label for (label, _, _, _, _) in groups], metric_maps, xax, yax))
+        end
         if length(unique(panel_labels)) >= 2 && significance_test == "kruskal_wallis"
             need_pairwise = pairwise_brackets
             p_value, pairwise_df = _alpha_significance(panel_values, panel_labels, panel_sample_ids;
@@ -790,9 +1137,8 @@ function alpha_boxplot(groups::Vector{Tuple{String, Vector{String}, Vector{Int},
                                                        paired_samples=paired_samples)
             if annotate_significance
             anns = get!(panel_annotations, panel_idx, Dict{String,Any}[])
-            # Anchor to this panel's axis domain, not paper: a paper-referenced
-            # label cannot survive the frontend's per-metric axis renumbering,
-            # whereas a panel-anchored one remaps with its panel.
+            # Anchor to this panel's axis domain so the label remaps with its
+            # panel under the frontend's per-metric axis renumbering.
             push!(anns, Dict{String,Any}(
                 "xref" => "$xax domain", "yref" => "$yax domain",
                 "x" => 0.98, "y" => 0.98,
@@ -836,7 +1182,7 @@ function alpha_boxplot(groups::Vector{Tuple{String, Vector{String}, Vector{Int},
     Dict("data" => traces, "layout" => layout)
 end
 
-function alpha_boxplot(groups::Vector{Tuple{String, Vector{Int}, Vector{Float64}, Vector{Float64}}}; kwargs...)
+function alpha_boxplot(groups::AbstractVector{<:Tuple{String, AbstractVector{<:Real}, Vector{Float64}, Vector{Float64}}}; kwargs...)
     expanded = [
         (label,
          ["sample_$i" for i in eachindex(richness_values)],
@@ -935,21 +1281,29 @@ end
 r_available() = _ensure_r()
 
 """
-    run_nmds(mat; seed=123) -> (coords::Matrix{Float64}, stress::Float64)
+    run_nmds(mat; seed=123, transform="none") -> (coords::Matrix{Float64}, stress::Float64)
 
 NMDS via vegan::metaMDS with Bray-Curtis distance.
 `mat` is samples-by-features. Returns NaN-filled results on failure.
+
+`transform` is applied to the matrix before the dissimilarity; `"hellinger"`
+takes the square root of each row's relative abundances, so the Bray-Curtis
+distances that follow are driven less by the most abundant taxa.
 """
-function run_nmds(mat::Matrix{Float64}; seed::Integer=123)
+function run_nmds(mat::Matrix{Float64}; seed::Integer=123, transform::String="none")
     _ensure_r() || return (fill(NaN, size(mat, 1), 2), NaN)
+    mat = transform_counts(mat; method=transform)
     with_r_lock(; timeout=R_WAIT_SECONDS[]) do
         RCall.globalEnv[:mat] = mat
         RCall.globalEnv[:seed] = Int(seed)
         RCall.reval("""
-            set.seed(seed)
+            set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
             nmds_res <- tryCatch(
+                # parallel = 1: vegan otherwise takes getOption("mc.cores"),
+                # and parallel tries draw from separate RNG streams, so the
+                # coordinates would depend on an R option set outside this call.
                 metaMDS(mat, distance = "bray", k = 2, trymax = 200,
-                        autotransform = FALSE, trace = 0),
+                        autotransform = FALSE, trace = 0, parallel = 1),
                 error = function(e) NULL
             )
             if (!is.null(nmds_res)) {
@@ -968,17 +1322,25 @@ function run_nmds(mat::Matrix{Float64}; seed::Integer=123)
 end
 
 """
-    run_permanova(mat, metadata; seed=123) -> Union{NamedTuple, Nothing}
+    run_permanova(mat, metadata; seed=123, transform="none", blocks=nothing) -> Union{NamedTuple, Nothing}
 
-PERMANOVA via vegan::adonis2.
+PERMANOVA via vegan::adonis2 with 999 permutations.
 `metadata` is a DataFrame with one row per sample and covariate columns.
+`blocks`, one label per sample (e.g. the individual a sample came from),
+restricts permutations to within blocks. It is ignored when no label repeats,
+since singleton blocks admit no permutation at all.
+`transform` is applied before `vegdist`; see [`run_nmds`](@ref).
 """
-function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=123)
+function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=123,
+                       transform::String="none",
+                       blocks::Union{AbstractVector{<:AbstractString},Nothing}=nothing)
     _ensure_r() || return nothing
     covariates = [c for c in names(metadata) if lowercase(c) != "sample" &&
                       length(unique(metadata[!, c])) >= 2]
     isempty(covariates) && return nothing
     formula_rhs = join(covariates, " + ")
+    mat = transform_counts(mat; method=transform)
+    blocked = !isnothing(blocks) && length(blocks) == size(mat, 1) && !allunique(blocks)
 
     with_r_lock(; timeout=R_WAIT_SECONDS[]) do
         meta_r = copy(metadata)
@@ -986,13 +1348,21 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
         RCall.globalEnv[:meta_r] = meta_r
         RCall.globalEnv[:formula_rhs] = formula_rhs
         RCall.globalEnv[:seed] = Int(seed)
+        RCall.globalEnv[:perm_blocks] = blocked ? String.(blocks) : String[]
+        RCall.globalEnv[:disp_cols] = String.(covariates)
         RCall.reval("""
-            set.seed(seed)
+            set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
             dist_mat <- vegdist(mat, method = "bray")
             form <- as.formula(paste("dist_mat ~", formula_rhs))
+            # how() defaults to 199 permutations, so nperm must be explicit.
+            perm_ctrl <- if (length(perm_blocks) > 0) {
+                permute::how(blocks = factor(perm_blocks), nperm = 999)
+            } else {
+                999
+            }
             perm_err <- NULL
             perm_res <- tryCatch(
-                adonis2(form, data = meta_r, permutations = 999),
+                adonis2(form, data = meta_r, permutations = perm_ctrl, parallel = 1),
                 error = function(e) { perm_err <<- conditionMessage(e); NULL }
             )
             if (!is.null(perm_res)) {
@@ -1000,18 +1370,55 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
                 perm_r2 <- perm_res\$R2[1]
                 perm_f <- perm_res\$F[1]
                 perm_p <- perm_res[["Pr(>F)"]][1]
+                term_rows <- which(!(rownames(perm_res) %in% c("Residual", "Total")))
+                perm_terms <- rownames(perm_res)[term_rows]
+                perm_terms_r2 <- perm_res\$R2[term_rows]
+                perm_terms_f <- perm_res\$F[term_rows]
+                perm_terms_p <- perm_res[["Pr(>F)"]][term_rows]
             } else {
                 perm_text <- if (!is.null(perm_err)) perm_err else NA_character_
                 perm_r2 <- NA_real_
                 perm_f <- NA_real_
                 perm_p <- NA_real_
+                perm_terms <- character(0)
+                perm_terms_r2 <- numeric(0)
+                perm_terms_f <- numeric(0)
+                perm_terms_p <- numeric(0)
             }
+            # PERMDISP: the same distances and permutations, grouped by every covariate at once.
+            disp_err <- NULL
+            disp <- tryCatch({
+                grp <- interaction(meta_r[, disp_cols, drop = FALSE], drop = TRUE, sep = " / ")
+                bd <- betadisper(dist_mat, grp, type = "centroid")
+                set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
+                pt <- permutest(bd, permutations = perm_ctrl)
+                list(groups = levels(grp),
+                     mean = as.numeric(tapply(bd\$distances, grp, mean)),
+                     median = as.numeric(tapply(bd\$distances, grp, median)),
+                     f = pt\$tab\$F[1], df1 = pt\$tab\$Df[1], df2 = pt\$tab\$Df[2],
+                     p = pt\$tab[["Pr(>F)"]][1],
+                     text = paste(capture.output(print(pt)), collapse = "\\n"))
+            }, error = function(e) { disp_err <<- conditionMessage(e); NULL })
         """)
         txt = RCall.rcopy(RCall.reval("perm_text"))
         r2 = RCall.rcopy(RCall.reval("perm_r2"))
         f_stat = RCall.rcopy(RCall.reval("perm_f"))
         p_val = RCall.rcopy(RCall.reval("perm_p"))
-        RCall.reval("rm(mat, meta_r, formula_rhs, seed, dist_mat, form, perm_res, perm_err, perm_text, perm_r2, perm_f, perm_p); gc()")
+        # adonis2 tests terms sequentially, so each row is conditioned on the terms above it.
+        term_names = String.(vcat(RCall.rcopy(RCall.reval("perm_terms"))))
+        term_r2 = vcat(RCall.rcopy(RCall.reval("perm_terms_r2")))
+        term_f = vcat(RCall.rcopy(RCall.reval("perm_terms_f")))
+        term_p = vcat(RCall.rcopy(RCall.reval("perm_terms_p")))
+        dispersion = if RCall.rcopy(RCall.reval("is.null(disp)"))
+            err = RCall.rcopy(RCall.reval("disp_err"))
+            (; error = isnothing(err) ? "PERMDISP could not be computed" : string(err))
+        else
+            d = RCall.rcopy(RCall.reval("disp"))
+            groups = String.(vcat(d[:groups]))
+            (; groups = [(; group = groups[k], mean = vcat(d[:mean])[k], median = vcat(d[:median])[k]) for k in eachindex(groups)],
+               f_statistic = d[:f], df = [Int(d[:df1]), Int(d[:df2])], p_value = d[:p], text = String(d[:text]))
+        end
+        RCall.reval("rm(mat, meta_r, formula_rhs, seed, perm_blocks, disp_cols, perm_ctrl, dist_mat, form, perm_res, perm_err, perm_text, perm_r2, perm_f, perm_p, perm_terms, perm_terms_r2, perm_terms_f, perm_terms_p, disp, disp_err); gc()")
 
         ismissing(txt) && return nothing
         # When R's adonis2 threw, txt is the error message and r2/f/p are missing.
@@ -1020,7 +1427,13 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
         (; text=txt,
            r2=r2,
            f_statistic=ismissing(f_stat) ? nothing : f_stat,
-           p_value=ismissing(p_val) ? nothing : p_val)
+           p_value=ismissing(p_val) ? nothing : p_val,
+           terms=[(; term=term_names[k],
+                     r2=term_r2[k],
+                     f_statistic=ismissing(term_f[k]) ? nothing : term_f[k],
+                     p_value=ismissing(term_p[k]) ? nothing : term_p[k]) for k in eachindex(term_names)],
+           blocked,
+           dispersion)
     end
 end
 
