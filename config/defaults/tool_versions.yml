@@ -50,8 +50,24 @@ runtimes:
 # provenance and must not be probed as though it were. It is pinned here for the
 # same reason as everything else, so that CI cannot silently move.
 toolchain:
+  # install.jl uses a bun already on PATH at this version, or downloads this one
+  # into bin/, and builds the frontend with it. Checksums are from the release's
+  # SHASUMS256.txt.
   bun:
     version: "1.3.10"
+    archives:
+      linux-x86_64:
+        url: "https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64.zip"
+        sha256: "f57bc0187e39623de716ba3a389fda5486b2d7be7131a980ba54dc7b733d2e08"
+      linux-aarch64:
+        url: "https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-aarch64.zip"
+        sha256: "fa5ecb25cafa8e8f5c87a0f833719d46dd0af0a86c7837d806531212d55636d3"
+      macos-x86_64:
+        url: "https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-darwin-x64.zip"
+        sha256: "c1d90bf6140f20e572c473065dc6b37a4b036349b5e9e4133779cc642ad94323"
+      macos-aarch64:
+        url: "https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-darwin-aarch64.zip"
+        sha256: "82034e87c9d9b4398ea619aee2eed5d2a68c8157e9a6ae2d1052d84d533ccd8d"
 
 ## External tools
 tools:
@@ -119,3 +135,73 @@ tools:
       macos-aarch64:
         url: "https://github.com/torognes/swarm/releases/download/v3.1.6/swarm-3.1.6-macos-aarch64.tar.gz"
         sha256: "ec6a81b3d0693231d0283ad5fd360f2d3bda8918283d0ef01f1c8976d9c05896"
+
+  # The phylogeny tools. MAFFT, RAxML and gappa publish no binary archive for
+  # Linux, so each is pinned by its source tarball: the installer prefers the
+  # distribution package for MAFFT and RAxML where there is one and otherwise
+  # compiles the tarball, and always compiles gappa, whose build fetches its own
+  # dependencies at the commits the tarball names. These hashes were computed on
+  # 2026-09-28 from the bytes each URL served; for trimAl and IQ-TREE they match
+  # the `digest` GitHub's release API reports for the same asset.
+  # Held at 7.490: 7.525 segfaults in pairlocalalign on `--auto --addfragments`,
+  # the placement step's alignment.
+  mafft:
+    version: "7.490"
+    source: source_archive
+    archives:
+      any:
+        url: "https://mafft.cbrc.jp/alignment/software/mafft-7.490-without-extensions-src.tgz"
+        sha256: "79dcae383e76163d272bd438078067f006e75d06c51c4f31d49cc9baa2a72ef0"
+
+  # The binary reports itself as 1.5.rev1.
+  trimal:
+    version: "1.5.1"
+    source: archive
+    archives:
+      linux-x86_64:
+        url: "https://github.com/inab/trimal/releases/download/v1.5.1/trimAl_Linux_x86-64.zip"
+        sha256: "0e70e1aba9e2b7590993f3ff19834f2440574e1694d54f2fe56854284ef151a6"
+      linux-aarch64:
+        url: "https://github.com/inab/trimal/releases/download/v1.5.1/trimAl_Linux_aarch64.zip"
+        sha256: "1a9e8bfd10f701cdc6401c996186f65d14c69fec95982a46afb171b733557e27"
+      macos-x86_64:
+        url: "https://github.com/inab/trimal/releases/download/v1.5.1/trimAl_MacOS_x86-64.zip"
+        sha256: "d4a5a178d003ccde8c1c41e0914a8faa7a5212bc92321aabe84caec0329971bb"
+      macos-aarch64:
+        url: "https://github.com/inab/trimal/releases/download/v1.5.1/trimAl_MacOS_aarch64.zip"
+        sha256: "3ff59049e46c578f6fbb0f80bc734430ec4cd780c28ffdace598187cead22513"
+
+  iqtree:
+    version: "3.1.4"
+    source: archive
+    archives:
+      linux-x86_64:
+        url: "https://github.com/iqtree/iqtree3/releases/download/v3.1.4/iqtree-3.1.4-Linux-intel.tar.gz"
+        sha256: "d422cb2b8f04825faea753afda25c60de6611537d07ec8fcd0033e70cb042839"
+      linux-aarch64:
+        url: "https://github.com/iqtree/iqtree3/releases/download/v3.1.4/iqtree-3.1.4-Linux-arm.tar.gz"
+        sha256: "48fbbee1a5b5eb5b905d3bb9b88ed7651feaa83e9239f66559e3cc3a03455e37"
+      macos-x86_64:
+        url: "https://github.com/iqtree/iqtree3/releases/download/v3.1.4/iqtree-3.1.4-macOS-intel.zip"
+        sha256: "567ccd2c2960810afb7c2378fbae4dffca2664a69748236dfc1d041041e25e2b"
+      macos-aarch64:
+        url: "https://github.com/iqtree/iqtree3/releases/download/v3.1.4/iqtree-3.1.4-macOS-arm.zip"
+        sha256: "5ffcd67a28c4d412391e65a4cb9c27d80163d58cfea484f3b150e2dbd44f9cc8"
+
+  # RAxML 8, whose -f v is the EPA placement the pipeline runs. The 8.2.13
+  # source still announces itself as 8.2.12, which is what provenance records.
+  raxml:
+    version: "8.2.13"
+    source: source_archive
+    archives:
+      any:
+        url: "https://github.com/stamatak/standard-RAxML/archive/refs/tags/v8.2.13.tar.gz"
+        sha256: "28e500793324bd7d330b396ef27ea49c9186fa5e1edb3d5439036dc6c33e6067"
+
+  gappa:
+    version: "0.9.0"
+    source: source_archive
+    archives:
+      any:
+        url: "https://github.com/lczech/gappa/archive/refs/tags/v0.9.0.tar.gz"
+        sha256: "6c3e64c6621d1a3ae2ab9f7a3af8d6d130f35e3b260ab659ebf6b60e8364d126"

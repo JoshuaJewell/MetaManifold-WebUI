@@ -18,9 +18,8 @@
 # Pinning: every external tool version, download URL, and archive checksum lives in
 # config/defaults/tool_versions.yml, and nothing in this script tracks "latest".
 # Two clean installs a year apart therefore obtain the same binaries. --update
-# re-fetches those same pins rather than advancing them, so it is idempotent; a
-# version moves only when that file is edited. Any archive whose SHA256 does not
-# match its pin is refused, not installed.
+# re-fetches the same pins, so it is idempotent; a version moves only when that
+# file is edited. An archive whose SHA256 does not match its pin is refused.
 
 using Pkg
 
@@ -57,10 +56,54 @@ const ARCH_STR = Sys.ARCH == :x86_64  ? "x86_64"  :
                  string(Sys.ARCH)
 
 # Canonical binary name for tools whose config key differs from the binary name.
-const BINARY_NAMES = Dict("cd_hit_est" => "cd-hit-est")
+const BINARY_NAMES = Dict("cd_hit_est" => "cd-hit-est", "iqtree" => "iqtree3",
+                          "raxml" => "raxmlHPC-PTHREADS-SSE3")
 bin_name(key::String) = get(BINARY_NAMES, key, key)
 
 mkpath(BIN_DIR)
+
+## Install summary
+#
+# Every step that resolves, defers, or fails a dependency records one line here,
+# and main() prints the collected block last. The rule this enforces: nothing the
+# installer chose not to do may pass without a line the operator can read. A
+# skipped R runtime, an unresolved tool, headers that need root - each is reported
+# at install time.
+
+@enum StepStatus STEP_OK STEP_SKIPPED STEP_FAILED STEP_ACTION
+
+const SUMMARY = Tuple{String,StepStatus,String}[]
+
+record!(name::AbstractString, status::StepStatus, detail::AbstractString = "") =
+    push!(SUMMARY, (String(name), status, String(detail)))
+
+function print_summary()
+    isempty(SUMMARY) && return
+    labelw = maximum(length(s[1]) for s in SUMMARY)
+    println()
+    println("=================== Install summary ===================")
+    for (name, status, detail) in SUMMARY
+        tag = status == STEP_OK      ? "OK"            :
+              status == STEP_SKIPPED ? "SKIPPED"       :
+              status == STEP_FAILED  ? "FAILED"        :
+                                       "ACTION NEEDED"
+        line = "  $(rpad(name, labelw))  $(rpad(tag, 13))"
+        println(isempty(detail) ? rstrip(line) : "$line $detail")
+    end
+
+    pending = filter(s -> s[2] != STEP_OK, SUMMARY)
+    if isempty(pending)
+        println()
+        println("  Everything the installer manages is in place. Start with:  bash start.sh")
+    else
+        println()
+        println("  Still needs attention:")
+        for (name, _, detail) in pending
+            println(isempty(detail) ? "    - $name" : "    - $name -> $detail")
+        end
+    end
+    println("======================================================")
+end
 
 ## Version pins
 # The pin file is the sole source of truth for what this installer fetches. Without
@@ -172,10 +215,8 @@ function find_file_in_dir(dir::String, filename::String)::Union{String,Nothing}
     nothing
 end
 
-# Reject the file unless it hashes to `expected`. A missing pin is a recorded
-# absence of a checksum, not licence to dispense with one, so it aborts rather
-# than install bytes nobody has vouched for. The offending file is deleted so that
-# a failed run cannot leave a half-trusted artefact behind for the next one.
+# Reject the file unless it hashes to `expected`. A missing pin also aborts. The
+# offending file is deleted so a failed run leaves no unverified artefact behind.
 function verify_sha256(path::String, expected, source::String)
     expected === nothing && error(
         "No SHA256 is pinned for $source in $VERSIONS_FILE.\n" *
@@ -209,7 +250,11 @@ end
 function extract_binary(tarball::String, binary::String)::String
     workdir = mktempdir()
     try
-        run(`tar -xzf $tarball -C $workdir --warning=no-unknown-keyword`)
+        if endswith(tarball, ".zip")
+            run(`unzip -q -o $tarball -d $workdir`)
+        else
+            run(`tar -xzf $tarball -C $workdir --warning=no-unknown-keyword`)
+        end
         found = find_file_in_dir(workdir, binary)
         found === nothing && error("$binary not found in $(basename(tarball)) after extraction.")
         dest = joinpath(BIN_DIR, binary)
@@ -226,7 +271,8 @@ function download_pinned_binary(tool::String, binary::String)::String
     version = pinned_version(tool)
     @info "Installing $tool $version (pinned)..."
 
-    tarball = joinpath(BIN_DIR, "$(binary)_download.tar.gz")
+    ext     = endswith(string(rec["url"]), ".zip") ? ".zip" : ".tar.gz"
+    tarball = joinpath(BIN_DIR, "$(binary)_download$ext")
     try
         download_verified(rec["url"], tarball, get(rec, "sha256", nothing))
         return extract_binary(tarball, binary)
@@ -236,6 +282,100 @@ function download_pinned_binary(tool::String, binary::String)::String
 end
 
 download_vsearch()::String = download_pinned_binary("vsearch", "vsearch")
+download_trimal()::String  = download_pinned_binary("trimal", "trimal")
+download_iqtree()::String  = download_pinned_binary("iqtree", "iqtree3")
+
+# Unpack a pinned source tarball in a scratch directory and hand its top-level
+# directory to `build`, which returns the built binary's path.
+function build_pinned_source(build::Function, tool::String)::String
+    rec     = pinned_archive(tool)
+    version = pinned_version(tool)
+    Sys.which("make") === nothing && error(
+        "'make' is not available to build $tool $version from source.\n" *
+        "Install $tool yourself and enter its path when prompted.")
+    _c_compiler() === nothing && error(
+        "No C compiler is available to build $tool $version from source.\n" *
+        "Install build tools (e.g. build-essential), or install $tool yourself.")
+    tarball = joinpath(BIN_DIR, "$(tool)_source.tar.gz")
+    workdir = mktempdir()
+    try
+        @info "Building $tool $version from its pinned source..."
+        download_verified(string(rec["url"]), tarball, get(rec, "sha256", nothing))
+        run(`tar -xzf $tarball -C $workdir --warning=no-unknown-keyword`)
+        dirs = filter(isdir, readdir(workdir; join=true))
+        length(dirs) == 1 || error("Unexpected layout in the $tool source tarball.")
+        return build(only(dirs))
+    finally
+        rm(tarball; force=true)
+        rm(workdir; recursive=true, force=true)
+    end
+end
+
+# A distribution package is whatever that distribution ships, which need not be
+# the pinned version; the version actually obtained is recorded at preflight.
+function try_package(pkg::String, binaries::Vector{String}; brew_pkg=pkg)
+    cmd = package_install_cmd([pkg]; brew_pkg)
+    cmd === nothing && return nothing
+    @info "Trying package manager install for $pkg..."
+    try
+        run(cmd)
+    catch
+        @warn "Package manager install of $pkg failed, falling back to a source build."
+        return nothing
+    end
+    for b in binaries
+        found = Sys.which(b)
+        found !== nothing && return found
+    end
+    nothing
+end
+
+function download_mafft()::String
+    found = try_package("mafft", ["mafft"])
+    found !== nothing && return found
+    prefix = joinpath(BIN_DIR, "mafft")
+    build_pinned_source("mafft") do src
+        run(Cmd(`make -j$(Sys.CPU_THREADS) PREFIX=$prefix install`; dir=joinpath(src, "core")))
+        bin = joinpath(prefix, "bin", "mafft")
+        isfile(bin) || error("mafft not found at $bin after building.")
+        bin
+    end
+end
+
+# The PTHREADS build is what -T needs; SSE3 exists only on x86.
+function download_raxml()::String
+    found = try_package("raxml", ["raxmlHPC-PTHREADS-SSE3", "raxmlHPC-PTHREADS"])
+    found !== nothing && return found
+    sse = ARCH_STR == "x86_64"
+    binary   = sse ? "raxmlHPC-PTHREADS-SSE3" : "raxmlHPC-PTHREADS"
+    makefile = "Makefile." * (sse ? "SSE3." : "") * "PTHREADS." * (OS_TYPE == "macos" ? "mac" : "gcc")
+    build_pinned_source("raxml") do src
+        run(Cmd(`make -f $makefile`; dir=src))
+        bin = joinpath(src, binary)
+        isfile(bin) || error("$binary not found after building RAxML.")
+        dest = joinpath(BIN_DIR, binary)
+        cp(bin, dest; force=true)
+        chmod(dest, 0o755)
+        dest
+    end
+end
+
+# gappa's build downloads genesis, CLI11 and sparsepp at the commits its
+# CMakeLists names, so it needs cmake, a C++17 compiler and network access.
+function download_gappa()::String
+    Sys.which("cmake") === nothing && error(
+        "gappa is built from source and needs cmake. Install cmake and a C++ compiler, " *
+        "or build gappa yourself and enter the path to bin/gappa.")
+    build_pinned_source("gappa") do src
+        run(Cmd(`make`; dir=src))
+        bin = joinpath(src, "bin", "gappa")
+        isfile(bin) || error("gappa not found at $bin after building.")
+        dest = joinpath(BIN_DIR, "gappa")
+        cp(bin, dest; force=true)
+        chmod(dest, 0o755)
+        dest
+    end
+end
 
 function download_fastqc()::String
     rec     = pinned_archive("fastqc")
@@ -265,6 +405,64 @@ function download_fastqc()::String
     isfile(bin) || error("fastqc not found after extraction. Expected at $bin")
     chmod(bin, 0o755)
     bin
+end
+
+## FastQC's Java runtime
+# FastQC ships as a Perl wrapper around a Java application, so a JRE is a hard
+# runtime dependency that downloading FastQC cannot itself satisfy. Left
+# unchecked the failure is near-silent: the wrapper writes "Can't exec java" to
+# stderr, prints nothing to stdout and still exits 0, so the shortfall surfaces
+# much later as an empty version string from the provenance probe, or as a
+# fastqc stage that fails without ever naming Java. Naming it here, with the
+# command that fixes it, keeps the diagnosis at install time.
+
+# The install command to advise the user to run. It is returned even without root,
+# since the user runs it themselves.
+function java_install_hint()::String
+    OS_TYPE == "macos" && return "brew install openjdk"
+    prefix = has_root() ? "" : "sudo "
+    Sys.which("apt")    !== nothing && return "$(prefix)apt install -y default-jre-headless"
+    Sys.which("dnf")    !== nothing && return "$(prefix)dnf install -y java-17-openjdk-headless"
+    Sys.which("pacman") !== nothing && return "$(prefix)pacman -S --needed --noconfirm jre-openjdk-headless"
+    Sys.which("zypper") !== nothing && return "$(prefix)zypper install -y java-17-openjdk-headless"
+    "install a Java runtime (JRE 11 or newer) using your system package manager"
+end
+
+# Verify FastQC can actually run, by the same measure the provenance probe uses:
+# a version banner on stdout. The wrapper's exit status is not that measure --
+# it is 0 whether or not Java was found.
+function check_fastqc_runtime(fastqc::AbstractString)
+    out, err = IOBuffer(), IOBuffer()
+    try
+        run(pipeline(`$fastqc --version`; stdout=out, stderr=err))
+    catch
+        # A non-zero exit is just another way to fail; the banner check below decides.
+    end
+    banner = strip(String(take!(out)))
+    complaint = strip(String(take!(err)))
+
+    if occursin(r"FastQC\s+v"i, banner)
+        record!("Java runtime", STEP_OK, isempty(banner) ? "present" : banner)
+        return true
+    end
+
+    if Sys.which("java") === nothing
+        hint = java_install_hint()
+        @warn "FastQC is installed but cannot run: no Java runtime on PATH.\n" *
+              "FastQC is a Java application, so the fastqc stage will fail until a JRE\n" *
+              "is installed. Fix it with:\n\n    $hint\n"
+        record!("Java runtime", STEP_ACTION,
+                "missing - FastQC cannot run without it. Install with:  $hint")
+        return false
+    end
+
+    # Java is present but FastQC still would not report a version: surface what it said.
+    detail = isempty(complaint) ? "no version banner from `$fastqc --version`" :
+                                  first(split(complaint, '\n'))
+    @warn "FastQC is installed and Java is on PATH, but FastQC did not report a version.\n" *
+          "The fastqc stage may fail. It said: $detail"
+    record!("Java runtime", STEP_ACTION, "Java found, but FastQC failed: $detail")
+    false
 end
 
 function download_cdhit()::String
@@ -528,8 +726,8 @@ function install_r_sysdeps()
 
     OS_TYPE != "linux" && return
 
-    if Sys.which("apt-get") !== nothing
-        _install_sysdeps_with(package_install_cmd(apt_deps; linux_manager=:apt_get), apt_deps, "apt-get")
+    if Sys.which("apt") !== nothing
+        _install_sysdeps_with(package_install_cmd(apt_deps; linux_manager=:apt), apt_deps, "apt")
     elseif Sys.which("dnf") !== nothing
         _install_sysdeps_with(package_install_cmd(dnf_deps; linux_manager=:dnf), dnf_deps, "dnf")
     elseif Sys.which("pacman") !== nothing
@@ -537,7 +735,7 @@ function install_r_sysdeps()
     elseif Sys.which("zypper") !== nothing
         _install_sysdeps_with(package_install_cmd(zypper_deps; linux_manager=:zypper), zypper_deps, "zypper")
     else
-        @warn "Could not detect a supported package manager (apt-get, dnf, pacman, zypper). " *
+        @warn "Could not detect a supported package manager (apt, dnf, pacman, zypper). " *
               "Some R packages may fail to compile. Install the development headers for: " *
               "bzip2, xz, zlib, curl, openssl, libxml2, freetype, libpng, libjpeg, " *
               "libtiff, fontconfig, harfbuzz, fribidi, hdf5"
@@ -559,56 +757,131 @@ function _install_sysdeps_with(cmd::Union{Cmd,Nothing}, deps::Vector{String}, la
     end
 end
 
-function install_r_packages(packages::Vector{String}; force_reinstall::Bool=false)
-    pkgs_r  = join(["\"$p\"" for p in packages], ", ")
-    force_r = force_reinstall ? "TRUE" : "FALSE"
-    snippet = """
-        # Ensure a user-writable library is first on the search path
-        user_lib <- Sys.getenv("R_LIBS_USER",
-                        unset = file.path(path.expand("~"), "R", "library"))
-        dir.create(user_lib, recursive = TRUE, showWarnings = FALSE)
-        .libPaths(c(user_lib, .libPaths()))
+# The R side is renv-managed: renv.lock is the single source of truth and the
+# runtime activates it through .Rprofile. The installer therefore reproduces the
+# library straight from the lockfile with renv::restore(), which writes only to
+# the project-local renv/library and never needs root. renv itself is
+# self-bootstrapping from renv/activate.R, so a machine with a bare R can still
+# run this.
 
-        if (!requireNamespace("BiocManager", quietly = TRUE))
-            install.packages("BiocManager", repos = "https://cloud.r-project.org",
-                             lib = user_lib)
+# Build-time libraries the Bioconductor/tidyverse stack compiles against; a
+# missing one is the usual reason renv::restore() dies partway (e.g. Rhtslib
+# needs curl/curl.h). Each row: (probe, apt, dnf, pacman, zypper).
+#
+# `probe` is "pc:<module>" for a pkg-config query, or "h:<header>" for a compiler
+# `#include` test. pkg-config is authoritative where a .pc file exists; the
+# header test covers libraries that ship none (libbz2-dev on Debian has no .pc),
+# and libraries whose headers sit on a non-default include path (libxml2,
+# freetype2, harfbuzz, fribidi) are left as pc: since a bare #include would
+# wrongly report them absent.
+const R_SYSDEP_TABLE = [
+    #  probe             apt                     dnf                pacman        zypper
+    ("pc:libcurl",     "libcurl4-openssl-dev", "libcurl-devel",    "curl",       "libcurl-devel"),
+    ("pc:openssl",     "libssl-dev",           "openssl-devel",    "openssl",    "libopenssl-devel"),
+    ("pc:libxml-2.0",  "libxml2-dev",          "libxml2-devel",    "libxml2",    "libxml2-devel"),
+    ("h:zlib.h",       "zlib1g-dev",           "zlib-devel",       "zlib",       "zlib-devel"),
+    ("h:bzlib.h",      "libbz2-dev",           "bzip2-devel",      "bzip2",      "libbz2-devel"),
+    ("h:lzma.h",       "liblzma-dev",          "xz-devel",         "xz",         "xz-devel"),
+    ("pc:freetype2",   "libfreetype6-dev",     "freetype-devel",   "freetype2",  "freetype2-devel"),
+    ("h:png.h",        "libpng-dev",           "libpng-devel",     "libpng",     "libpng16-devel"),
+    ("h:tiff.h",       "libtiff5-dev",         "libtiff-devel",    "libtiff",    "libtiff-devel"),
+    ("pc:fontconfig",  "libfontconfig1-dev",   "fontconfig-devel", "fontconfig", "fontconfig-devel"),
+    ("pc:harfbuzz",    "libharfbuzz-dev",      "harfbuzz-devel",   "harfbuzz",   "harfbuzz-devel"),
+    ("pc:fribidi",     "libfribidi-dev",       "fribidi-devel",    "fribidi",    "fribidi-devel"),
+]
 
-        pkgs <- c($pkgs_r)
-
-        if ($force_r) {
-            message("Reinstalling all packages...")
-            BiocManager::install(pkgs, ask = FALSE, force = TRUE, dependencies = NA)
-        } else {
-            broken <- pkgs[!sapply(pkgs, function(p) {
-                tryCatch({ library(p, character.only = TRUE); TRUE },
-                         error = function(e) FALSE)
-            })]
-            if (length(broken) > 0) {
-                message("Installing/repairing: ", paste(broken, collapse = ", "))
-                BiocManager::install(broken, ask = FALSE, dependencies = NA)
-            } else {
-                message("All R packages already installed and loadable.")
-            }
-        }
-
-        # Final verification. Exit non-zero so Julia can detect failures.
-        failed <- pkgs[!sapply(pkgs, function(p) {
-            tryCatch({ library(p, character.only = TRUE); TRUE },
-                     error = function(e) FALSE)
-        })]
-        if (length(failed) > 0) {
-            message("ERROR: the following packages could not be loaded after install: ",
-                    paste(failed, collapse = ", "))
-            quit(status = 1)
-        }
-    """
-    try
-        run(`Rscript -e $snippet`)
-        @info "R packages installed successfully."
-    catch e
-        @error "R package installation failed: $e"
-        rethrow()
+const _CC_CACHE = Ref{Union{String,Nothing,Missing}}(missing)
+function _c_compiler()::Union{String,Nothing}
+    if _CC_CACHE[] === missing
+        _CC_CACHE[] = nothing
+        for c in ("cc", "gcc", "clang")
+            p = Sys.which(c)
+            if p !== nothing
+                _CC_CACHE[] = p
+                break
+            end
+        end
     end
+    _CC_CACHE[]
+end
+
+# true / false, or nothing when the probe itself cannot run (no pkg-config, no
+# compiler) - the caller reports "nothing" as needs-attention rather than
+# assuming success.
+function _r_dep_present(probe::AbstractString)::Union{Bool,Nothing}
+    kind, arg = split(probe, ':'; limit = 2)
+    if kind == "pc"
+        pc = Sys.which("pkg-config")
+        pc === nothing && return nothing
+        return try; success(`$pc --exists $arg`); catch; false; end
+    else
+        cc = _c_compiler()
+        cc === nothing && return nothing
+        return mktemp() do path, io
+            write(io, "#include <$arg>\n")
+            close(io)
+            try
+                run(pipeline(`$cc -xc -fsyntax-only $path`; stdout = devnull, stderr = devnull))
+                true
+            catch
+                false
+            end
+        end
+    end
+end
+
+"""Rows of R_SYSDEP_TABLE whose library is missing or unverifiable. Linux only."""
+function probe_missing_r_headers()::Vector{NTuple{5,String}}
+    OS_TYPE == "linux" || return NTuple{5,String}[]
+    missing = NTuple{5,String}[]
+    if Sys.which("pkg-config") === nothing
+        push!(missing, ("pc:pkg-config", "pkg-config", "pkgconf-pkg-config", "pkgconf", "pkg-config"))
+    end
+    if _c_compiler() === nothing
+        push!(missing, ("cc", "build-essential", "gcc", "base-devel", "gcc"))
+    end
+    for row in R_SYSDEP_TABLE
+        _r_dep_present(row[1]) == true || push!(missing, row)
+    end
+    missing
+end
+
+"""One copy-pasteable command to install the missing dev packages, or "" if none."""
+function r_sysdep_hint(missing::Vector{NTuple{5,String}})::String
+    isempty(missing) && return ""
+    col, pre = Sys.which("apt")     !== nothing ? (2, "sudo apt install -y")     :
+               Sys.which("dnf")     !== nothing ? (3, "sudo dnf install -y")     :
+               Sys.which("pacman")  !== nothing ? (4, "sudo pacman -S --needed") :
+               Sys.which("zypper")  !== nothing ? (5, "sudo zypper install -y")  :
+                                                  (2, "install dev headers:")
+    join([pre; unique(row[col] for row in missing)], " ")
+end
+
+# Reproduce renv/library from renv.lock. Returns (:ok, "") or (:incomplete, "pkg,pkg").
+function setup_r_packages(; rebuild::Bool=false)::Tuple{Symbol,String}
+    restore_call = rebuild ? "renv::restore(prompt = FALSE, rebuild = TRUE)" :
+                             "renv::restore(prompt = FALSE)"
+    try
+        run(Cmd(`Rscript -e $restore_call`; dir = PROJECT_ROOT))   # streams renv's progress
+    catch e
+        @warn "renv::restore() exited non-zero; verifying what landed anyway: $e"
+    end
+
+    # Verdict is whether the packages the pipeline loads are actually usable, not
+    # renv's exit code: restore can fail on one leaf package and still leave a
+    # working library, or "succeed" against a stale cache.
+    probe = raw"""
+        pkgs <- c("dada2", "vegan", "dplyr", "tibble")
+        cat(paste(pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)],
+                  collapse = ","))
+    """
+    bad = try
+        strip(read(Cmd(`Rscript -e $probe`; dir = PROJECT_ROOT), String))
+    catch
+        "dada2,vegan,dplyr,tibble"
+    end
+
+    isempty(bad) ? (:ok, "") : (:incomplete, String(bad))
 end
 
 ## Per-tool resolution
@@ -666,7 +939,7 @@ function resolve_tool(
     if install_fn !== nothing
         push!(options, "Install/download automatically to bin/")
     end
-    push!(options, "Enter a path manually  (local: /path/to/$bin  or  remote: user@host:/path/to/$bin)")
+    push!(options, "Enter a path manually  (/path/to/$bin)")
     push!(options, "Skip  (configure later in config/tools.yml)")
 
     for (i, opt) in enumerate(options)
@@ -685,7 +958,7 @@ function resolve_tool(
                 @error "Auto-install failed: $e"
                 println()
                 println("  What would you like to do?")
-                println("  1) Enter a path manually  (local: /path/to/$bin  or  remote: user@host:/path/to/$bin)")
+                println("  1) Enter a path manually  (/path/to/$bin)")
                 println("  2) Skip  (configure later in config/tools.yml)")
                 print("  Choice [1]: ")
                 raw2 = strip(readline())
@@ -706,16 +979,58 @@ function resolve_tool(
     end
 end
 
+## Frontend
+# bun builds the frontend into web/dist, which the server serves. Only the build
+# needs it; pipeline runs never do.
+const FRONTEND_DIR = joinpath(PROJECT_ROOT, "frontend")
+const DIST_INDEX   = joinpath(PROJECT_ROOT, "web", "dist", "index.html")
+
+# A bun already on PATH at the pinned version, else the pinned release in bin/.
+function ensure_bun()::String
+    pin  = PINS["toolchain"]["bun"]
+    want = string(pin["version"])
+    for cand in (joinpath(BIN_DIR, "bun"), something(Sys.which("bun"), ""))
+        (isempty(cand) || !isfile(cand)) && continue
+        have = try strip(read(`$cand --version`, String)) catch; "" end
+        have == want && return cand
+    end
+    rec = get(pin["archives"], PLATFORM, nothing)
+    rec === nothing && error("No bun archive is pinned for $PLATFORM in $VERSIONS_FILE.")
+    @info "Installing bun $want (pinned)..."
+    zip = joinpath(BIN_DIR, "bun_download.zip")
+    try
+        download_verified(rec["url"], zip, get(rec, "sha256", nothing))
+        return extract_binary(zip, "bun")
+    finally
+        rm(zip; force=true)
+    end
+end
+
+# Stale when any frontend source, config or the lockfile is newer than the build.
+function frontend_stale()::Bool
+    isfile(DIST_INDEX) || return true
+    built = mtime(DIST_INDEX)
+    inputs = [joinpath(FRONTEND_DIR, f) for f in ("index.html", "package.json", "bun.lock", "vite.config.ts", "tsconfig.json")]
+    for dir in ("src", "public"), (root, _, files) in walkdir(joinpath(FRONTEND_DIR, dir))
+        append!(inputs, joinpath.(root, files))
+    end
+    any(p -> isfile(p) && mtime(p) > built, inputs)
+end
+
+function build_frontend(bun::String)
+    cd(FRONTEND_DIR) do
+        run(`$bun install --frozen-lockfile`)
+        run(`$bun run build`)
+    end
+end
+
 ## Sysimage creation
 const SYSIMAGE_EXT  = Sys.isapple() ? ".dylib" : ".so"
 const SYSIMAGE_PATH = joinpath(PROJECT_ROOT, "MetaManifold$(SYSIMAGE_EXT)")
 const PRECOMPILE_EXEC_PATH = joinpath(PROJECT_ROOT, "precompile_exec.jl")
 
 function build_sysimage()
-    @info "Installing PackageCompiler..."
-    Pkg.add("PackageCompiler")
-
-    # Import after installation so it is available in this session
+    # PackageCompiler is a project dependency, installed by Pkg.instantiate().
     @eval using PackageCompiler
 
     @info "Compiling sysimage - this may take several minutes...\n  Package: MetaManifold\n  Output:  $SYSIMAGE_PATH"
@@ -775,7 +1090,7 @@ function package_install_cmd(
     end
     manager = linux_manager
     if manager === nothing
-        manager = Sys.which("apt-get") !== nothing ? :apt_get :
+        manager = Sys.which("apt") !== nothing ? :apt :
                   Sys.which("dnf") !== nothing ? :dnf :
                   Sys.which("pacman") !== nothing ? :pacman :
                   Sys.which("zypper") !== nothing ? :zypper :
@@ -783,8 +1098,8 @@ function package_install_cmd(
     end
     manager === nothing && return nothing
 
-    if manager == :apt_get
-        return Cmd(vcat(prefix, ["apt-get", "install", "-y"], pkgs))
+    if manager == :apt
+        return Cmd(vcat(prefix, ["apt", "install", "-y"], pkgs))
     elseif manager == :dnf
         return Cmd(vcat(prefix, ["dnf", "install", "-y"], pkgs))
     elseif manager == :pacman
@@ -821,49 +1136,102 @@ function main()
     config = load_tools_config()
     resolved = Dict{String,Any}()
 
+    # Resolve one tool and record how it landed, so the final summary can report
+    # anything left unresolved instead of it surfacing later as a broken stage.
+    function resolve_and_record(key, label, install_fn)
+        p = resolve_tool(key, label, config, install_fn)
+        resolved[key] = Dict("path" => p)
+        p === nothing ?
+            record!(label, STEP_ACTION, "unresolved - set a path under \"$key\" in config/tools.yml") :
+            record!(label, STEP_OK, String(p))
+        p
+    end
+
     # Ensure pipx/pip is available before resolving Python-based tools
     ensure_pipx()
 
-    # cutadapt
-    path = resolve_tool("cutadapt", "cutadapt", config,
-        () -> install_python_tool("cutadapt"))
-    resolved["cutadapt"] = Dict("path" => path)
+    resolve_and_record("cutadapt",   "cutadapt",   () -> install_python_tool("cutadapt"))
+    # FastQC needs a Java runtime, so both are checked.
+    fastqc_path = resolve_and_record("fastqc", "FastQC", () -> download_fastqc())
+    fastqc_path === nothing || check_fastqc_runtime(fastqc_path)
+    resolve_and_record("multiqc",    "MultiQC",    () -> install_python_tool("multiqc"))
+    resolve_and_record("vsearch",    "vsearch",    () -> download_vsearch())
+    resolve_and_record("cd_hit_est", "cd-hit-est", () -> download_cdhit())
+    resolve_and_record("swarm",      "swarm",      () -> download_swarm())
 
-    # fastqc
-    path = resolve_tool("fastqc", "FastQC", config,
-        () -> download_fastqc())
-    resolved["fastqc"] = Dict("path" => path)
+    # Phylogenetic placement. MAFFT, IQ-TREE and RAxML may run on the bioserver
+    # instead (pipeline.yml remote.stages); trimAl and gappa always run here.
+    resolve_and_record("mafft",      "MAFFT",      () -> download_mafft())
+    resolve_and_record("trimal",     "trimAl",     () -> download_trimal())
+    resolve_and_record("iqtree",     "IQ-TREE",    () -> download_iqtree())
+    resolve_and_record("raxml",      "RAxML",      () -> download_raxml())
+    resolve_and_record("gappa",      "gappa",      () -> download_gappa())
 
-    # multiqc
-    path = resolve_tool("multiqc", "MultiQC", config,
-        () -> install_python_tool("multiqc"))
-    resolved["multiqc"] = Dict("path" => path)
+    # Frontend. Built on every update, and on install whenever web/dist is
+    # missing or older than the sources.
+    println()
+    println("  --- Frontend -------------------------------------------------------")
+    try
+        bun = ensure_bun()
+        if UPDATE_MODE || frontend_stale()
+            build_frontend(bun)
+            record!("Frontend", STEP_OK, "built into web/dist with $bun")
+        else
+            record!("Frontend", STEP_OK, "web/dist is up to date")
+        end
+    catch e
+        @error "Frontend build failed: $e"
+        record!("Frontend", STEP_FAILED, "rerun install.sh, or build by hand: cd frontend && bun install && bun run build")
+    end
 
-    # vsearch
-    path = resolve_tool("vsearch", "vsearch", config,
-        () -> download_vsearch())
-    resolved["vsearch"] = Dict("path" => path)
+    # R packages. Reproduced from renv.lock with renv::restore(), always, on a
+    # plain install too - the DADA2 and NMDS/PERMANOVA stages need them. Writes
+    # only to the project-local renv/library; never needs root.
+    println()
+    println("  --- R packages ----------------------------------------------------")
+    if Sys.which("Rscript") === nothing
+        @warn "Rscript not on PATH - skipping R package setup."
+        record!("R runtime",  STEP_SKIPPED, "install R >= 4.0, then re-run install.sh")
+        record!("R packages", STEP_SKIPPED, "blocked on the R runtime above")
+    else
+        rver = try
+            strip(read(`Rscript -e "cat(as.character(getRversion()))"`, String))
+        catch
+            "unknown"
+        end
+        rpin = string(get(get(get(PINS, "runtimes", Dict()), "r", Dict()), "version", ""))
+        if !isempty(rpin) && rver != "unknown" && !startswith(rver, rpin)
+            record!("R runtime", STEP_OK, "R $rver (renv.lock pins $rpin; restore may rebuild from source)")
+        else
+            record!("R runtime", STEP_OK, "R $rver")
+        end
 
-    # cd-hit-est
-    path = resolve_tool("cd_hit_est", "cd-hit-est", config,
-        () -> download_cdhit())
-    resolved["cd_hit_est"] = Dict("path" => path)
+        missing_hdrs = probe_missing_r_headers()
+        if !isempty(missing_hdrs) && (has_root() || has_passwordless_sudo())
+            # We already hold the privilege - use it, but never prompt for it.
+            install_r_sysdeps()
+            missing_hdrs = probe_missing_r_headers()
+        end
 
-    # swarm
-    path = resolve_tool("swarm", "swarm", config,
-        () -> download_swarm())
-    resolved["swarm"] = Dict("path" => path)
-
-    # R packages
-    r_packages = ["dada2", "vegan"]
-    should_install_r = UPDATE_MODE || (MODIFY_MODE && prompt_yn("  Install/check R packages (dada2, vegan)?"))
-    if should_install_r
-        println()
-        println("  --- R packages -----------------------------------------------------")
-        install_r_sysdeps()
-        force_reinstall_r = UPDATE_MODE &&
-            prompt_yn("  Reinstall all R packages (dada2, vegan)?", false)
-        install_r_packages(r_packages; force_reinstall=force_reinstall_r)
+        if !isempty(missing_hdrs)
+            # renv::restore() from source would compile for minutes and then die on
+            # the first package that needs one of these. Don't start it: report the
+            # one command that unblocks it and stop here.
+            hint = r_sysdep_hint(missing_hdrs)
+            println("  Missing build dependencies - not running renv::restore().")
+            println("    $hint")
+            record!("R system headers", STEP_ACTION, hint)
+            record!("R packages", STEP_ACTION,
+                "renv::restore() skipped until the headers above are installed; then re-run install.sh")
+        else
+            rebuild = UPDATE_MODE && prompt_yn("  Force-rebuild every R package from source?", false)
+            rstatus, rbad = setup_r_packages(; rebuild)
+            rstatus == :ok ?
+                record!("R packages", STEP_OK, "renv/library reproduced from renv.lock") :
+                record!("R packages", STEP_ACTION,
+                    "still unusable: $rbad - see the build errors above, then re-run: " *
+                    "Rscript -e 'renv::restore(prompt = FALSE)'")
+        end
     end
 
     # Write config
@@ -876,18 +1244,25 @@ function main()
     if SYSIMAGE_MODE
         println()
         println("  --- Julia sysimage -------------------------------------------------")
-        build_sysimage()
+        try
+            build_sysimage()
+            record!("Julia sysimage", STEP_OK, SYSIMAGE_PATH)
+        catch e
+            @error "Sysimage build failed: $e"
+            record!("Julia sysimage", STEP_FAILED, "rerun: julia --project=. install.jl --sysimage")
+        end
+    else
+        record!("Julia sysimage", STEP_OK, "not requested (pass --sysimage to build one)")
     end
 
     println()
     println("Installation complete.")
     println()
-    println("To set remote SSH paths or adjust any tool locations, edit:")
+    println("To adjust any tool locations, edit:")
     println("  $TOOLS_CONFIG")
-    println()
-    println("Example remote path (SSH):")
-    println("  vsearch:")
-    println("    path: \"user@bioserver:/home/user/software/vsearch\"")
+    println("Stages that run on a server are set in the remote block of pipeline.yml.")
+
+    print_summary()
 end
 
 RUNNING_AS_SCRIPT && main()

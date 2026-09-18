@@ -4,7 +4,7 @@
 # Routes: /api/v1/studies/{study}/config
 #         /api/v1/studies/{study}/runs/{run}/config
 using JSON3, YAML
-using MetaManifold.PrimersLibrary
+using ..PrimersLibrary
 
 const _config_file_lock = ReentrantLock()
 
@@ -23,7 +23,7 @@ function _atomic_write_yaml(path::String, doc)
     lock(_config_file_lock) do
         tmp = path * ".tmp"
         open(tmp, "w") do io
-            YAML.write(io, doc)
+            YAML.write(io, Config.canonical_yaml_doc(doc))
         end
         mv(tmp, path; force=true)
     end
@@ -88,58 +88,71 @@ function _resolve_config(study::String, run::Union{String,Nothing}=nothing,
     end for k in all_keys)
 end
 
-## Per-study chart cosmetics (layout + name-keyed trace style), in pipeline.yml.
-const _CHART_TYPES = Set(["taxa_bar", "alpha_richness", "alpha_shannon", "alpha_simpson",
-                          "nmds", "composition_comparison", "pipeline_stats"])
-
-function _resolve_chart_cosmetics(study::String, chart_type::String)
-    cfg = _load_yml(joinpath(ServerState.data_dir(), study, "pipeline.yml"))
-    all = get(cfg, "chart_cosmetics", nothing)
-    all isa Dict || return Dict{String,Any}()
-    entry = get(all, chart_type, nothing)
-    entry isa Dict ? entry : Dict{String,Any}()
-end
-
-@get "/api/v1/studies/{study}/chart-cosmetics" function(req, study::String)
-    study in _study_names() || return json_error(404, "study_not_found", "Study '$study' not found")
-    cosmetics = get(_load_yml(joinpath(ServerState.data_dir(), study, "pipeline.yml")), "chart_cosmetics", Dict())
-    json(cosmetics isa Dict ? cosmetics : Dict())
-end
-
-@patch "/api/v1/studies/{study}/chart-cosmetics" function(req, study::String)
-    study in _study_names() || return json_error(404, "study_not_found", "Study '$study' not found")
-    body = JSON3.read(String(req.body))
-    chart_type = string(get(body, :chart_type, ""))
-    chart_type in _CHART_TYPES || return json_error(400, "invalid_chart_type",
-        "Unknown chart type '$chart_type'")
-    clear = Bool(get(body, :clear, false))
-    layout = get(body, :layout, nothing)
-    traces = get(body, :traces, nothing)
-    path = joinpath(ServerState.data_dir(), study, "pipeline.yml")
-    lock(_config_file_lock) do
-        cfg = _load_yml(path)
-        cosmetics = get(cfg, "chart_cosmetics", nothing)
-        cosmetics = cosmetics isa Dict ? cosmetics : Dict{Any,Any}()
-        if clear
-            delete!(cosmetics, chart_type)
-        else
-            entry = Dict{String,Any}()
-            isnothing(layout) || (entry["layout"] = _to_plain(layout))
-            isnothing(traces) || (entry["traces"] = _to_plain(traces))
-            cosmetics[chart_type] = entry
-        end
-        isempty(cosmetics) ? delete!(cfg, "chart_cosmetics") : (cfg["chart_cosmetics"] = cosmetics)
-        _atomic_write_yaml(path, cfg)
-    end
-    cosmetics2 = get(_load_yml(path), "chart_cosmetics", Dict())
-    json(cosmetics2 isa Dict ? cosmetics2 : Dict())
-end
-
 ## Allowed config keys - derived from defaults/pipeline.yml at load time.
 # Only keys present in the factory defaults can be set via the API.
 const _ALLOWED_CONFIG_KEYS = let
     factory_path = joinpath(@__DIR__, "..", "..", "..", "config", "defaults", "pipeline.yml")
     isfile(factory_path) ? Set(keys(_flatten(_load_yml(factory_path)))) : Set{String}()
+end
+
+const _FACTORY_VALUES = let
+    factory_path = joinpath(@__DIR__, "..", "..", "..", "config", "defaults", "pipeline.yml")
+    isfile(factory_path) ? _flatten(_load_yml(factory_path)) : Dict{String,Any}()
+end
+
+# Values reaching a command line, as the pipeline itself checks them.
+const _ENUM_VALUES = Dict(
+    "vsearch.strand"                 => (nothing, "plus", "both"),
+    "tagging.source"                 => ("VSEARCH", "DADA2"),
+    "analysis.alpha.normalisation"   => ("none", "rarefy", "srs"),
+    "analysis.beta.normalisation"    => ("hellinger", "none", "rarefy", "srs"),
+    "phylogeny.reference.align.strategy" => Validation.PHYLOGENY_ALIGN_STRATEGIES,
+    "phylogeny.placement.align.strategy" => Validation.PHYLOGENY_ALIGN_STRATEGIES,
+    "phylogeny.reference.trim.method"    => Validation.PHYLOGENY_TRIM_METHODS,
+    "phylogeny.placement.trim.method"    => Validation.PHYLOGENY_TRIM_METHODS,
+    "phylogeny.reference.tree.bootstrap" => Validation.PHYLOGENY_BOOTSTRAPS,
+)
+
+# Numeric keys whose factory default is a number but which also take ~.
+const _NULLABLE_NUMBERS = ("phylogeny.placement.place.heuristic",)
+
+# Why a value cannot be saved under this key, or nothing. The type follows the
+# factory default; a key whose default is ~ accepts a string, number or boolean.
+function _config_value_error(key::String, value)
+    v = value isa JSON3.Array ? collect(value) : value
+    if haskey(_ENUM_VALUES, key)
+        allowed = _ENUM_VALUES[key]
+        v in allowed || return "$key must be one of $(join(filter(!isnothing, collect(allowed)), ", "))"
+        return nothing
+    end
+    if endswith(key, "optional_args")
+        (v isa AbstractString && (isempty(strip(v)) || occursin(Tools._SAFE_ARGS_RE, strip(v)))) ||
+            return "$key may contain only letters, digits, spaces and - _ . = , / : +"
+        return nothing
+    end
+    if key in _NULLABLE_NUMBERS
+        (isnothing(v) || (v isa Real && !(v isa Bool))) || return "$key must be a number or empty"
+        return nothing
+    end
+    if key in ("remote.host", "remote.rscript") || startswith(key, "remote.tools.")
+        isnothing(v) && return nothing
+        (v isa AbstractString && Validation.is_shell_safe_arg(v) && !startswith(v, "-")) ||
+            return "$key may not start with '-' or contain spaces or shell metacharacters"
+        return nothing
+    end
+    default = get(_FACTORY_VALUES, key, nothing)
+    if default isa Bool
+        v isa Bool || return "$key must be true or false"
+    elseif default isa Real
+        (v isa Real && !(v isa Bool)) || return "$key must be a number"
+    elseif default isa AbstractString
+        v isa AbstractString || return "$key must be text"
+    elseif default isa AbstractVector
+        v isa AbstractVector || return "$key must be a list"
+    elseif default isa AbstractDict
+        v isa AbstractDict || return "$key must be a section"
+    end
+    nothing
 end
 
 function _validate_config_key(dotted_key::String)
@@ -197,9 +210,11 @@ end
     root      = dirname(ServerState.data_dir())
     user_path = joinpath(root, "config", "pipeline.yml")
     body = JSON3.read(req.body)
-    for (k, _) in body
+    for (k, v) in body
         string(k) in _ALLOWED_CONFIG_KEYS || return json_error(400, "invalid_config_key",
             "Config key '$(string(k))' is not a recognised pipeline option")
+        bad = _config_value_error(string(k), v)
+        isnothing(bad) || return json_error(400, "invalid_config_value", bad)
     end
     for (k, v) in body
         _write_override(user_path, string(k), v)
@@ -236,20 +251,13 @@ end
 ## Primers document (whole-file view and edit)
 _primers_path() = joinpath(dirname(ServerState.data_dir()), "config", "primers.yml")
 
-# Atomic write of a document already in the native file shape. The temp file and
-# rename mean a reader never observes a half-written file, and the lock means two
-# concurrent writes cannot interleave their bytes into a corrupt file. It does
-# NOT make read-validate-write atomic: two clients can each read the document
-# before either writes, and the later write silently overwrites the earlier
-# client's edit (a lost update, not a torn file).
 function _write_primers(native::AbstractDict)
     _atomic_write_yaml(_primers_path(), native)
 end
 
-# Validate then write. Returns the saved canonical document, or an HTTP.Response
-# error. The single gate every primers write passes through, so a dangling pair
-# is caught here rather than surfacing as a run-time validation failure.
-# The native shape is converted once and handed to both the gate and the write.
+# Validate then write; every primers write passes through here, so a dangling pair
+# is caught before it reaches a run. Returns the saved canonical document, or an
+# HTTP.Response error.
 function _save_primers(doc::AbstractDict)
     native = PrimersLibrary.to_yaml_doc(doc)
     errors = PrimersLibrary.validate(doc; native)
@@ -259,11 +267,9 @@ function _save_primers(doc::AbstractDict)
     doc
 end
 
-# Read the document, turning an unparseable file into a 400 that names it
-# rather than a 500. PrimersLibrary.load deliberately raises instead of
-# degrading to an empty document, because an empty document would breeze
-# through validation and the next Save would overwrite the real primers with
-# nothing. Returns the document, or an HTTP.Response error.
+# Read the document; an unparseable file becomes a 400 naming it. PrimersLibrary.load
+# raises on a bad file because an empty document would pass validation and the next
+# Save would overwrite the real primers. Returns the document, or an HTTP.Response error.
 function _read_primers()
     try
         PrimersLibrary.load(_primers_path())
@@ -278,8 +284,7 @@ end
 # Read a pipeline.yml for the reference scan. A file anywhere in the tree may be
 # malformed, or may not be a mapping at all. Neither is a save's business: the
 # scan gathers advisory warnings only, so an unreadable file is skipped with a
-# warning rather than propagating. Letting it throw would make one stray file
-# block EVERY save with a 500, the exact opposite of "warn, not block".
+# warning. Letting it throw would make one stray file block every save with a 500.
 # Results are cached per call: an ancestor's pipeline.yml is on the cascade of
 # every project beneath it and would otherwise be re-read once per descendant.
 function _scan_yml(path::String, cache::Dict{String,Any})
@@ -360,26 +365,14 @@ function _cascade_refs(dotted_key::String)
     isdir(data_root) || return refs
 
     targets = Set{String}()
-    # `onerror`, because walkdir defaults to onerror=throw and readdir raises
-    # EACCES on a directory the server may not read. One 0700 directory under
-    # data/, which a shared academic server acquires readily, then threw out of
-    # here and made a 500 of EVERY databases save: _database_warnings calls this
-    # unconditionally. Every other hazard in this function is already guarded
-    # (_scan_yml catches, the _run_names loop catches per study); this was the
-    # one that bypassed them. An unreadable directory is skipped, exactly as an
-    # unreadable file is: these are advisory warnings, so a directory that
-    # cannot be scanned costs a warning, never the write.
+    # Skip unreadable directories; these warnings are advisory.
     for (dir, _, files) in walkdir(data_root; onerror = _ -> nothing)
         "pipeline.yml" in files || continue
         rel = relpath(dir, data_root)
         rel == "." || push!(targets, rel)
     end
-    # Guarded per study: _run_names/_group_names/_group_run_names read pipeline.yml
-    # unguarded (via _is_pooled) to detect a pooled run, so one malformed file
-    # anywhere under a study can throw. Catching per study, rather than around
-    # the whole loop, means one bad study is skipped with a warning while every
-    # other study still enumerates correctly; the directories that own a
-    # pipeline.yml are enumerated regardless, via the guarded walk above.
+    # _run_names reads pipeline.yml unguarded (via _is_pooled), so a malformed file
+    # can throw; each study is guarded separately so one bad study is skipped with a warning.
     for study in _study_names()
         try
             for r in _run_names(study)
@@ -416,11 +409,8 @@ end
 # the submitted `doc`, that some project's config cascade still resolves to. A
 # rename reads as the old name disappearing, so this covers both deletion and
 # rename. The write is not blocked; these are warnings only.
-#
-# `current` is passed in rather than re-read here. The handler has already loaded
-# it through `_read_primers`, which catches the deliberate raise on an unparseable
-# file; loading it again here would escape that guard and throw, turning a Save
-# into a 500 if the file changed underneath us between the two reads.
+# `current` comes from the handler's guarded `_read_primers`, so a file that turns
+# unparseable between reads cannot throw here.
 function _pair_pipeline_refs_removed(doc::AbstractDict, current::AbstractDict)
     was = Set(PrimersLibrary.pair_names(current))
     now = Set(PrimersLibrary.pair_names(doc))
@@ -435,10 +425,7 @@ function _pair_pipeline_refs_removed(doc::AbstractDict, current::AbstractDict)
     warnings
 end
 
-# Parse a request body into a primers document. A body that is absent, not JSON,
-# or JSON that is not a top-level object would otherwise throw out of the route
-# and surface as a bare 500; this route backs a Save button, where a malformed
-# request is a plausible client bug and deserves an actionable message.
+# Parse a request body into a primers document; a malformed body is a 400.
 # Returns the document, or an HTTP.Response error.
 function _primers_body(body::AbstractString)
     parsed = try
@@ -459,14 +446,9 @@ end
     json(doc)
 end
 
-# Replace the whole primers document. Validated before the write lands on disk;
-# a pair naming an absent primer is rejected 400 with the file unchanged. The
-# response carries any cross-file warnings: a dropped pair that some project's
-# config cascade still resolves to, whether or not any pipeline.yml names it,
-# since a project may inherit the pair from the global config or the factory
-# defaults rather than naming it itself.
-# The read of the current document comes first: when the file on disk is corrupt
-# we refuse the write rather than let it be overwritten from an empty editor.
+# Replace the whole primers document. A pair naming an absent primer is a 400 with
+# the file unchanged. The response warns about any dropped pair that a project's
+# config cascade still resolves to. A corrupt file on disk refuses the write.
 @put "/api/v1/primers" function(req)
     current = _read_primers()
     current isa HTTP.Response && return current
@@ -488,9 +470,11 @@ end
     study in _study_names() || return json_error(404, "study_not_found",
                                                      "Study '$study' not found")
     body = JSON3.read(req.body)
-    for (k, _) in body
+    for (k, v) in body
         string(k) in _ALLOWED_CONFIG_KEYS || return json_error(400, "invalid_config_key",
             "Config key '$(string(k))' is not a recognised pipeline option")
+        bad = _config_value_error(string(k), v)
+        isnothing(bad) || return json_error(400, "invalid_config_value", bad)
     end
     path = joinpath(ServerState.data_dir(), study, "pipeline.yml")
     for (k, v) in body
@@ -570,9 +554,11 @@ end
     group in _group_names(study) || return json_error(404, "group_not_found",
                                                           "Group '$group' not found")
     body = JSON3.read(req.body)
-    for (k, _) in body
+    for (k, v) in body
         string(k) in _ALLOWED_CONFIG_KEYS || return json_error(400, "invalid_config_key",
             "Config key '$(string(k))' is not a recognised pipeline option")
+        bad = _config_value_error(string(k), v)
+        isnothing(bad) || return json_error(400, "invalid_config_value", bad)
     end
     path = joinpath(ServerState.data_dir(), study, group, "pipeline.yml")
     for (k, v) in body
@@ -604,25 +590,23 @@ function _all_run_names(study::String)
 end
 
 @get "/api/v1/studies/{study}/runs/{run}/config" function(req, study::String, run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                          "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
     json(_resolve_config(study, run, group))
 end
 
 @patch "/api/v1/studies/{study}/runs/{run}/config" function(req, study::String, run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                          "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
     run_path = isnothing(group) ? run : joinpath(group, run)
     body = JSON3.read(req.body)
-    for (k, _) in body
+    for (k, v) in body
         string(k) in _ALLOWED_CONFIG_KEYS || return json_error(400, "invalid_config_key",
             "Config key '$(string(k))' is not a recognised pipeline option")
+        bad = _config_value_error(string(k), v)
+        isnothing(bad) || return json_error(400, "invalid_config_value", bad)
     end
     path = joinpath(ServerState.data_dir(), study, run_path, "pipeline.yml")
     for (k, v) in body
@@ -634,10 +618,8 @@ end
 @delete "/api/v1/studies/{study}/runs/{run}/config/{key}" function(req, study::String,
                                                                         run::String,
                                                                         key::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                          "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     group = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end
     run_path = isnothing(group) ? run : joinpath(group, run)
     path = joinpath(ServerState.data_dir(), study, run_path, "pipeline.yml")

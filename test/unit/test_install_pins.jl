@@ -21,7 +21,8 @@ const RENV_LOCK   = joinpath(REPO_ROOT, "renv.lock")
 
 # The tools the pipeline shells out to. A tool absent from the pin file is a tool
 # nobody has decided the version of.
-const EXPECTED_TOOLS = ["cutadapt", "fastqc", "multiqc", "vsearch", "cd_hit_est", "swarm"]
+const EXPECTED_TOOLS = ["cutadapt", "fastqc", "multiqc", "vsearch", "cd_hit_est", "swarm",
+                        "mafft", "trimal", "iqtree", "raxml", "gappa"]
 
 # The platforms install.jl can resolve an archive for, as "<OS_TYPE>-<ARCH_STR>".
 const EXPECTED_PLATFORMS = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "macos-aarch64"]
@@ -75,10 +76,10 @@ is_sha256(s) = s isa AbstractString && occursin(r"^[0-9a-f]{64}$", s)
         # FastQC is Java and cd-hit is built from source, so both are platform-neutral;
         # vsearch and swarm ship per-platform binaries and must cover what install.jl
         # will ask for.
-        for tool in ("vsearch", "swarm")
+        for tool in ("vsearch", "swarm", "trimal", "iqtree")
             @test sort(collect(keys(pins["tools"][tool]["archives"]))) == sort(EXPECTED_PLATFORMS)
         end
-        for tool in ("fastqc", "cd_hit_est")
+        for tool in ("fastqc", "cd_hit_est", "mafft", "raxml", "gappa")
             @test collect(keys(pins["tools"][tool]["archives"])) == ["any"]
         end
     end
@@ -97,6 +98,8 @@ is_sha256(s) = s isa AbstractString && occursin(r"^[0-9a-f]{64}$", s)
         @test !occursin("https://github.com/torognes", src)
         @test !occursin("bioinformatics.babraham.ac.uk/projects/fastqc/fastqc_v", src)
         @test !occursin("github.com/weizhongli", src)
+        @test !occursin("mafft.cbrc.jp", src)
+        @test !occursin("github.com/iqtree", src)
 
         @test occursin("tool_versions.yml", src)
     end

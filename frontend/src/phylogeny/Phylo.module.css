@@ -1,0 +1,200 @@
+/* © 2026 Joshua Benjamin Jewell. All rights reserved. */
+/* Licensed under the GNU Affero General Public License version 3 (AGPLv3). */
+.bar {
+  display:     flex;
+  flex-wrap:   wrap;
+  align-items: center;
+  gap:         8px;
+  margin-bottom: 12px;
+  font-size:   .85rem;
+}
+
+.bar select { font: inherit; padding: 2px 6px; }
+
+.grid {
+  display:               grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap:                   12px;
+  align-items:           start;
+}
+
+.section {
+  border:        1px solid var(--color-border);
+  border-radius: 6px;
+  padding:       10px 12px;
+  font-size:     .82rem;
+  display:       flex;
+  flex-direction: column;
+  gap:           8px;
+  min-width:     0;
+}
+
+.heading {
+  font-weight: 600;
+  font-size:   .85rem;
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+}
+
+.heading .spacer { flex: 1; }
+
+.row {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+  flex-wrap:   wrap;
+}
+
+.row > label:first-child { min-width: 92px; color: var(--color-muted-fg); }
+
+.row input[type=text], .row input[type=number], .row select {
+  font: inherit;
+  padding: 2px 6px;
+  min-width: 0;
+}
+
+.row input[type=text] { flex: 1; }
+.row input[type=number] { width: 90px; }
+
+.runs {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       4px 12px;
+}
+
+.runs label { display: flex; align-items: center; gap: 4px; }
+
+.muted { color: var(--color-muted-fg); }
+
+.steps {
+  width:           100%;
+  border-collapse: collapse;
+  font-size:       .8rem;
+}
+
+.steps td { padding: 3px 6px 3px 0; vertical-align: top; }
+.steps td:last-child { text-align: right; }
+
+.state_done, .state_current { color: var(--color-success, #2b8a3e); }
+.state_running { color: var(--color-primary); }
+.state_failed { color: var(--color-danger); }
+.state_pending { color: var(--color-muted-fg); }
+
+.log {
+  max-height:  260px;
+  overflow:    auto;
+  font-size:   .72rem;
+  background:  var(--color-muted, rgba(127, 127, 127, .08));
+  padding:     6px 8px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break:  break-all;
+  margin:      0;
+}
+
+.linkBtn {
+  background: none;
+  border:     none;
+  padding:    0;
+  color:      var(--color-primary);
+  cursor:     pointer;
+  font:       inherit;
+}
+
+.actions { white-space: nowrap; }
+.actions .linkBtn + .linkBtn { margin-left: 8px; }
+.on { font-weight: 600; text-decoration: underline; }
+
+.stats {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       4px 16px;
+}
+
+.stats b { font-weight: 600; }
+
+.chart { width: 100%; height: auto; display: block; }
+.chart text { font-size: 10px; fill: var(--color-muted-fg); }
+
+.legend {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       4px 12px;
+  font-size: .75rem;
+  color:     var(--color-muted-fg);
+}
+
+.swatch {
+  display:        inline-block;
+  width:          10px;
+  height:         10px;
+  margin-right:   4px;
+  vertical-align: -1px;
+  border-radius:  2px;
+}
+
+.table {
+  width:           100%;
+  border-collapse: collapse;
+  font-size:       .76rem;
+}
+
+.table th { text-align: left; font-weight: 600; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--color-border); cursor: pointer; white-space: nowrap; }
+.table td { padding: 2px 8px 2px 0; border-bottom: 1px solid var(--color-border); }
+.table td.num, .table th.num { text-align: right; }
+.table tr.warn td { color: var(--color-danger); }
+
+.scroll { max-height: 320px; overflow: auto; }
+
+.aligner {
+  display:    flex;
+  max-height: 480px;
+  overflow:   auto;
+  border:     1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.alignNames {
+  position:    sticky;
+  left:        0;
+  z-index:     1;
+  background:  var(--color-bg, #fff);
+  font-size:   9px;
+  font-family: monospace;
+  padding-right: 6px;
+  white-space: nowrap;
+}
+
+.alignNames div { overflow: hidden; }
+.alignNames .query { color: var(--color-primary); }
+
+.qc {
+  grid-column: 1 / -1;
+}
+
+.wide { grid-column: 1 / -1; }
+
+.qcBody { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+.preview {
+  border-top:  1px dashed var(--color-border);
+  padding-top: 8px;
+  display:     flex;
+  flex-direction: column;
+  gap:         6px;
+}
+
+.spacer { flex: 1; }
+
+.runList { display: flex; flex-direction: column; gap: 2px; }
+.runList label { display: inline-flex; align-items: center; gap: 4px; }
+
+.subgroups {
+  display:     flex;
+  flex-wrap:   wrap;
+  gap:         2px 10px;
+  margin-left: 20px;
+}
+
+.table th.num + th:not(.num), .table td.num + td:not(.num) { padding-left: 12px; }

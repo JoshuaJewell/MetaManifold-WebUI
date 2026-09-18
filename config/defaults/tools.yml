@@ -6,7 +6,8 @@
 #   null              - use the managed install in bin/  (download by install.sh)
 #   "/path/to/tool"   - absolute local path
 #   "tool"            - bare name; looked up in PATH at runtime
-#   "user@host:/path" - remote SSH path; the pipeline wraps the call with ssh
+#
+# Stages that run on a server are set in the remote block of pipeline.yml.
 #
 # Note: the generated config/tools.yml is gitignored (machine-specific);
 #       only this template under config/defaults/ is committed.
@@ -22,11 +23,26 @@ multiqc:
 
 vsearch:
   path: null
-  # Remote example (vsearch on a compute server):
-  # path: "user@bioserver:/home/user/software/vsearch"
 
 swarm:
   path: null
 
 cd_hit_est:
+  path: null
+
+# Phylogenetic placement. A step listed in pipeline.yml remote.stages runs on
+# the server with the programs named under remote.tools instead.
+mafft:
+  path: null
+
+trimal:
+  path: null
+
+iqtree:
+  path: null
+
+raxml:
+  path: null
+
+gappa:
   path: null

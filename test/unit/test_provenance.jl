@@ -44,6 +44,18 @@ canned(out::String, err::String = "", code::Int = 0) =
         ## cd-hit-est has no --version flag at all; the banner is in the `-h` output,
         # indented with tabs, and the command exits non-zero while printing it.
         @test PV.parse_cdhit_version(fixture("cd_hit_est_help_stdout.txt")) == "4.8.1"
+
+        ## The phylogeny tools, with the older releases a bioserver may still run.
+        # MAFFT is a shell script that prints its version to STDERR.
+        @test PV.parse_mafft_version(fixture("mafft_version_stderr.txt")) == "7.221"
+        @test PV.parse_trimal_version(fixture("trimal_version_stdout.txt")) == "1.5.rev1"
+        @test PV.parse_trimal_version(fixture("trimal1_version_stdout.txt")) == "1.2rev59"
+        @test PV.parse_iqtree_version(fixture("iqtree_version_stdout.txt")) == "3.1.4"
+        @test PV.parse_iqtree_version(fixture("iqtree1_version_stdout.txt")) == "1.6.12"
+        @test PV.parse_raxml_version(fixture("raxml_version_stdout.txt")) == "8.2.12"
+        @test PV.parse_gappa_version(fixture("gappa_version_stdout.txt")) == "0.9.0"
+        @test PV.TOOL_PROBES["mafft"].stream === :stderr
+        @test PV.probed_by(PV.TOOL_PROBES["raxml"]) == "raxml -v"
     end
 
     @testset "a parser reading the wrong stream fails rather than inventing" begin

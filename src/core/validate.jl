@@ -5,7 +5,9 @@ module Validation
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 export validate_environment, validate_project, ValidationError,
-       DENOVO_METHODS, SAFE_NAME_RE, is_safe_name, primer_document_errors,
+       DENOVO_METHODS, REMOTE_STAGES, DADA2_REMOTE_STAGES, PHYLOGENY_REMOTE_STAGES,
+       PHYLOGENY_ALIGN_STRATEGIES, PHYLOGENY_BOOTSTRAPS, PHYLOGENY_TRIM_METHODS, SAFE_NAME_RE, is_safe_name, is_shell_safe,
+       is_shell_safe_arg, primer_document_errors,
        database_document_errors
 
     using YAML, Logging
@@ -13,12 +15,9 @@ export validate_environment, validate_project, ValidationError,
     using ..Config
 
     ## Safe names
-    # The one guard for every user-supplied name that reaches a filesystem path or a
+    # The guard for every user-supplied name that reaches a filesystem path or a
     # quoted SQL identifier: study, run, preset, filter, and category-set names.
-    # It lived in nine places across four modules and had to be corrected in each by
-    # hand, which is precisely how such a guard rots into an injection or traversal
-    # hole. Note `\z`, not `$`: PCRE's `$` also matches before a trailing newline, so
-    # `"evil\n"` satisfied the old spelling.
+    # `\z` because PCRE's `$` also matches before a trailing newline.
     const SAFE_NAME_RE = r"\A[A-Za-z0-9._-]+\z"
 
     is_safe_name(s::AbstractString) = occursin(SAFE_NAME_RE, s)
@@ -27,6 +26,51 @@ export validate_environment, validate_project, ValidationError,
     # Kept here so configuration validation and the call-site guard in
     # pipeline/dada2/chimera.jl share a single source of truth.
     const DENOVO_METHODS = ("consensus", "pooled", "per-sample")
+
+    # The stages that can be offloaded to a compute server. Defined here so the
+    # config write gate can refuse any other name, which the pipeline would
+    # silently run locally.
+    const DADA2_REMOTE_STAGES     = ("learn_errors", "denoise", "chimera_removal", "assign_taxonomy")
+    const PHYLOGENY_REMOTE_STAGES = ("phylogeny_align", "phylogeny_tree", "phylogeny_add", "phylogeny_place")
+    const REMOTE_STAGES           = (DADA2_REMOTE_STAGES..., PHYLOGENY_REMOTE_STAGES...)
+
+    # MAFFT strategies an align section may name; each but auto is the pairwise
+    # flag of its method (--localpair with --maxiterate is L-INS-i).
+    const PHYLOGENY_ALIGN_STRATEGIES = ("auto", "localpair", "genafpair", "globalpair", "6merpair")
+    # trimAl's selection modes: manual reads the thresholds, the rest are its own flags.
+    const PHYLOGENY_TRIM_METHODS = ("manual", "gappyout", "strict", "strictplus", "automated1",
+                                    "nogaps", "noallgaps")
+    const PHYLOGENY_BOOTSTRAPS       = ("standard", "ultrafast")
+
+    # Characters that give a remote login shell something to do besides name a
+    # file. These paths are interpolated into a command string that a remote
+    # sshd runs through a login shell, and a path is never legitimately spelt
+    # with any of them, so they are refused at the write gate rather than
+    # allowed to reach that interpolation.
+    const SHELL_METACHARACTERS = ['\'', '"', '`', '$', ';', '&', '|', '<', '>',
+                                  '(', ')', '{', '}', '[', ']', '*', '?', '!',
+                                  '\\', '\n', '\r', '\0']
+
+    is_shell_safe(p::AbstractString) = !any(c -> c in SHELL_METACHARACTERS, p)
+
+    """
+        is_shell_safe_arg(p) -> Bool
+
+    `is_shell_safe`, and additionally free of spaces.
+
+    A space is not a metacharacter - it cannot make a shell run anything - so a
+    path carrying one is safe to store, and databases.yml deliberately accepts
+    it. It is still not usable as an unquoted word in a command line: the shell
+    would split it into two arguments and the far side would be handed a
+    truncated path. Anything that becomes such a word - the remote staging root,
+    and every key=value parameter of a remote stage - is checked with this.
+    """
+    is_shell_safe_arg(p::AbstractString) = is_shell_safe(p) && !occursin(' ', p)
+
+    # A thread count is DADA2's `multithread`: a Bool selecting all cores or one,
+    # or a strict positive Integer. Floats and strings are refused so that YAML's
+    # `true`, `4` and `"4"` cannot silently pick different code paths in R.
+    _is_thread_count(v) = (v isa Bool) || (v isa Integer && v >= 1)
 
     struct ValidationError
         context::String
@@ -39,25 +83,9 @@ export validate_environment, validate_project, ValidationError,
 
     _is_number(val) = val isa Number && !isnan(Float64(val))
 
-    # A section that is present but null is not the same as an absent one: `get`
-    # returns the default only when the key is absent, so a null section reaches
-    # the iteration as `nothing`. This function must never throw: it backs a write
-    # gate where a throw is a bare 500 rather than an actionable 400.
+    # `get` returns its default only for an absent key, so a null section arrives
+    # as `nothing`. Never throws: it backs a write gate that must return a 400.
     _seq(v) = v isa AbstractVector ? v : Any[]
-
-    # IUPAC ambiguity codes -> regex character classes
-    const _IUPAC = Dict(
-        'M' => "[AC]", 'R' => "[AG]", 'W' => "[AT]", 'S' => "[CG]",
-        'Y' => "[CT]", 'K' => "[GT]", 'V' => "[ACG]", 'H' => "[ACT]",
-        'D' => "[AGT]", 'B' => "[CGT]", 'N' => "[ACGT]",
-    )
-    function _primer_regex(seq::String)
-        buf = IOBuffer()
-        for c in uppercase(seq)
-            write(buf, get(_IUPAC, c, string(c)))
-        end
-        Regex(String(take!(buf)))
-    end
 
     ## Tools Validation
     function _validate_tools(errors::Vector{ValidationError}, tools_config_path::String)
@@ -119,12 +147,8 @@ export validate_environment, validate_project, ValidationError,
     end
 
     ## Database Validation
-    # isfile does not merely answer the question: it throws on a NUL byte
-    # (embedded NULs are not allowed in C strings) and on a path whose parent
-    # directory cannot be read (EACCES). Both are reachable from a hand-edited
-    # databases.yml, and a throw out of the environment validator is an
-    # unexplained stack trace rather than a named error, so anything isfile cannot
-    # answer is treated as not-a-file.
+    # isfile throws on a NUL byte and on an unreadable parent directory (EACCES),
+    # both reachable from a hand-edited databases.yml; either is treated as not-a-file.
     function _is_named_file(p::AbstractString)
         occursin('\0', p) && return false
         try
@@ -142,8 +166,7 @@ export validate_environment, validate_project, ValidationError,
         dbs = get(cfg, "databases", nothing)
         dbs isa AbstractDict || return
         for (db_name, db_cfg) in dbs
-            # `dir` is the shared cache directory, not a database. It shares this
-            # namespace with the entries, which is why no database may be called dir.
+            # `dir` is the shared cache directory, so no database may be called dir.
             string(db_name) == "dir" && continue
             db_cfg isa AbstractDict || continue
             for method in ("dada2", "vsearch")
@@ -243,8 +266,144 @@ export validate_environment, validate_project, ValidationError,
         end
     end
 
+    _fraction(v) = _is_number(v) && 0 <= v <= 1
+    _whole(v) = v isa Integer && !(v isa Bool)
+
+    function _validate_align(errors, a::Dict, ctx, path)
+        st = get(a, "strategy", "auto")
+        st in PHYLOGENY_ALIGN_STRATEGIES ||
+            _err(errors, ctx, "$path.strategy must be one of " *
+                              "$(join(PHYLOGENY_ALIGN_STRATEGIES, ", ")) (got: $(repr(st)))")
+        mi = get(a, "maxiterate", 0)
+        (_whole(mi) && mi >= 0) ||
+            _err(errors, ctx, "$path.maxiterate must be a whole number (got: $(repr(mi)))")
+    end
+
+    function _validate_trim(errors, t::Dict, ctx, path)
+        m = get(t, "method", "manual")
+        m in PHYLOGENY_TRIM_METHODS ||
+            _err(errors, ctx, "$path.method must be one of $(join(PHYLOGENY_TRIM_METHODS, ", ")) (got: $(repr(m)))")
+        gt = get(t, "gap_threshold", 0.5)
+        _fraction(gt) || _err(errors, ctx, "$path.gap_threshold must be between 0 and 1 (got: $(repr(gt)))")
+        c = get(t, "conservation", nothing)
+        isnothing(c) || (_is_number(c) && 0 <= c <= 100) ||
+            _err(errors, ctx, "$path.conservation must be between 0 and 100, or empty (got: $(repr(c)))")
+        for k in ("similarity_threshold", "residue_overlap")
+            v = get(t, k, nothing)
+            isnothing(v) || _fraction(v) ||
+                _err(errors, ctx, "$path.$k must be between 0 and 1, or empty (got: $(repr(v)))")
+        end
+        so = get(t, "sequence_overlap", nothing)
+        isnothing(so) || (_is_number(so) && 0 <= so <= 100) ||
+            _err(errors, ctx, "$path.sequence_overlap must be between 0 and 100, or empty (got: $(repr(so)))")
+        isnothing(get(t, "residue_overlap", nothing)) == isnothing(so) ||
+            _err(errors, ctx, "$path.residue_overlap and $path.sequence_overlap are set together")
+    end
+
+    _model_ok(m) = m isa AbstractString && occursin(r"\A[A-Za-z0-9+_.{},/-]+\z", m)
+
+    function _validate_phylogeny(errors::Vector{ValidationError}, ph::Dict, ctx::String)
+        th = get(ph, "threads", nothing)
+        isnothing(th) || (_whole(th) && th >= 1) ||
+            _err(errors, ctx, "phylogeny.threads must be a positive integer (got: $(repr(th)))")
+        sub(d, k) = (v = get(d, k, Dict()); v isa Dict ? v : Dict())
+        ref, pl = sub(ph, "reference"), sub(ph, "placement")
+
+        _validate_align(errors, sub(ref, "align"), ctx, "phylogeny.reference.align")
+        _validate_trim(errors, sub(ref, "trim"), ctx, "phylogeny.reference.trim")
+        tr = sub(ref, "tree")
+        bs = get(tr, "bootstrap", "standard")
+        bs in PHYLOGENY_BOOTSTRAPS ||
+            _err(errors, ctx, "phylogeny.reference.tree.bootstrap must be standard or ultrafast (got: $(repr(bs)))")
+        reps = get(tr, "replicates", 100)
+        if !(_whole(reps) && reps >= 1)
+            _err(errors, ctx, "phylogeny.reference.tree.replicates must be a positive integer (got: $(repr(reps)))")
+        elseif bs == "ultrafast" && reps < 1000
+            _err(errors, ctx, "phylogeny.reference.tree.replicates must be at least 1000 for ultrafast bootstrap (got: $reps)")
+        end
+        _model_ok(get(tr, "model", "MFP")) ||
+            _err(errors, ctx, "phylogeny.reference.tree.model must be a model name such as MFP (got: $(repr(get(tr, "model", nothing))))")
+
+        _validate_align(errors, sub(pl, "align"), ctx, "phylogeny.placement.align")
+        _validate_trim(errors, sub(pl, "trim"), ctx, "phylogeny.placement.trim")
+        place = sub(pl, "place")
+        _model_ok(get(place, "model", "GTRCATI")) ||
+            _err(errors, ctx, "phylogeny.placement.place.model must be a model name such as GTRCATI (got: $(repr(get(place, "model", nothing))))")
+        h = get(place, "heuristic", nothing)
+        isnothing(h) || (_is_number(h) && 0 < h <= 1) ||
+            _err(errors, ctx, "phylogeny.placement.place.heuristic must be above 0 and at most 1, or empty (got: $(repr(h)))")
+        at = get(sub(pl, "accumulate"), "threshold", 0.95)
+        (_is_number(at) && 0.5 <= at <= 1) ||
+            _err(errors, ctx, "phylogeny.placement.accumulate.threshold must be between 0.5 and 1 (got: $(repr(at)))")
+    end
+
     ## Pipeline Config Validation
     function _validate_pipeline_cfg(errors::Vector{ValidationError}, cfg::Dict, ctx::String)
+        rt = get(cfg, "r_threads", nothing)
+        isnothing(rt) || _is_thread_count(rt) ||
+            _err(errors, ctx, "r_threads must be a Bool or positive integer (got: $(repr(rt)))")
+
+        rm_cfg = get(cfg, "remote", Dict())
+        if rm_cfg isa Dict
+            host = get(rm_cfg, "host", nothing)
+            isnothing(host) || host isa AbstractString ||
+                _err(errors, ctx, "remote.host must be a string (got: $(repr(host)))")
+
+            stages = get(rm_cfg, "stages", nothing)
+            if !isnothing(stages)
+                if stages isa Vector
+                    for st in stages
+                        st isa AbstractString && st in REMOTE_STAGES ||
+                            _err(errors, ctx, "remote.stages entries must be one of " *
+                                              "$(join(REMOTE_STAGES, ", ")) (got: $(repr(st)))")
+                    end
+                else
+                    _err(errors, ctx, "remote.stages must be a list (got: $(repr(stages)))")
+                end
+            end
+
+            rth = get(rm_cfg, "threads", nothing)
+            isnothing(rth) || _is_thread_count(rth) ||
+                _err(errors, ctx, "remote.threads must be a Bool or positive integer (got: $(repr(rth)))")
+
+            # Only checked once a host is named: the factory default carries a
+            # placeholder staging_dir, and refusing that would make every config
+            # invalid until the user configures a server they may never want.
+            if !isnothing(host)
+                sd = get(rm_cfg, "staging_dir", nothing)
+                if isnothing(sd) || !(sd isa AbstractString)
+                    _err(errors, ctx, "remote.staging_dir must be set when remote.host is set")
+                else
+                    startswith(sd, "/") ||
+                        _err(errors, ctx, "remote.staging_dir must be an absolute path on the " *
+                                          "server (got: $(repr(sd)))")
+                    # staging_dir is interpolated into the command string the
+                    # remote sshd runs through a login shell, so it is gated here
+                    # exactly as databases.yml gates dada2.remote_path.
+                    is_shell_safe_arg(sd) ||
+                        _err(errors, ctx, "remote.staging_dir may not contain shell " *
+                                          "metacharacters or spaces")
+                end
+            end
+        else
+            _err(errors, ctx, "remote must be a mapping (got: $(repr(rm_cfg)))")
+        end
+
+        rt_tools = rm_cfg isa Dict ? get(rm_cfg, "tools", nothing) : nothing
+        if rt_tools isa Dict
+            for (tool, bin) in rt_tools
+                # Each name becomes the first word of a command the remote login shell runs.
+                (bin isa AbstractString && is_shell_safe_arg(bin) && !startswith(bin, "-")) ||
+                    _err(errors, ctx, "remote.tools.$tool must be a program name or path " *
+                                      "without spaces or shell metacharacters (got: $(repr(bin)))")
+            end
+        elseif !isnothing(rt_tools)
+            _err(errors, ctx, "remote.tools must be a mapping (got: $(repr(rt_tools)))")
+        end
+
+        ph = get(cfg, "phylogeny", nothing)
+        ph isa Dict && _validate_phylogeny(errors, ph, ctx)
+
         ca = get(cfg, "cutadapt", Dict())
         if ca isa Dict
             pp = get(ca, "primer_pairs", nothing)
@@ -277,14 +436,10 @@ export validate_environment, validate_project, ValidationError,
                 db = get(tx, "database", nothing)
                 isnothing(db) || db isa String ||
                     _err(errors, ctx, "dada2.taxonomy.database must be a string")
+                # Deprecated in favour of the top-level r_threads, but still
+                # honoured for assign_taxonomy, so it is still validated.
                 mb = get(tx, "multithread", nothing)
-                # Accept either a Bool (DADA2's TRUE/FALSE meaning "all cores" /
-                # "single thread") or a strict positive Integer. Reject floats
-                # and strings explicitly so YAML's `true`, `4`, and `"4"` do not
-                # silently flip code paths in the R wrapper.
-                isnothing(mb) ||
-                    (mb isa Bool) ||
-                    (mb isa Integer && mb >= 1) ||
+                isnothing(mb) || _is_thread_count(mb) ||
                     _err(errors, ctx,
                          "dada2.taxonomy.multithread must be a Bool or positive integer (got: $(repr(mb)))")
             end

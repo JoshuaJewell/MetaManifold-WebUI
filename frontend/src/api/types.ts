@@ -37,6 +37,15 @@ export interface Run {
   stages:       RunStages
   pooled:       boolean
   subgroups:    string[]
+  /** Classifiers whose taxonomy the run's merged table carries; null when the table could not be read. */
+  taxonomy_sources: AnnotationSource[] | null
+}
+
+/** What the run create and rename routes return. */
+export interface RunRef {
+  study: string
+  name:  string
+  group?: string | null
 }
 
 export type JobStatus = 'queued' | 'running' | 'complete' | 'failed' | 'cancelled'
@@ -47,17 +56,12 @@ export interface Job {
   type:        JobType
   study:       string | null
   run:         string | null
+  group?:      string | null
   stage:       string | null
   status:      JobStatus
   created_at:  string
   finished_at: string | null
   message:     string | null
-}
-
-export interface PlotMeta {
-  id:    string
-  label: string
-  stage: string
 }
 
 export interface TableMeta {
@@ -74,7 +78,20 @@ export interface ColFilter {
   exclude?:  string[]
   min?:      number
   max?:      number
+  /** Only on the SAMPLE_READS_FILTER_KEY entry: which rows a sample's total is measured over. */
+  basis?:    SampleReadsBasis
 }
+
+/**
+ * Reserved colFilters key carrying the sample total-read bounds. A sample is a
+ * column, so this entry drops whole sample columns (from the table, its read
+ * totals, charts, save and export) rather than rows. Mirrors
+ * SAMPLE_READS_FILTER_KEY in src/server/routes/duckdb_helpers.jl.
+ */
+export const SAMPLE_READS_FILTER_KEY = '__sample_reads__'
+
+/** 'filtered': reads left after the row filters (default). 'raw': the whole library. */
+export type SampleReadsBasis = 'filtered' | 'raw'
 
 export interface TableQuery {
   page:        number
@@ -116,10 +133,15 @@ export interface TablePage {
   per_page:               number
   columns:                string[]
   sample_count_columns:   string[]
+  /** Sample columns dropped by the sample read-count filter. */
+  excluded_samples?:      string[]
+  /** Largest value of each count column over the filtered rows. */
+  count_max?:             Record<string, number>
   rows:                   Record<string, unknown>[]
 }
 
-export type ConfigSource = 'default' | 'study' | 'group' | 'run'
+/** Where a setting's value comes from. placement and tree are a placement's or reference tree's own overrides. */
+export type ConfigSource = 'default' | 'study' | 'group' | 'run' | 'placement' | 'tree'
 
 export type ConfigMap = Record<string, { value: unknown; source: ConfigSource }>
 
@@ -129,17 +151,6 @@ export interface DatabaseEntry {
   dada2_available:  boolean
   vsearch_available: boolean
 }
-
-export interface JobUpdateEvent {
-  type: 'job_update'
-  data: Job
-}
-
-export interface StageUpdateEvent {
-  type:  'stage_update'
-  data: { study: string; run: string | null; stage: string; status: StageStatus }
-}
-
 
 export interface FilterPreset {
   name:        string
@@ -152,7 +163,7 @@ export interface ApplyPresetResult {
   preset:      string
   rows_before: number
   rows_after:  number
-  filters:     Record<string, { include?: string[]; min?: number; max?: number }>
+  filters:     Record<string, ColFilter>
 }
 
 export interface AnalysisRequest {
@@ -164,17 +175,32 @@ export interface AnalysisRequest {
 
 export interface ChartRequest {
   table:        string
+  /** Classifier to read ranks and categories from; the configured one when absent. */
+  source?:      AnnotationSource
   tag:          'rank' | 'category'
   value:        string
   relative?:    boolean
   mode?:        'stacked' | 'grouped'
   subgroup?:    string | null
   top_n?:       number
+  /** Show samples with no reads as blank slots on the axis. */
+  keep_empty?:  boolean
   colFilters?:  Record<string, ColFilter>
 }
 
 export interface CrossRunChartRequest extends ChartRequest {
   runs: ComparisonRunSpec[]
+}
+
+/** The dimensions a facet axis can be keyed on. */
+export const FACET_DIMENSIONS = ['run', 'group', 'subgroup'] as const
+export type FacetDimension = (typeof FACET_DIMENSIONS)[number]
+
+/** A grid of composition charts: one panel per (rows value, cols value) pair. */
+export interface FacetChartRequest extends Omit<ChartRequest, 'subgroup'> {
+  runs: ComparisonRunSpec[]
+  rows: FacetDimension
+  cols: FacetDimension
 }
 
 export interface ComparisonRunSpec {
@@ -196,6 +222,22 @@ export function expandRunSpecs(
   )
 }
 
+/** Whether a run's tables carry taxonomy from `source`. Unknown counts as yes. */
+export function carriesSource(run: Pick<Run, 'taxonomy_sources'>, source: AnnotationSource): boolean {
+  return run.taxonomy_sources == null || run.taxonomy_sources.includes(source)
+}
+
+/** One spec per distinct run and group. */
+export function uniqueRuns(specs: ComparisonRunSpec[]): ComparisonRunSpec[] {
+  const seen = new Set<string>()
+  return specs.filter(s => {
+    const key = `${s.group ?? ''}/${s.run}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 export interface ComparisonRequest extends AnalysisRequest {
   runs: ComparisonRunSpec[]
   aggregate?: boolean
@@ -206,6 +248,66 @@ export interface PermanovaResult {
   r2: number | null
   f_statistic: number | null
   p_value: number | null
+  /** True when permutations were restricted within individuals. */
+  blocked?: boolean
+  /** One row per model term, tested sequentially in formula order. */
+  terms?: { term: string; r2: number; f_statistic: number | null; p_value: number | null }[]
+  /** PERMDISP on the same distances: do the groups differ in spread? */
+  dispersion?: PermdispResult | { error: string }
+}
+
+export interface PermdispResult {
+  groups: { group: string; mean: number; median: number }[]
+  f_statistic: number
+  df: [number, number]
+  p_value: number
+  text: string
+}
+
+export type PublicationCellKind = 'label' | 'int' | 'pct' | 'pp'
+
+export interface PublicationTable {
+  title: string
+  /** Spanning group headings above the column labels, outermost first. */
+  header_rows: { label: string; span: number }[][]
+  columns: { label: string; kind: PublicationCellKind }[]
+  rows: (string | number | null)[][]
+  /** Totals, set off from the body by a rule. */
+  footer: (string | number | null)[][]
+  notes: string[]
+  /** Heatmap background per body cell (hex), when a heatmap was requested. */
+  fills?: (string | null)[][]
+}
+
+/** `column` grades each column on its own; `table` shares one scale per kind. */
+export type HeatmapMode = 'none' | 'column' | 'table'
+export type PublicationHeatmap = HeatmapMode
+
+/** Count-cell display options for a results table, also applied on export. */
+export interface TableDisplay {
+  heatmap:    HeatmapMode
+  hide_zeros: boolean
+}
+
+export type PublicationValue = 'asvs' | 'reads' | 'pct'
+
+export interface PublicationTableRequest {
+  runs: ComparisonRunSpec[]
+  /** Results table the counts come from. */
+  table: string
+  rows: 'rank' | 'category'
+  rank: string
+  /** With rows 'category': the set that sorts ASVs into categories. */
+  category_set: string
+  columns: 'run' | 'subgroup' | 'sample'
+  values: PublicationValue[]
+  /** A percentage-point difference for runs with exactly two sub-groups. */
+  difference: boolean
+  /** Empty uses a title describing the table. */
+  title: string
+  heatmap?: PublicationHeatmap
+  /** Blank exact zeros in the table body (not totals). */
+  hide_zeros?: boolean
 }
 
 export interface ApiError {
@@ -215,14 +317,6 @@ export interface ApiError {
 }
 
 export type AnnotationSource = 'VSEARCH' | 'DADA2'
-
-export interface AnnotationMeta {
-  table:        string
-  source:       AnnotationSource
-  status:       'missing' | 'fresh' | 'stale'
-  rows:         number | null
-  generated_at: number | null
-}
 
 export interface CategoryInfo {
   name:    string
@@ -247,16 +341,12 @@ export interface CompositionBuildResult {
   table:        string
   source:       AnnotationSource
   category_set: string
+  tag?:         'rank' | 'category'
+  /** Category set or rank the labels come from. */
+  value?:       string
   total_rows:   number
   total_reads:  number
   categories:   Record<string, CompositionCategoryStats>
-}
-
-export interface ContaminationStats {
-  yes:        { rows: number; reads: number }
-  no:         { rows: number; reads: number }
-  unassigned: { rows: number; reads: number }
-  total:      { rows: number; reads: number }
 }
 
 export interface VennSet {
@@ -285,17 +375,13 @@ export interface CategorySetSaveRequest {
 
 export interface CompositionSummaryRequest {
   category_set: string
+  source?:      AnnotationSource
   subgroup?:    string | null
-}
-
-export interface ChartCosmetics {
-  layout?: Record<string, unknown>
-  traces?: Record<string, Record<string, unknown>>
-}
-export type ChartCosmeticsMap = Record<string, ChartCosmetics>
-export interface ChartCosmeticsPatch extends ChartCosmetics {
-  chart_type: string
-  clear?: boolean
+  /** Results table to summarise; the backend defaults to merged. */
+  table?:       string
+  /** Break down by category set (default) or rank, as in ChartRequest. */
+  tag?:         'rank' | 'category'
+  value?:       string
 }
 
 export interface CompositionFilterRule {
@@ -369,8 +455,8 @@ export interface DatabaseCorrectionValue {
 export interface DatabaseCorrection {
   source: string
   target: string
-  // Ordered rows, not a map: a map keyed by edited text collapses two rows the
-  // moment one key is typed into the other.
+  // Ordered rows: a map keyed by edited text would collapse two rows as soon
+  // as one key is typed into the other.
   values: DatabaseCorrectionValue[]
 }
 
@@ -400,4 +486,187 @@ export interface DatabaseWarning {
 export interface DatabaseSaveResult {
   document: DatabaseDocument
   warnings: DatabaseWarning[]
+}
+
+export interface TreeFileInfo {
+  file:     string
+  format:   'jplace' | 'newick'
+  size:     number
+  modified: string
+  has_view: boolean
+}
+
+export interface TreeFile {
+  file:     string
+  format:   'jplace' | 'newick'
+  sha256:   string
+  modified: string
+  content:  string
+  /** Saved view state, as last written by the tree viewer. */
+  view:     unknown
+}
+
+export const REFERENCE_STEPS = ['align', 'trim', 'tree'] as const
+export const PLACEMENT_STEPS = ['align', 'trim', 'place', 'accumulate'] as const
+export type PhyloStep = typeof REFERENCE_STEPS[number] | typeof PLACEMENT_STEPS[number]
+
+export interface PlacementRunSpec { run: string; group?: string | null; subgroups?: string[] }
+
+export interface PlacementQueries {
+  source: 'taxon' | 'fasta'
+  runs: PlacementRunSpec[]
+  table: string
+  rank: string
+  values: string[]
+  min_reads: number
+}
+
+export interface AlignSettings { strategy?: string; maxiterate?: number; optional_args?: string }
+export interface TrimSettings {
+  method?: string
+  gap_threshold?: number
+  conservation?: number | null
+  similarity_threshold?: number | null
+  residue_overlap?: number | null
+  sequence_overlap?: number | null
+  optional_args?: string
+}
+
+/** The phylogeny section of pipeline.yml, or part of it. */
+export interface PhyloSettings {
+  threads?: number
+  reference?: {
+    align?: AlignSettings
+    trim?: TrimSettings
+    tree?: { model?: string; bootstrap?: string; replicates?: number; optional_args?: string }
+  }
+  placement?: {
+    align?: AlignSettings
+    trim?: TrimSettings
+    place?: { model?: string; heuristic?: number | null; optional_args?: string }
+    accumulate?: { threshold?: number }
+  }
+}
+
+export type PhyloState = 'new' | 'running' | 'done' | 'failed'
+
+export interface PhyloStepStatus {
+  state: 'pending' | 'running' | 'done' | 'current' | 'failed'
+  where?: string
+  started?: string
+  finished?: string
+  error?: string
+}
+
+/** What a reference tree's and a placement's detail have in common. */
+export interface WorkflowDetail {
+  status: { state: PhyloState; error?: string; steps?: Partial<Record<PhyloStep, PhyloStepStatus>> } | null
+  state: PhyloState
+  settings: PhyloSettings
+  inherited: PhyloSettings
+  /** The server each step would run on, or null for this machine. */
+  remote: Partial<Record<PhyloStep, string | null>>
+  /** Steps with a QC summary. */
+  qc: PhyloStep[]
+}
+
+export interface ReferenceTreeDoc {
+  id: string
+  name: string
+  description: string
+  overrides: PhyloSettings
+  created: string
+  modified: string
+}
+
+export interface ReferenceTreeSummary {
+  id: string
+  name: string
+  modified: string
+  references: number
+  built: boolean
+  state: PhyloState
+}
+
+export interface ReferenceTreeDetail extends WorkflowDetail {
+  doc: ReferenceTreeDoc
+  summary: ReferenceTreeSummary
+  used_by: { study: string; id: string; name: string }[]
+}
+
+export interface PlacementDoc {
+  id: string
+  name: string
+  reference: string | null
+  queries: PlacementQueries
+  overrides: PhyloSettings
+  published?: string[]
+  created: string
+  modified: string
+}
+
+export interface PlacementSummary {
+  id: string
+  name: string
+  modified: string
+  reference: string | null
+  queries: number
+  state: PhyloState
+}
+
+export interface PlacementDetail extends WorkflowDetail {
+  doc: PlacementDoc
+  summary: PlacementSummary
+}
+
+export interface AlignmentQC {
+  kind: 'alignment'
+  sequences: number
+  columns: number
+  gap_fraction: number
+  occupancy: number[]
+  occupancy_references?: number[]
+  occupancy_queries?: number[]
+  kept_columns?: number[]
+  removed?: string[]
+  per_sequence: { name: string; query: boolean; residues: number; kept_residues: number | null; span: [number, number] | null }[]
+}
+
+export interface TreeQC {
+  kind: 'tree'
+  model: string | null
+  model_selected: boolean
+  log_likelihood: number | null
+  sequences: number | null
+  sites: number | null
+  informative_sites: number | null
+  constant_sites: number | null
+  supports: number[]
+}
+
+export interface PlacementQC {
+  kind: 'placement'
+  placed: number
+  queries: { name: string; residues: number; trimmed_residues: number; placed: boolean; placements: number; best_lwr: number | null }[]
+}
+
+export interface AccumulateQC { kind: 'accumulate'; kept: number; dropped: string[] }
+
+export type StepQC = AlignmentQC | TreeQC | PlacementQC | AccumulateQC
+
+export interface ReadFunnelData {
+  stages:  { key: string; label: string }[]
+  samples: { sample: string; values: Record<string, number | null> }[]
+  /** Steps that should keep every read, and whether they did. */
+  checks:  { name: string; ok: boolean; detail: string }[]
+}
+
+export type ReportKind = 'figure' | 'table' | 'tree'
+
+export interface ReportItem {
+  id:    string
+  kind:  ReportKind
+  title: string
+  file:  string
+  added: string
 }

@@ -4,7 +4,7 @@ module Tools
 #
 # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_optional_args
+export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _run_killable, _safe_optional_args
 
     using YAML
     using SHA
@@ -22,12 +22,26 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
     # sits beside without collision. Appends, never truncates: a stage that issues
     # several commands must not have each one destroy its predecessor's record.
     # Truncation is the stage's own affair, done once at entry via reset_tool_logs.
+    # Run a command and wait for it. If the waiting task is interrupted (a job
+    # cancel), the child process is killed so it cannot keep writing outputs.
+    function _run_killable(cmd::Base.AbstractCmd)
+        p = run(cmd; wait=false)
+        try
+            wait(p)
+        catch
+            process_running(p) && kill(p)
+            rethrow()
+        end
+        success(p) || throw(ProcessFailedException(p))
+        nothing
+    end
+
     function _run_logged(cmd_str::String, log_path::String)
         mkpath(dirname(log_path))
         log_command(cmd_str, log_path)
         try
             open(log_path, "a") do io
-                run(pipeline(`bash -lc $cmd_str`; stdout=io, stderr=io))
+                _run_killable(pipeline(`bash -lc $cmd_str`; stdout=io, stderr=io))
             end
         catch e
             isfile(log_path) && print(stderr, read(log_path, String))
@@ -41,8 +55,6 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
 
     Read config/tools.yml and return a Dict of tool name => resolved path.
     If the file does not exist, returns an empty Dict so tools fall back to PATH.
-    Paths with `@` are SSH remote paths (user@host:/path), the calling module is
-    responsible for routing those calls via SSH.
     """
     function load_tools(config_path = joinpath(@__DIR__, "..", "..", "config", "tools.yml"))
         isfile(config_path) || return Dict{String,String}()
@@ -55,20 +67,46 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         tools
     end
 
-    const _BIN_DEFAULTS = Dict("cd_hit_est" => "cd-hit-est")
+    const _BIN_DEFAULTS = Dict("cd_hit_est" => "cd-hit-est", "iqtree" => "iqtree3",
+                               "raxml" => "raxmlHPC-PTHREADS-SSE3")
     tool_bin(key) = get(_tools, key, get(_BIN_DEFAULTS, key, key))
 
     const _tools = load_tools()
 
     ## Argument sanitisation
     # optional_args are interpolated into shell commands; reject shell metacharacters.
-    const _SAFE_ARGS_RE = r"^[A-Za-z0-9\s\-_\.=,/:+]+$"
+    # \A and \z so a trailing newline cannot slip through as a command separator.
+    const _SAFE_ARGS_RE = r"\A[A-Za-z0-9 \-_\.=,/:+]+\z"
     function _safe_optional_args(cfg::Dict, key::String="optional_args")::String
         raw = strip(get(cfg, key, ""))
         isempty(raw) && return ""
         occursin(_SAFE_ARGS_RE, raw) ||
             error("optional_args contains unsafe characters: $(repr(raw))")
         raw
+    end
+
+    # Config values interpolated into a command line must be plain numbers.
+    function _num(cfg::Dict, key::String, default)
+        v = get(cfg, key, default)
+        isnothing(v) && return nothing
+        (v isa Real && !(v isa Bool)) || error("$key must be a number (got: $(repr(v)))")
+        v
+    end
+
+    # Read files are matched on the last occurrence of the mate suffix, and never
+    # on a name where the other mate's suffix follows it (e.g. Pond_R1_S5_R2_001).
+    function _mate_regex(suffix::AbstractString, other::AbstractString)
+        Regex("^(.*)\\Q$(suffix)\\E((?:(?!\\Q$(other)\\E)[^/])*)\\.fastq\\.gz\$")
+    end
+
+    # Illumina lane files (S1_L001, S1_L002) are one sample, sequenced on two lanes.
+    _lane_free(sample::AbstractString) = replace(sample, r"_L\d{3}\z" => "")
+
+    # The mate file name for `name`, which must match `_mate_regex(suffix, other)`.
+    function _mate_name(name::AbstractString, suffix::AbstractString, other::AbstractString)
+        m = match(_mate_regex(suffix, other), name)
+        isnothing(m) && error("'$name' does not contain the read suffix '$suffix'")
+        m.captures[1] * other * m.captures[2] * ".fastq.gz"
     end
 
     ## Argument builders
@@ -92,10 +130,10 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
 
     function _cutadapt_optional_args(cfg::Dict; cutadapt_bin = tool_bin("cutadapt"))::String
         parts = String[]
-        min_len = get(cfg, "min_length", 200)
+        min_len = _num(cfg, "min_length", 200)
         push!(parts, "-m $min_len")
-        get(cfg, "discard_untrimmed", true) && push!(parts, "--discard-untrimmed")
-        cores = get(cfg, "cores", 0)
+        get(cfg, "discard_untrimmed", true) == true && push!(parts, "--discard-untrimmed")
+        cores = _num(cfg, "cores", 0)
         if cores != 1
             if _cutadapt_supports_threads(cutadapt_bin)
                 push!(parts, "-j $cores")   # -j 1 is default; 0 = auto
@@ -103,11 +141,11 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
                 @warn "Cutadapt: '$cutadapt_bin' does not support -j; running single-threaded."
             end
         end
-        quality_cutoff = get(cfg, "quality_cutoff", nothing)
+        quality_cutoff = _num(cfg, "quality_cutoff", nothing)
         isnothing(quality_cutoff) || push!(parts, "-q $quality_cutoff")
-        error_rate = get(cfg, "error_rate", nothing)
+        error_rate = _num(cfg, "error_rate", nothing)
         isnothing(error_rate) || push!(parts, "-e $error_rate")
-        overlap = get(cfg, "overlap", nothing)
+        overlap = _num(cfg, "overlap", nothing)
         isnothing(overlap) || push!(parts, "-O $overlap")
         extra = _safe_optional_args(cfg)
         isempty(extra) || push!(parts, extra)
@@ -116,13 +154,16 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
 
     function _vsearch_args(cfg::Dict)::String
         parts = String[]
-        push!(parts, "--id $(get(cfg, "identity", 0.75))")
-        push!(parts, "--query_cov $(get(cfg, "query_cov", 0.8))")
-        maxaccepts = get(cfg, "maxaccepts", nothing)
-        isnothing(maxaccepts) || push!(parts, "--maxaccepts $maxaccepts")
-        maxrejects = get(cfg, "maxrejects", nothing)
+        push!(parts, "--id $(_num(cfg, "identity", 0.75))")
+        push!(parts, "--query_cov $(_num(cfg, "query_cov", 0.8))")
+        maxaccepts = _num(cfg, "maxaccepts", nothing)
+        # merge_taxa expects one hit per query; vsearch otherwise reports every accepted hit.
+        isnothing(maxaccepts) || push!(parts, "--maxaccepts $maxaccepts --maxhits 1")
+        maxrejects = _num(cfg, "maxrejects", nothing)
         isnothing(maxrejects) || push!(parts, "--maxrejects $maxrejects")
         strand = get(cfg, "strand", nothing)
+        isnothing(strand) || strand in ("plus", "both") ||
+            error("vsearch.strand must be plus or both (got: $(repr(strand)))")
         isnothing(strand) || push!(parts, "--strand $strand")
         extra = _safe_optional_args(cfg)
         isempty(extra) || push!(parts, extra)
@@ -131,8 +172,8 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
 
     function _cdhit_args(cfg::Dict)::String
         parts = String[]
-        push!(parts, "-c $(get(cfg, "identity", 0.97))")
-        threads = get(cfg, "threads", 0)
+        push!(parts, "-c $(_num(cfg, "identity", 0.97))")
+        threads = _num(cfg, "threads", 0)
         push!(parts, "-T $threads")
         extra = _safe_optional_args(cfg)
         isempty(extra) || push!(parts, extra)
@@ -206,8 +247,8 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
                           cutadapt_dir, cutadapt_bin;
                           mode="paired", r1_suffix="_R1", r2_suffix="_R2")
         samples    = String[]
-        r1_map     = Dict{String,String}()   # sample => absolute input path
-        r2_map     = Dict{String,String}()
+        r1_map     = Dict{String,Vector{String}}()   # sample => input paths, one per lane
+        r2_map     = Dict{String,Vector{String}}()
         out_prefix = Dict{String,String}()   # sample => output name prefix
 
         log_dir          = joinpath(cutadapt_dir, "logs")
@@ -226,23 +267,33 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         # Sample name = everything before the first occurrence of the R1/R2 suffix
         # in the *output-safe* name (which carries the sub-group prefix when pooled).
         primary_suffix  = (mode == "reverse") ? r2_suffix : r1_suffix
-        primary_pattern = Regex(primary_suffix * raw"[^/]*\.fastq\.gz$")
+        other_suffix    = (mode == "reverse") ? r1_suffix : r2_suffix
+        primary_pattern = _mate_regex(primary_suffix, other_suffix)
 
         for entry in sort(fastq_entries, by = e -> e.name)
-            occursin(primary_pattern, entry.name) || continue
-            parts  = split(entry.name, primary_suffix; limit=2)
-            sample = parts[1]
-            rest   = parts[2]   # e.g. ".fastq.gz" or "_001.fastq.gz"
+            m = match(primary_pattern, entry.name)
+            isnothing(m) && continue
+            sample = _lane_free(m.captures[1])
             if !(sample in samples)
                 push!(samples, sample)
                 out_prefix[sample] = sample
             end
-            r1_map[sample] = entry.path
+            push!(get!(r1_map, sample, String[]), entry.path)
             # Build the R2 input path: same source directory, swap suffix in original filename.
             orig_dir  = dirname(entry.path)
             orig_base = basename(entry.path)
-            r2_base   = replace(orig_base, primary_suffix => r2_suffix; count=1)
-            r2_map[sample] = joinpath(orig_dir, r2_base)
+            r2_base   = _mate_name(orig_base, primary_suffix, r2_suffix)
+            push!(get!(r2_map, sample, String[]), joinpath(orig_dir, r2_base))
+        end
+
+        # A sample split over lanes is concatenated first; gzip members concatenate losslessly.
+        lane_dir = joinpath(cutadapt_dir, ".lanes")
+        function _one_input(paths::Vector{String}, sample::String, mate::String)
+            length(paths) == 1 && return paths[1]
+            mkpath(lane_dir)
+            joined = joinpath(lane_dir, "$(sample)_$(mate).fastq.gz")
+            _run_killable(pipeline(`cat $paths`; stdout=joined))
+            joined
         end
 
         @info("Cutadapt: Running in $mode mode with arguments: $primer_args $optional_args.")
@@ -253,17 +304,17 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
             pfx = out_prefix[sample]
 
             if mode == "paired"
-                inputR1  = r1_map[sample]
-                inputR2  = r2_map[sample]
+                inputR1  = _one_input(r1_map[sample], sample, "R1")
+                inputR2  = _one_input(r2_map[sample], sample, "R2")
                 outputR1 = joinpath(cutadapt_dir, pfx * "_R1_trimmed.fastq.gz")
                 outputR2 = joinpath(cutadapt_dir, pfx * "_R2_trimmed.fastq.gz")
                 cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $(_sq(outputR1)) -p $(_sq(outputR2)) $(_sq(inputR1)) $(_sq(inputR2))"
             elseif mode == "forward"
-                inputR1  = r1_map[sample]
+                inputR1  = _one_input(r1_map[sample], sample, "R1")
                 outputR1 = joinpath(cutadapt_dir, pfx * "_R1_trimmed.fastq.gz")
                 cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $(_sq(outputR1)) $(_sq(inputR1))"
             else  # reverse
-                inputR2  = r2_map[sample]
+                inputR2  = _one_input(r2_map[sample], sample, "R2")
                 outputR2 = joinpath(cutadapt_dir, pfx * "_R2_trimmed.fastq.gz")
                 cutadapt_cmd = "$cutadapt_bin $primer_args $optional_args -o $(_sq(outputR2)) $(_sq(inputR2))"
             end
@@ -271,13 +322,15 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
             log_command(cutadapt_cmd, cmd_log)
             try
                 open(stats_path, "a") do io
-                    run(pipeline(`bash -lc $cutadapt_cmd`; stdout=io, stderr=io))
+                    _run_killable(pipeline(`bash -lc $cutadapt_cmd`; stdout=io, stderr=io))
                 end
             catch e
                 log_tail = isfile(stats_path) ? read(stats_path, String) : ""
                 error("cutadapt failed for sample '$sample':\n$log_tail\n$(sprint(showerror, e))")
             end
         end
+
+        rm(lane_dir; recursive=true, force=true)
 
         samples_str = join((_sq(s) for s in samples), " ")
         cmd = "paste <(printf \"%s\\n\" $samples_str) " *
@@ -366,7 +419,9 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
     # than the raw length, else paired runs expect double and never skip.
     function _expected_trimmed_count(entries, mode::AbstractString,
                                      primary_pattern::Regex)::Int
-        n_primary = count(e -> occursin(primary_pattern, e.name), entries)
+        n_primary = length(unique(_lane_free(m.captures[1])
+                                  for m in (match(primary_pattern, e.name) for e in entries)
+                                  if !isnothing(m)))
         mode == "paired" ? 2 * n_primary : n_primary
     end
 
@@ -392,7 +447,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         seed          = Int(get(full_cfg, "seed", DEFAULT_SEED))
 
         primary_suffix  = mode == "reverse" ? r2_suffix : r1_suffix
-        primary_pattern = Regex(primary_suffix * raw"[^/]*\.fastq\.gz$")
+        primary_pattern = _mate_regex(primary_suffix, mode == "reverse" ? r1_suffix : r2_suffix)
         selected_entries = raw_entries
         if subsample_n > 0
             primary_entries = [e for e in raw_entries if occursin(primary_pattern, e.name)]
@@ -410,7 +465,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
             sample_mtimes = Float64[]
             for entry in selected_entries
                 push!(sample_mtimes, mtime(entry.path))
-                mate_base = replace(basename(entry.path), r1_suffix => r2_suffix; count=1)
+                mate_base = _mate_name(basename(entry.path), r1_suffix, r2_suffix)
                 mate_path = joinpath(dirname(entry.path), mate_base)
                 isfile(mate_path) && push!(sample_mtimes, mtime(mate_path))
             end
@@ -433,6 +488,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
                 return TrimmedReads(cutadapt_dir)
             end
         end
+        snap = _begin_section(config_path, stage_sections(:cutadapt), hash_file)
 
         if isdir(cutadapt_dir)
             for f in readdir(cutadapt_dir)
@@ -445,7 +501,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         mkpath(cutadapt_dir)
         run_cutadapt(get_primer_args(primer_pairs, primers_path; mode), built_args,
                      selected_entries, cutadapt_dir, cutadapt_bin; mode, r1_suffix, r2_suffix)
-        _write_section_hash(config_path, stage_sections(:cutadapt), hash_file)
+        _write_section_hash(config_path, stage_sections(:cutadapt), hash_file; snapshot=snap)
         pipeline_log(project, "cutadapt complete")
         return TrimmedReads(cutadapt_dir)
     end
@@ -559,12 +615,13 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
                 return
             end
         end
+        snap = _begin_section(config_path, stage_sections(:fastqc_multiqc), hash_file)
 
         # Pass force=true so the lower-level mtime guard doesn't override this decision.
         # When pooling children, run FastQC across all data_dirs.
         multiqc(project.data_dirs, qc_dir;
                 fastqc_args, multiqc_args, fastqc_bin, multiqc_bin, force=true)
-        _write_section_hash(config_path, stage_sections(:fastqc_multiqc), hash_file)
+        _write_section_hash(config_path, stage_sections(:fastqc_multiqc), hash_file; snapshot=snap)
         pipeline_log(project, "FastQC/MultiQC complete")
     end
 
@@ -595,7 +652,41 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         # description after the space), unlike --blast6out which truncates at the first space.
         cmd = "$vsearch_bin --usearch_global $(_sq(fasta_in_dir)) --db $(_sq(reference_database)) --userout $(_sq(outfile)) --userfields query+target+id $optional_args"
         _run_logged(cmd, log_path)
+        _sort_hits_by_query!(outfile)
         @info "VSEARCH: Complete. Output: $outfile  Log: $log_path"
+    end
+
+    """
+        _sort_hits_by_query!(path)
+
+    Rewrite a vsearch `--userout` table in query order. vsearch searches queries on
+    all threads and writes each result as its thread finishes, so the same search
+    yields the same hits in a different line order on every run (measured: several
+    thousand of ~3,000 lines move between two 32-thread runs). The hits themselves
+    do not change. The file is recorded by content in the Attestation, so without
+    this, two identical runs would report different outputs. The sort is stable:
+    where one query has several hits, vsearch's own ranking of them is kept. The
+    rewrite goes through a temp file and a rename so no reader sees it half-written.
+    """
+    function _sort_hits_by_query!(path::AbstractString)
+        isfile(path) || return path
+        lines = filter!(!isempty, readlines(path))
+        sort!(lines; by = l -> first(split(l, '\t'; limit=2)), alg = Base.Sort.DEFAULT_STABLE)
+        tmp, io = mktemp(dirname(path); cleanup=false)
+        try
+            for l in lines
+                println(io, l)
+            end
+            close(io)
+            # rename(2) replaces in one step; `mv(...; force=true)` would unlink
+            # the destination first, exposing a window with no file there.
+            Base.Filesystem.rename(tmp, path)
+        catch
+            close(io)
+            rm(tmp; force=true)
+            rethrow()
+        end
+        path
     end
 
     function vsearch(input::HasFasta, reference_database::String, vsearch_dir::String;
@@ -630,8 +721,9 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
             @info "[$lbl] VSEARCH: Skipping - $tsv up to date"
             return TaxonomyHits(tsv)
         end
+        snap = _begin_section(config_path, stage_sections(:vsearch), hash_file)
         vsearch(input.fasta, reference_database, vsearch_dir; optional_args=built_args, vsearch_bin)
-        _write_section_hash(config_path, stage_sections(:vsearch), hash_file)
+        _write_section_hash(config_path, stage_sections(:vsearch), hash_file; snapshot=snap)
         pipeline_log(project, "VSEARCH: $(input.fasta) against $(basename(reference_database))")
         log_written(project, tsv)
         return TaxonomyHits(tsv)
@@ -691,12 +783,60 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         return nothing
     end
 
+    # Read `>header` -> sequence from a FASTA. cd-hit names cluster members by
+    # their FASTA header, so this is what translates those names into whatever
+    # key the count table being collapsed is actually indexed by.
+    function _fasta_index(fasta_path::String)::Dict{String,String}
+        idx = Dict{String,String}()
+        name = ""
+        buf = IOBuffer()
+        flush!() = (isempty(name) || (idx[name] = String(take!(buf))); truncate(buf, 0))
+        for line in eachline(fasta_path)
+            if startswith(line, ">")
+                flush!()
+                name = strip(line[2:end])
+            else
+                print(buf, strip(line))
+            end
+        end
+        flush!()
+        return idx
+    end
+
+    # Re-key a representative map so its keys match the count table's id column.
+    #
+    # The .clstr always names ASVs by FASTA header ("seq1"), but the table being
+    # collapsed may be keyed either that way (tax_counts.csv, asv_counts.csv) or
+    # by the sequence itself (seqtab_nochim.csv, whose row names are sequences).
+    # Collapsing the latter against header-keyed names silently matches nothing
+    # and every ASV comes back as its own representative.
+    function _rekey_rep_map(rep_map::Dict{String,String}, ids, fasta_path)
+        isempty(rep_map) && return rep_map
+        id_set = Set(strip(string(v)) for v in ids)
+        any(k -> k in id_set, keys(rep_map)) && return rep_map   # already header-keyed
+
+        (isnothing(fasta_path) || !isfile(fasta_path)) && return rep_map
+        idx = _fasta_index(fasta_path)
+        isempty(idx) && return rep_map
+
+        out = Dict{String,String}()
+        for (member, rep) in rep_map
+            m = get(idx, member, nothing)
+            r = get(idx, rep, nothing)
+            (isnothing(m) || isnothing(r)) && continue
+            out[m] = r
+        end
+        isempty(out) && return rep_map
+        return out
+    end
+
     function _collapse_cdhit_counts(clstr_path::String, count_table_path::String,
-                                     out_path::String)::String
+                                     out_path::String; fasta_path=nothing)::String
         rep_map = _parse_cdhit_clstr(clstr_path)
         df = copy(CSV.read(count_table_path, DataFrame))
 
         id_col = names(df)[1]
+        rep_map = _rekey_rep_map(rep_map, df[!, id_col], fasta_path)
 
         df[!, :_Representative] = [get(rep_map, strip(string(v)), strip(string(v)))
                                     for v in df[!, id_col]]
@@ -715,7 +855,10 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         end
 
         # Sum sample counts by representative
-        gdf = groupby(df, :_Representative)
+        # sort=false keeps groups in order of first appearance. The default leaves
+        # group order to the hashing path DataFrames picks, which is not a
+        # promise, and this frame is written straight to collapsed_counts.csv.
+        gdf = groupby(df, :_Representative; sort=false)
         collapsed = combine(gdf, [Symbol(c) => sum => Symbol(c) for c in sample_cols]...)
         rename!(collapsed, :_Representative => id_col)
 
@@ -724,7 +867,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
             rep_meta = df[df[!, id_col] .== df[!, :_Representative],
                           vcat([id_col], text_cols)]
             unique!(rep_meta, id_col)
-            collapsed = leftjoin(collapsed, rep_meta, on=id_col)
+            collapsed = leftjoin(collapsed, rep_meta, on=id_col, order=:left)
             collapsed = select(collapsed, id_col, text_cols..., sample_cols...)
         end
 
@@ -773,7 +916,8 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
         end
         new_fasta = cdhit(input.fasta, cdhit_dir; optional_args, cdhit_bin)
         clstr_path = new_fasta * ".clstr"
-        _collapse_cdhit_counts(clstr_path, input.count_table, collapsed_counts)
+        _collapse_cdhit_counts(clstr_path, input.count_table, collapsed_counts;
+                               fasta_path=input.fasta)
         return ASVResult(new_fasta, collapsed_counts, input.taxonomy)
     end
 
@@ -793,10 +937,12 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _safe_opti
             @info "[$lbl] CD-HIT: Skipping - $new_fasta up to date"
             return ASVResult(new_fasta, collapsed_counts, input.taxonomy)
         end
+        snap = _begin_section(config_path, stage_sections(:cdhit), hash_file)
         new_fasta = cdhit(input.fasta, cdhit_dir; optional_args=built_args, cdhit_bin)
         clstr_path = new_fasta * ".clstr"
-        _collapse_cdhit_counts(clstr_path, input.count_table, collapsed_counts)
-        _write_section_hash(config_path, stage_sections(:cdhit), hash_file)
+        _collapse_cdhit_counts(clstr_path, input.count_table, collapsed_counts;
+                               fasta_path=input.fasta)
+        _write_section_hash(config_path, stage_sections(:cdhit), hash_file; snapshot=snap)
         pipeline_log(project, "cd-hit-est complete")
         log_written(project, new_fasta)
         return ASVResult(new_fasta, collapsed_counts, input.taxonomy)

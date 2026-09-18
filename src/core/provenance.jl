@@ -8,7 +8,7 @@ module Provenance
 # A run's outputs are unusable as evidence unless the software that produced them
 # can be named and proved. This module owns the whole of that concern, so that no
 # other module learns how a version is obtained: it probes every component a run
-# will invoke, identifies each by content rather than by its own claim, enforces
+# will invoke, identifies each by content, enforces
 # the strictness policy, and emits the Attestation.
 #
 # Two invariants govern everything below.
@@ -18,7 +18,7 @@ module Provenance
 # may hold different binaries. Every external binary is therefore recorded by
 # resolved path, version, AND the SHA256 of the binary itself.
 #
-# Per stage, not per run. A run directory is an accretion, not one execution: the
+# Recorded per stage. A run directory accretes over several executions: the
 # Nutria_CvL forensics established that one run's stages were executed across eight
 # dates spanning three and a half months. The versions behind one run's outputs may
 # therefore legitimately differ between its stages, and a single per-run `tools:`
@@ -55,7 +55,7 @@ Base.showerror(io::IO, e::ProbeFailure) = print(io,
     "provenance: could not prove '$(e.component)': $(e.reason)")
 
 # A release disagreement between the formats of one logical database is a
-# scientific error, not a probe failure: the dual-classifier consensus compares
+# scientific error: the dual-classifier consensus compares
 # DADA2 and VSEARCH labels for string equality, so references drawn from different
 # releases score genuine agreements as disagreements. No override may launder it.
 struct DatabaseReleaseMismatch <: Exception
@@ -72,6 +72,25 @@ Base.showerror(io::IO, e::DatabaseReleaseMismatch) = print(io,
 repo_root() = normpath(joinpath(@__DIR__, "..", ".."))
 
 timestamp() = Dates.format(now(UTC), "yyyy-mm-ddTHH:MM:SSZ")
+
+"""
+    canonical_yaml_doc(x)
+
+`x` with every plain `Dict` replaced by an `OrderedDict` sorted by key, for
+handing to `YAML.write`. YAML.jl emits a mapping in its iteration order, and
+a `Dict` iterates in hash-table order, which depends on insertion history and
+Julia's hashing. Two identical configs could
+therefore be written with their keys in different orders. An `OrderedDict`
+already carries an order someone chose, so it is kept as it is (its values
+are still canonicalised); sequences keep their order, which is meaningful.
+"""
+canonical_yaml_doc(x::OrderedDict) =
+    OrderedDict{Any,Any}(k => canonical_yaml_doc(v) for (k, v) in x)
+canonical_yaml_doc(x::AbstractDict) =
+    OrderedDict{Any,Any}(k => canonical_yaml_doc(x[k])
+                         for k in sort!(collect(keys(x)); by=string))
+canonical_yaml_doc(x::AbstractVector) = Any[canonical_yaml_doc(v) for v in x]
+canonical_yaml_doc(x) = x
 
 ## Hashing
 file_sha256(path::AbstractString) = open(io -> bytes2hex(sha256(io)), path, "r")
@@ -138,8 +157,7 @@ function _capture(re::Regex, text::AbstractString, component::AbstractString)
     return String(m.captures[1])
 end
 
-# cutadapt prints a bare version and nothing else, so anything more is a changed
-# banner and must fail rather than be guessed at.
+# cutadapt prints a bare version and nothing else; anything more is a changed banner and fails.
 parse_cutadapt_version(text::AbstractString) =
     _capture(r"^\s*v?([0-9][^\s]*)\s*$"m, text, "cutadapt")
 
@@ -150,8 +168,7 @@ parse_multiqc_version(text::AbstractString) =
     _capture(r"multiqc,?\s+version\s+([0-9][^\s]*)"i, text, "multiqc")
 
 # The banner reads `vsearch v2.30.5_linux_x86_64, 15.3GB RAM, 24 cores`. The build
-# suffix is part of what the binary calls itself and is kept; the RAM and core
-# counts describe this machine, not the tool, and are dropped at the comma.
+# suffix is kept; the RAM and core counts describe the machine and are dropped at the comma.
 parse_vsearch_version(text::AbstractString) =
     _capture(r"vsearch\s+v([0-9][^\s,]*)"i, text, "vsearch")
 
@@ -163,6 +180,24 @@ parse_swarm_version(text::AbstractString) =
 # far better than a date string does.
 parse_cdhit_version(text::AbstractString) =
     _capture(r"CD-HIT\s+version\s+([0-9][^\s]*)"i, text, "cd-hit-est")
+
+# MAFFT is a shell script and prints `v7.525 (2024/Mar/13)` to stderr.
+parse_mafft_version(text::AbstractString) =
+    _capture(r"^\s*v([0-9][^\s]*)"m, text, "mafft")
+
+# `trimAl v1.5.rev1 build[2025-11-25]`; releases before 1.4 print `trimAl 1.2rev59`.
+parse_trimal_version(text::AbstractString) =
+    _capture(r"trimAl\s+v?([0-9][^\s]*)"i, text, "trimal")
+
+# `IQ-TREE version 3.1.4 for Linux`; 1.x inserts `multicore` before `version`.
+parse_iqtree_version(text::AbstractString) =
+    _capture(r"IQ-TREE\s+(?:multicore\s+)?version\s+([0-9][^\s]*)"i, text, "iqtree")
+
+parse_raxml_version(text::AbstractString) =
+    _capture(r"RAxML\s+version\s+([0-9][^\s]*)"i, text, "raxml")
+
+parse_gappa_version(text::AbstractString) =
+    _capture(r"^\s*v([0-9][^\s]*)\s*$"m, text, "gappa")
 
 ## The probe registry
 # A declarative table of (component, probe command, parser). `key` is the
@@ -186,6 +221,11 @@ const TOOL_PROBES = OrderedDict{String,ToolProbe}(
     "vsearch"    => ToolProbe("vsearch",    "vsearch",    ["--version"], :stderr, parse_vsearch_version),
     "swarm"      => ToolProbe("swarm",      "swarm",      ["--version"], :stderr, parse_swarm_version),
     "cd_hit_est" => ToolProbe("cd_hit_est", "cd-hit-est", ["-h"],        :stdout, parse_cdhit_version),
+    "mafft"      => ToolProbe("mafft",      "mafft",      ["--version"], :stderr, parse_mafft_version),
+    "trimal"     => ToolProbe("trimal",     "trimal",     ["--version"], :stdout, parse_trimal_version),
+    "iqtree"     => ToolProbe("iqtree",     "iqtree",     ["--version"], :stdout, parse_iqtree_version),
+    "raxml"      => ToolProbe("raxml",      "raxml",      ["-v"],        :stdout, parse_raxml_version),
+    "gappa"      => ToolProbe("gappa",      "gappa",      ["--version"], :stdout, parse_gappa_version),
 )
 
 ## Command execution
@@ -204,8 +244,8 @@ function run_command(argv::Vector{String})::CommandOutput
     return CommandOutput(String(take!(out)), String(take!(err)), proc.exitcode)
 end
 
-# Tools is included after this module, so its resolver is reached at call time
-# rather than bound at load time. A caller may inject its own; the tests do.
+# Tools is included after this module, so its resolver is looked up at call time.
+# A caller may inject its own; the tests do.
 function default_bin_resolver(key::AbstractString)::String
     parent = parentmodule(@__MODULE__)
     isdefined(parent, :Tools) || return String(key)
@@ -364,8 +404,7 @@ The release an asset declares in its own filename.
 The filename is authoritative and the release tag is not. PR2 names its assets
 `pr2_version_<release>_SSU_<format>.fasta.gz`, and upstream the two disagree: tag
 `v5.1.0.0` carries assets named `5.1.0`. The release recorded in an Attestation is
-what the database actually is, not where it happened to be found, so only the last
-component of a URI is ever read.
+the database's own release, so only the last component of a URI is ever read.
 """
 function parse_asset_release(asset::AbstractString)
     name = basename(rstrip(String(asset), '/'))
@@ -383,8 +422,7 @@ function _format_release(db::AbstractString, spec::DatabaseFormatSpec)
     component  = "database $db.$(spec.format)"
     from_file  = _try_release(spec.path)
     from_uri   = isempty(spec.uri) ? nothing : _try_release(spec.uri)
-    # A file whose name declares a different release from the asset it is supposed
-    # to be is not a naming quirk; it is the wrong file.
+    # A file whose name declares a different release from its asset is the wrong file.
     if !isnothing(from_file) && !isnothing(from_uri) && from_file != from_uri
         throw(ProbeFailure(component,
             "the file on disk is not the asset its uri names: " *
@@ -493,8 +531,7 @@ end
     probe_metamanifold(; root=repo_root()) -> OrderedDict
 
 MetaManifold's own identity. A dirty working tree is itself a provenance fact and
-is recorded rather than refused; an unknowable field is left null rather than
-filled from a plausible guess.
+is recorded; an unknowable field is left null.
 """
 function probe_metamanifold(; root::AbstractString = repo_root())
     return OrderedDict{String,Any}(
@@ -601,9 +638,8 @@ end
 
 Probe every component the run will invoke, before any compute.
 
-Probing is a phase, not a side effect scattered through the stages: a failure must
-abort here, not forty minutes into DADA2. That ordering is what makes strict mode
-usable rather than infuriating.
+Probing runs as one phase before any stage, so a failure aborts here instead of
+forty minutes into DADA2.
 
 Under `strict` (the default) a failed probe raises and nothing is computed. Under
 the override the run proceeds and the environment is marked degraded, naming
@@ -720,9 +756,8 @@ output_record(path::AbstractString, root::AbstractString) = OrderedDict{String,A
 )
 
 ## The Attestation
-# The run's formal witness statement. The document is held as plain ordered
-# dictionaries rather than a typed tree, so that reading one back is the same
-# operation as building one and a round trip loses nothing.
+# The run's formal witness statement, held as plain ordered dictionaries so reading
+# one back is the same operation as building one and a round trip loses nothing.
 mutable struct Attestation
     doc :: OrderedDict{String,Any}
 end
@@ -734,8 +769,7 @@ An empty Attestation for one run. `run` names the study, group, run, and start
 time; `config` is embedded inline so the artefact stands alone.
 
 Paths and command lines are recorded verbatim, and may carry a username or a study
-name. The Attestation is a publishable artefact; this is documented rather than
-silently sanitised, so what is being published is known.
+name. The Attestation is a publishable artefact, so check it before publishing.
 """
 function Attestation(; run::AbstractDict = OrderedDict{String,Any}(),
                        config::Union{AbstractDict,Nothing} = nothing,
@@ -872,7 +906,9 @@ function write_attestation(att::Attestation, path::AbstractString; merge_existin
     summarise!(document)
     document.doc["generated"] = timestamp()
     mkpath(dirname(abspath(path)))
-    YAML.write_file(path, document.doc)
+    # The run identity and the run config reach here as plain Dicts (see
+    # `_attestation` in routes/pipeline.jl), whose key order is hash order.
+    YAML.write_file(path, canonical_yaml_doc(document.doc))
     return path
 end
 

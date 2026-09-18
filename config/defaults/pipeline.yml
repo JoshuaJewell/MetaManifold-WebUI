@@ -5,9 +5,6 @@
 ## (truncation lengths, primers, expected errors) per dataset in a project file.
 
 ## Identity and reproducibility
-# Name stamped onto manual annotations and exports; set yours in the global
-# config/pipeline.yml rather than here.
-your_name: ""
 # Master random seed for every stochastic step (subsampling, DADA2, rarefaction)
 # so a run reproduces exactly.
 seed: 123
@@ -15,6 +12,56 @@ seed: 123
 subsample_n: 0
 # Pool a run's child sub-directories as one denoising batch when true.
 pool_children: false
+
+## Compute
+# Worker threads for every DADA2 R stage - learn_errors, denoise,
+# chimera_removal and assign_taxonomy all read this one key. `true` lets DADA2
+# use every core it can see, a positive integer pins the count, `false` runs
+# single-threaded. DADA2 threads these stages with RcppParallel (in-process TBB
+# workers), not by forking, so raising this is safe inside the embedded R
+# session; see the BiocParallel note in dada2/dada2_functions.r for why forking
+# is not.
+#
+# filter_trim is deliberately excluded: dada2::filterAndTrim only honours
+# `multithread` by switching off its own OpenMP path and forking through
+# mcmapply, which is exactly the deadlock that note describes. It stays on OMP.
+r_threads: 4
+
+## Remote execution (bioserver)
+# DISCLAIMER: you are solely responsible for ensuring you are authorised to use
+# the host you configure here, and to place sequencing data on it. This project
+# opens an SSH connection to whatever `host` names and copies the inputs of the
+# listed stages there; it makes no check of who owns that machine or of what
+# policy governs the data.
+#
+# Offload individual DADA2 stages to a compute server over SSH. Each stage
+# ships its own inputs and collects its own outputs, so any stage can run
+# remotely whether or not the stage before it did: a run denoised locally can
+# still have its chimeras removed on the server, and vice versa.
+remote:
+  # SSH destination, e.g. "user@host". ~ keeps every stage local.
+  host: ~
+  # Rscript on the server; a bare name is resolved against the login PATH.
+  rscript: "Rscript"
+  # Absolute directory on the server for per-run staging. Each stage creates a
+  # fresh subdirectory under it and removes it again when the stage finishes.
+  staging_dir: "/absolute/path/on/server"
+  # SSH private key; ~ falls back to the agent, then to a password prompt.
+  identity_file: ~
+  # Threads to request on the server; ~ uses r_threads for DADA2 and
+  # phylogeny.threads for the phylogeny steps.
+  threads: ~
+  # Stages to run on the server. Any of: learn_errors, denoise,
+  # chimera_removal, assign_taxonomy, phylogeny_align (MAFFT for a reference
+  # tree), phylogeny_tree (IQ-TREE), phylogeny_add (MAFFT --addfragments for a
+  # placement), phylogeny_place (RAxML). The rest stay local.
+  stages: []
+  # Programs the phylogeny steps call on the server; a bare name is resolved
+  # against the login PATH.
+  tools:
+    mafft: "mafft"
+    iqtree: "iqtree"
+    raxml: "raxmlHPC-PTHREADS-SSE3"
 
 ## Primer trimming (cutadapt)
 cutadapt:
@@ -90,18 +137,18 @@ dada2:
     fasta_prefix: "asvs"
     seq_table_prefix: "seqtab_nochim"
   taxonomy:
-    # Assign taxonomy on a remote host over SSH; host ~ runs it locally.
-    remote:
-      host: ~
-      rscript: "Rscript"
-      staging_dir: "/absolute/path/on/server"
-      identity_file: ~
+    # Only keys that change the assignment itself belong here: this section is
+    # what :dada2_assign_taxonomy hashes, so anything listed marks the stage
+    # stale when it changes. Thread count moved to the top-level r_threads and
+    # the SSH target to the top-level remote block for exactly that reason -
+    # neither alters a single assignment. A project config may still spell
+    # `multithread` and `remote` here and they keep working, but they are
+    # deprecated and re-running on a different host or thread count no longer
+    # invalidates work it could not have changed.
     # Minimum bootstrap confidence to keep an assignment; 0 keeps all.
     min_boot: 0
     # Run the taxonomy assignment stage.
     enabled: true
-    # Threads for assignTaxonomy.
-    multithread: 4
     # Reference database key, resolved against config/databases.
     database: "pr2"
 
@@ -159,6 +206,85 @@ tagging:
   category_sets:
     - "default"
 
+## Phylogenetic placement (MAFFT, trimAl, IQ-TREE, RAxML EPA, gappa)
+# Reference trees are built on the Reference trees page and placements run from
+# a study's Trees tab. Each reference tree and placement can override these
+# settings for itself. Trimming and accumulation always run on this machine.
+phylogeny:
+  # Threads for MAFFT, IQ-TREE, RAxML and gappa on this machine.
+  threads: 4
+  # Building a reference tree.
+  reference:
+    align:
+      # MAFFT method: auto, localpair (L-INS-i with maxiterate), genafpair
+      # (E-INS-i), globalpair (G-INS-i) or 6merpair.
+      strategy: "localpair"
+      # Refinement iterations (--maxiterate); 0 omits it, auto ignores it.
+      maxiterate: 1000
+      # Extra raw MAFFT flags appended verbatim.
+      optional_args: ""
+    trim:
+      # trimAl column selection: manual uses the thresholds below; gappyout,
+      # strict, strictplus, automated1, nogaps and noallgaps are trimAl's own modes.
+      method: "manual"
+      # -gt: keep columns with residues in at least this fraction of sequences.
+      gap_threshold: 0.3
+      # -cons: keep at least this percentage of columns whatever the thresholds; ~ off.
+      conservation: ~
+      # -st: minimum average similarity of a kept column (0 to 1); ~ off.
+      similarity_threshold: ~
+      # -resoverlap and -seqoverlap, set together: remove sequences with fewer than
+      # sequence_overlap percent of positions overlapping residue_overlap of the
+      # column; ~ keeps every sequence.
+      residue_overlap: ~
+      sequence_overlap: ~
+      # Extra raw trimAl flags appended verbatim.
+      optional_args: ""
+    tree:
+      # IQ-TREE substitution model; MFP picks one with ModelFinder.
+      model: "MFP"
+      # Branch support: standard (-b) or ultrafast (-bb) bootstrap.
+      bootstrap: "standard"
+      # Bootstrap replicates; ultrafast needs at least 1000.
+      replicates: 100
+      # Extra raw IQ-TREE flags appended verbatim.
+      optional_args: ""
+  # Placing queries on a reference tree.
+  placement:
+    # MAFFT --addfragments onto the trimmed reference alignment.
+    align:
+      strategy: "auto"
+      maxiterate: 0
+      optional_args: ""
+    trim:
+      # trimAl column selection: manual uses the thresholds below; gappyout,
+      # strict, strictplus, automated1, nogaps and noallgaps are trimAl's own modes.
+      method: "manual"
+      # -gt: keep columns with residues in at least this fraction of sequences.
+      gap_threshold: 0.01
+      # -cons: keep at least this percentage of columns whatever the thresholds; ~ off.
+      conservation: ~
+      # -st: minimum average similarity of a kept column (0 to 1); ~ off.
+      similarity_threshold: ~
+      # -resoverlap and -seqoverlap, set together: remove sequences with fewer than
+      # sequence_overlap percent of positions overlapping residue_overlap of the
+      # column; ~ keeps every sequence.
+      residue_overlap: ~
+      sequence_overlap: ~
+      # Extra raw trimAl flags appended verbatim.
+      optional_args: ""
+    place:
+      # RAxML substitution model (-m) for EPA.
+      model: "GTRCATI"
+      # EPA heuristic (-G): the fraction of branches tried in full; ~ tries all.
+      heuristic: 0.2
+      # Extra raw RAxML flags appended verbatim.
+      optional_args: ""
+    accumulate:
+      # gappa --threshold: placement mass a branch must gather before a query
+      # is assigned to it, from 0.5 to 1.
+      threshold: 0.8
+
 ## Read QC reports
 fastqc:
   # FastQC worker threads.
@@ -168,12 +294,6 @@ fastqc:
 multiqc:
   # Extra raw MultiQC flags appended verbatim.
   optional_args: ""
-
-## Annotation
-annotation:
-  # Finest taxonomic rank offered for manual contamination labelling and the
-  # rank charts: species, genus, family, order, class, division, supergroup.
-  max_rank: "genus"
 
 ## Analysis and figures
 analysis:
@@ -190,11 +310,17 @@ analysis:
     - set: contamination
       category: Contaminant
       apply_to: [diversity, taxa, venn]
-  # Depth normalisation before diversity: none or rarefy.
-  normalisation: none
-  # Rarefaction depth; 0 uses the minimum positive library size.
-  normalisation_depth: 0
+  # Alpha diversity: richness, Shannon and Simpson per sample.
   alpha:
+    # How counts are normalised first: none, rarefy or srs. none uses the raw
+    # counts, so a deeper sample can show more ASVs. rarefy subsamples each
+    # sample to a common depth; srs (scaling with ranked subsampling) scales to
+    # it instead. Both leave out samples below the depth.
+    normalisation: none
+    # Reads per sample for rarefy or srs; 0 uses the smallest non-empty sample.
+    depth: 0
+    # rarefy draws averaged for each value.
+    rarefaction_iterations: 100
     # Overlay individual sample points on the boxplots.
     show_points: true
     # Annotate group-wise significance on the alpha comparison.
@@ -203,5 +329,16 @@ analysis:
     pairwise_brackets: true
     # Treat groups as paired in the significance test.
     paired_samples: true
+    # Join each sample to itself across groups with a line, using the same
+    # pairing the paired significance test uses.
+    paired_lines: true
     # Significance test for the alpha comparison.
     significance_test: "kruskal_wallis"
+  # Beta diversity: the Bray-Curtis dissimilarities behind NMDS and PERMANOVA.
+  beta:
+    # How counts are prepared: hellinger, none, rarefy or srs. hellinger takes
+    # the square root of each sample's relative abundances, which puts samples
+    # of any depth on one scale and damps the most abundant taxa.
+    normalisation: hellinger
+    # Reads per sample for rarefy or srs; 0 uses the smallest non-empty sample.
+    depth: 0

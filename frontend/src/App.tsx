@@ -11,6 +11,10 @@ import { NotFoundView } from './views/NotFoundView'
 import { DefaultConfigView } from './views/DefaultConfigView'
 import { CompositionsView } from './views/CompositionsView'
 import { PrimersView } from './views/PrimersView'
+import { ReferenceTreesView } from './views/ReferenceTreesView'
+import { ReferenceTreeView } from './views/TreeView'
+import { AboutView } from './views/AboutView'
+import { TreeView } from './views/TreeView'
 
 export function App() {
   return (
@@ -25,8 +29,12 @@ export function App() {
             <Route path="config" element={<DefaultConfigView />} />
             <Route path="compositions" element={<CompositionsView />} />
             <Route path="primers" element={<PrimersView />} />
+            <Route path="reference-trees" element={<ReferenceTreesView />} />
+            <Route path="reference-trees/:id/view" element={<ReferenceTreeView />} />
+            <Route path="about" element={<AboutView />} />
             <Route path=":study" element={<StudyView />} />
             <Route path=":study/:slug" element={<SlugResolver />} />
+            <Route path=":study/trees/:file" element={<TreeView />} />
             <Route path=":study/:group/:run" element={<RunView />} />
             <Route path="*" element={<NotFoundView />} />
           </Route>

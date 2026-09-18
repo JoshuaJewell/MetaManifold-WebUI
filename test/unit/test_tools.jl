@@ -69,7 +69,7 @@ end
 
 @testset "Tools - _expected_trimmed_count" begin
     # Mirrors the primary-read pattern the cutadapt skip guard builds.
-    pat(suffix) = Regex(suffix * raw"[^/]*\.fastq\.gz$")
+    pat(suffix) = Tools._mate_regex(suffix, suffix == "_R1" ? "_R2" : "_R1")
 
     # Three paired samples: six raw files (R1 + R2 each).
     all_entries = [
@@ -90,6 +90,19 @@ end
     # Single-end modes write one trimmed file per primary read.
     @test Tools._expected_trimmed_count(all_entries, "forward", pat("_R1")) == 3
     @test Tools._expected_trimmed_count(all_entries, "reverse", pat("_R2")) == 3
+
+    # Lane files of one sample become one trimmed sample.
+    lanes = [FastqEntry("/d/s1_L001_R1_001.fastq.gz", "s1_L001_R1_001.fastq.gz"),
+             FastqEntry("/d/s1_L002_R1_001.fastq.gz", "s1_L002_R1_001.fastq.gz")]
+    @test Tools._expected_trimmed_count(lanes, "forward", pat("_R1")) == 1
+end
+
+@testset "Tools - mate file matching" begin
+    rx = Tools._mate_regex("_R1", "_R2")
+    @test match(rx, "Pond_R1_S5_L001_R1_001.fastq.gz").captures[1] == "Pond_R1_S5_L001"
+    @test isnothing(match(rx, "Pond_R1_S5_L001_R2_001.fastq.gz"))
+    @test Tools._mate_name("S1_R1_001.fastq.gz", "_R1", "_R2") == "S1_R2_001.fastq.gz"
+    @test Tools._lane_free("S1_S5_L002") == "S1_S5"
 end
 
 @testset "Tools - get_primer_args mode dispatch" begin

@@ -1,0 +1,3 @@
+
+trimAl v1.5.rev1 build[2025-11-25]
+
