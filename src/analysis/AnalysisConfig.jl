@@ -18,7 +18,7 @@ Standards alignment:
 - Nickel: 1-formats/k9/*.ncl style, contracts ValidFormula, PseudocountContract, CorrectionContract BH mandatory, ZeroHandlingContract, MethodNormalizationCompatibility
 - DEED: DEED-GRAMMAR-SPEC.adoc v0.2.0 DRAFT — :schema-version first, only () brackets, #t/#f booleans, :kebab-case keywords, filename dispatch *_chora.deed → repo-deed, SPDX header mandatory, #u5 UUID5
 """
-module AnalysisConfig
+module AnalysisConfigImpl
 
 using Dates
 using SHA
@@ -1520,4 +1520,4 @@ function present_in_every_admissible_world(candidates::Vector, query::Function)
     return all(c -> query(c), candidates)
 end
 
-end # module AnalysisConfig
+end # module AnalysisConfigImpl

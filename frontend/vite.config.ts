@@ -8,10 +8,14 @@ export default defineConfig({
     outDir:      '../web/dist',
     emptyOutDir: true,
     sourcemap:   false,
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         manualChunks: {
           plotly: ['plotly.js-dist-min'],
+          react: ['react', 'react-dom', 'react-router-dom'],
+          chartEditor: ['react-chart-editor'],
+          upset: ['@upsetjs/react'],
         },
       },
     },
