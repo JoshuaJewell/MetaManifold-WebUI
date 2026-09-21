@@ -17,7 +17,20 @@ concurrency:
 
 jobs:
   test:
-    name: Julia ${{ matrix.julia-version }} / ${{ matrix.os }}
+    # The name is a fixed string, and deliberately carries no version.
+    #
+    # A branch ruleset matches a required status check by the DISPLAY NAME of the job
+    # that posts it. When that name was `Julia ${{ matrix.julia-version }} / ${{ matrix.os }}`
+    # a pin bump renamed the check, and a renamed check does not report at all -- it
+    # does not fail, it is simply absent, and an absent required check can never be
+    # satisfied. Every pull request would have deadlocked until an admin bypassed the
+    # rule, triggered by nothing more alarming than editing a version number.
+    #
+    # The versions have not been hidden, only moved somewhere that does not double as
+    # an identifier: `strategy.matrix` below, and the `Set up Julia` step's own log.
+    # `test/unit/test_install_pins.jl` asserts that no job name in this file
+    # interpolates anything, so this cannot regress silently.
+    name: Julia tests
     runs-on: ${{ matrix.os }}
     # The repository's root .Rprofile sources renv/activate.R, so R started from
     # the checkout auto-activates renv and rewrites the library paths. renv is a
