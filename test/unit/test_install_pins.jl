@@ -235,4 +235,26 @@ is_sha256(s) = s isa AbstractString && occursin(r"^[0-9a-f]{64}$", s)
             @test occursin("fetch_pinned \"$ref\"", runs)
         end
     end
+
+    @testset "no job name interpolates a pin" begin
+        ci = YAML.load_file(CI_PATH)
+
+        # A required status check is matched by the DISPLAY NAME of the job that posts
+        # it. `name: Julia ${{ matrix.julia-version }} / ${{ matrix.os }}` therefore
+        # renames the check on every pin bump, and a renamed check does not report at
+        # all -- it does not fail, it is simply absent, and a required check that never
+        # reports can never be satisfied. Every pull request then deadlocks until an
+        # admin bypasses the rule, which is the one outcome branch protection exists to
+        # prevent. The bump that triggers it is a one-line edit to this very file's
+        # subject matter, so the deadlock arrives by way of an ordinary maintenance
+        # change that looks safe.
+        #
+        # Asserting this over EVERY job rather than over the one job we happen to
+        # require today is deliberate: the rule is "a job name is a stable identifier",
+        # and a rule enforced at each door in turn is a rule that a new door escapes.
+        for (id, job) in ci["jobs"]
+            name = get(job, "name", id)
+            @test !occursin("\${{", name)
+        end
+    end
 end
