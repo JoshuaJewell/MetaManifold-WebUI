@@ -17,21 +17,33 @@ concurrency:
 
 jobs:
   test:
-    # The name is a fixed string, and deliberately carries no version.
+    # The name is a fixed string, it carries no version, and the job has NO matrix.
+    # Both are required, and the first without the second is a trap that has already
+    # been sprung here once.
     #
-    # A branch ruleset matches a required status check by the DISPLAY NAME of the job
-    # that posts it. When that name was `Julia ${{ matrix.julia-version }} / ${{ matrix.os }}`
-    # a pin bump renamed the check, and a renamed check does not report at all -- it
-    # does not fail, it is simply absent, and an absent required check can never be
-    # satisfied. Every pull request would have deadlocked until an admin bypassed the
-    # rule, triggered by nothing more alarming than editing a version number.
+    # A branch ruleset matches a required status check by the DISPLAY NAME GitHub posts
+    # for the job. A renamed check does not fail -- it is simply absent, and an absent
+    # required check can never be satisfied, so every pull request deadlocks until an
+    # admin bypasses the rule, triggered by nothing more alarming than editing a version
+    # number.
     #
-    # The versions have not been hidden, only moved somewhere that does not double as
-    # an identifier: `strategy.matrix` below, and the `Set up Julia` step's own log.
-    # `test/unit/test_install_pins.jl` asserts that no job name in this file
-    # interpolates anything, so this cannot regress silently.
+    # MEASURED on PR #39 (2026-09-21): this job, named exactly `Julia tests` but still
+    # carrying a 1x1 `strategy.matrix`, posted `Julia tests (1.12.5, ubuntu-24.04)`.
+    # GitHub appends the matrix combination whenever the name does not already reference
+    # the matrix, so a 1x1 matrix is still a matrix and the pins were still embedded in
+    # the check name. The matrix was therefore removed rather than merely renamed around:
+    # it selected exactly one combination and bought nothing.
+    #
+    # The two values it held are literals below, each keeping its own reasoning.
+    # `test/unit/test_install_pins.jl` asserts, for EVERY job in this file, that the name
+    # interpolates nothing AND that the job has no matrix -- so this cannot regress
+    # silently. If a matrix is ever genuinely wanted here, the required context must move
+    # to a matrix-free aggregator job first.
     name: Julia tests
-    runs-on: ${{ matrix.os }}
+    # Explicit, not ubuntu-latest: the R pin below names an apt package revision built
+    # for 24.04, and a runner that silently rolled to the next LTS would take that pin
+    # with it. `runs-on` cannot read `env`, so this is a literal.
+    runs-on: ubuntu-24.04
     # The repository's root .Rprofile sources renv/activate.R, so R started from
     # the checkout auto-activates renv and rewrites the library paths. renv is a
     # local-development convenience; CI installs into the system library and
@@ -41,19 +53,6 @@ jobs:
     # the environment, so those commands pass --no-init-file instead.
     env:
       RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
-    strategy:
-      fail-fast: false
-      matrix:
-        # Pinned rather than tracking latest stable, because a pinned Manifest.toml
-        # resolved by an unpinned Julia is not a reproducible build. This must equal
-        # julia_version in Manifest.toml; it cannot be read from the pin file, since
-        # nothing can be read before Julia exists. test/unit/test_install_pins.jl
-        # fails if the three ever disagree.
-        julia-version: ["1.12.5"]
-        # Explicit, not ubuntu-latest: the R pin below names an apt package revision
-        # built for 24.04, and a runner that silently rolled to the next LTS would
-        # take that pin with it.
-        os: [ubuntu-24.04]
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -61,7 +60,12 @@ jobs:
       - name: Set up Julia
         uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9  # v2.7.0
         with:
-          version: ${{ matrix.julia-version }}
+          # Pinned rather than tracking latest stable, because a pinned Manifest.toml
+          # resolved by an unpinned Julia is not a reproducible build. This must equal
+          # julia_version in Manifest.toml; it cannot be read from the pin file, since
+          # nothing can be read before Julia exists. test/unit/test_install_pins.jl
+          # fails if the three ever disagree.
+          version: "1.12.5"
 
       - name: Cache Julia packages
         uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9  # v2.1.0
