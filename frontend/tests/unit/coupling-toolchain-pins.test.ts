@@ -10,7 +10,11 @@
 //                          consumed by CI via bun-version-file
 //     config/defaults/tool_versions.yml — upstream pipeline-pin SOT holding
 //                          overlapping julia/bun copies
-//     .github/workflows/ci.yml — hardcoded julia matrix entry
+//     .github/workflows/ci.yml — hardcoded julia version on the setup-julia
+//                          step. It was a 1x1 `strategy.matrix` until 2026-09-21;
+//                          the matrix was removed because GitHub appends the
+//                          matrix combination to the posted check name, which
+//                          renamed the required status check on every bump.
 //   A bump in any one copy without the others is silent CI/local divergence;
 //   this test makes it a build-time failure instead.
 import { describe, test, expect } from 'bun:test'
@@ -40,10 +44,14 @@ describe('coupling/drift: toolchain pins agree across all copies', () => {
     expect(toolVersionsPin('bun')).toBe(pin)
   })
 
-  test('julia: mise.toml == tool_versions.yml == CI matrix', () => {
+  test('julia: mise.toml == tool_versions.yml == CI setup-julia step', () => {
     const pin = misePin('julia')
     expect(toolVersionsPin('julia')).toBe(pin)
-    const ci = read('.github/workflows/ci.yml').match(/julia-version:\s*\["([^"]+)"\]/)
+    // Anchored on the action rather than on a bare `version:` key, so this
+    // cannot silently latch onto some other step's version and pass for the
+    // wrong reason. A missing anchor yields undefined, which fails loudly.
+    const ci = read('.github/workflows/ci.yml')
+      .match(/julia-actions\/setup-julia@[0-9a-f]{40}[\s\S]*?version:\s*"([^"]+)"/)
     expect(ci?.[1]).toBe(pin)
   })
 
