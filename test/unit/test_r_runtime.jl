@@ -94,4 +94,80 @@ const RR = MetaManifold.RRuntime
         @test fetch(holder) == :done
     end
 
+    ## A test that never ran must not compare equal to one that ran and found
+    # nothing. Both used to be `(nothing, 0-row DataFrame)`, so this assertion
+    # could not be written at all.
+    @testset "a test that did not run is not a null result" begin
+        AN = MetaManifold.Analysis
+        not_run = AN._not_computed(:r_unavailable, "R/vegan is not available")
+        @test !AN.was_computed(not_run)
+        @test isnothing(not_run.omnibus)
+        @test nrow(not_run.pairwise) == 0
+        @test !isempty(not_run.reason)
+
+        genuine_null = AN._computed(0.87, AN._empty_pairwise())
+        @test AN.was_computed(genuine_null)
+        @test not_run.status !== genuine_null.status
+        @test not_run != genuine_null
+
+        # R's own tryCatch yields NA for a degenerate group: a failed test keeps
+        # the pairwise rows it got but never claims an omnibus result.
+        failed = AN._not_computed(:test_failed, "the omnibus statistic could not be computed";
+                                  pairwise=AN._empty_pairwise())
+        @test !AN.was_computed(failed)
+        @test isnothing(failed.omnibus)
+    end
+
+    ## The surface must say the test was not run.
+    # Drawing nothing is how "no pair reached significance" looks. A run that was
+    # never performed must therefore add something to the chart, not stay silent
+    # and borrow that appearance.
+    @testset "a chart states that pairwise tests were not run" begin
+        AN = MetaManifold.Analysis
+        groups = ["a", "b"]
+        vals   = Dict("a" => [1.0, 2.0, 3.0], "b" => [4.0, 5.0, 6.0])
+
+        not_run = AN._not_computed(:r_unavailable, "R/vegan is not available")
+        layout_not_run = Dict{String,Any}()
+        AN._add_pairwise_annotations!(layout_not_run, "x", "y", "yaxis",
+                                      groups, vals, not_run)
+        notices = [a for a in get(layout_not_run, "annotations", Any[])
+                   if occursin("not run", String(a["text"]))]
+        @test length(notices) == 1
+        @test occursin("R/vegan", String(notices[1]["text"]))
+
+        ## The positive control that makes the assertion above mean something.
+        # A genuine result in which no pair reached significance must NOT gain the
+        # notice, or the notice would be noise rather than a signal.
+        genuine_null = AN._computed(0.87, AN._empty_pairwise())
+        layout_null = Dict{String,Any}()
+        AN._add_pairwise_annotations!(layout_null, "x", "y", "yaxis",
+                                      groups, vals, genuine_null)
+        @test isempty([a for a in get(layout_null, "annotations", Any[])
+                       if occursin("not run", String(a["text"]))])
+    end
+
+    ## Each reason gets its own wording, because they call for different actions:
+    # an absent runtime is a deployment fault, unpairable groups are a property
+    # of the data, and a failed statistic is a property of these groups.
+    @testset "the caption distinguishes the reasons a test did not run" begin
+        AN = MetaManifold.Analysis
+        failed  = AN._not_computed(:test_failed, "the omnibus statistic could not be computed")
+        absent  = AN._not_computed(:r_unavailable, "R/vegan is not available")
+        unpaired = AN._not_computed(:no_paired_samples, "the groups share no sample IDs")
+
+        for r in (failed, absent, unpaired)
+            @test occursin("not run", AN._significance_caption(r, "KW"))
+            @test !occursin("n/a", AN._significance_caption(r, "KW"))
+        end
+        @test AN._significance_caption(failed, "KW") != AN._significance_caption(absent, "KW")
+        @test AN._significance_caption(absent, "KW") != AN._significance_caption(unpaired, "KW")
+
+        # A computed result still reads as a result.
+        computed = AN._computed(0.02, AN._empty_pairwise())
+        caption  = AN._significance_caption(computed, "KW")
+        @test occursin("p = 0.02", caption)
+        @test !occursin("not run", caption)
+    end
+
 end
