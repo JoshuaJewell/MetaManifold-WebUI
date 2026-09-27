@@ -1,3 +1,7 @@
+<!--
+SPDX-License-Identifier: CC-BY-SA-4.0
+-->
+
 # Baton handoff — MetaManifold-WebUI issue #1, formal verification
 
 Paste everything below the line to the next agent.

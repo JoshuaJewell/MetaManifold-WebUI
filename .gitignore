@@ -276,6 +276,11 @@ docs/*
 !docs/formal/**
 !docs/triage/
 !docs/triage/**
+# The run-notice model and its catalogue: the notice ids are a maintained
+# contract between the backend, the manifest and the UI, and they are
+# drift-tested against src/, so they are repository state, not local notes.
+!docs/notices/
+!docs/notices/**
 # …but the generated PR-#7 stack patches are derived artefacts: regenerate
 # with docs/triage/pr7-split/make-stacks.sh instead of committing them.
 docs/triage/pr7-split/patches/*.patch

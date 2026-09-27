@@ -1,3 +1,7 @@
+<!--
+SPDX-License-Identifier: CC-BY-SA-4.0
+-->
+
 # Proof status
 
 Formal verification of the validated Julia statistics layer (issue #1), in **Agda
