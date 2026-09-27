@@ -15,19 +15,8 @@ const KYAML_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 
 include(KYAML_TOOL_PATH)
 
+using YAML
 using .KYAML: parse_document, render_kyaml, render_yaml, check, git_yaml_paths, KyamlError
-
-function kyaml_exempt_prefixes()::Vector{String}
-    drift = joinpath(KYAML_REPO_ROOT, "config", "kyaml", "drift.txt")
-    isfile(drift) || return String[]
-    prefixes = String[]
-    for line in eachline(drift)
-        t = strip(line)
-        (isempty(t) || startswith(t, "#")) && continue
-        push!(prefixes, t)
-    end
-    return prefixes
-end
 
 @testset "KYAML switch" begin
 
@@ -131,19 +120,61 @@ end
         end
     end
 
-    @testset "the repository's own YAML is inside the subset" begin
-        exempt = kyaml_exempt_prefixes()
+    @testset "drift exemptions affect the gate, not conversion or rollback" begin
+        mktempdir() do dir
+            rel = ".github/workflows/ci.yml"
+            path = joinpath(dir, rel)
+            mkpath(dirname(path))
+            source = "# retained workflow comment\nname: \"CI\"\n"
+            write(path, source)
+            drift = joinpath(dir, "drift.txt")
+            write(drift, rel * "\n")
+
+            cd(dir) do
+                @test _kyaml_cli(["--to-kyaml", "--skip-file", drift, rel]) == 0
+                kyaml = read(path, String)
+                @test kyaml != source
+                @test kyaml == render_kyaml(parse_document(rel, source))
+                @test _kyaml_cli(["--check", "--skip-file", drift, rel]) == 0
+                @test _kyaml_cli(["--to-yaml", "--skip-file", drift, rel]) == 0
+                restored = read(path, String)
+                @test restored != kyaml
+                @test restored == render_yaml(parse_document(rel, kyaml))
+            end
+        end
+    end
+
+    @testset "tracked YAML parses; application files preserve YAML.jl semantics" begin
+        # Drift exemptions govern the canonicality gate only. They are still parsed
+        # here because conversion and rollback must cover every tracked YAML file.
+        # Compare with the production YAML.jl reader, not only this tool's own parser:
+        # a self-round-trip cannot prove that the application or CI sees the same data.
         failures = String[]
         for rel in git_yaml_paths(KYAML_REPO_ROOT)
-            any(prefix -> startswith(rel, prefix), exempt) && continue
             path = joinpath(KYAML_REPO_ROOT, rel)
             isfile(path) || continue
             try
-                doc = parse_document(path, read(path, String))
-                render_kyaml(doc)
-                render_yaml(doc)
+                source = read(path, String)
+                doc = parse_document(path, source)
+                kyaml = render_kyaml(doc)
+                yaml = render_yaml(doc)
+                mktempdir() do dir
+                    original_path = joinpath(dir, "original.yml")
+                    kyaml_path = joinpath(dir, "converted.kyaml")
+                    yaml_path = joinpath(dir, "roundtrip.yml")
+                    write(original_path, source)
+                    write(kyaml_path, kyaml)
+                    write(yaml_path, yaml)
+                    # GitHub Actions is the consumer of workflow files; its actual
+                    # parser/run is tested by CI, not approximated with YAML.jl.
+                    # Compare all application-consumed YAML with the production reader.
+                    if !startswith(rel, ".github/workflows/")
+                        original_value = YAML.load_file(original_path)
+                        @test YAML.load_file(kyaml_path) == original_value
+                        @test YAML.load_file(yaml_path) == original_value
+                    end
+                end
             catch err
-                err isa KyamlError || rethrow()
                 push!(failures, rel * " -> " * sprint(showerror, err))
             end
         end

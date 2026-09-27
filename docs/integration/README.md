@@ -16,6 +16,11 @@ empty and a normal merge surfaces all 159 shared‑but‑different files at once
 Nothing in this guide changes upstream's operational behaviour unless you choose
 it to; the default is "behave exactly like upstream".
 
+For the separate KYAML authoring-format pilot, see the [upstream architecture and
+transition audit](./kyaml-upstream-adoption.md). It identifies the runtime config readers,
+user-editable YAML writers, GitHub Actions boundary, and the evidence required before
+changing any tracked files.
+
 ## The idea, in layers
 
 0. **Re‑anchor** — replay the fork's commits one‑by‑one onto upstream so git

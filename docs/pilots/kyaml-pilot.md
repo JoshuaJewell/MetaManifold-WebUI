@@ -9,7 +9,9 @@ use-kyaml` / `just use-yaml`, and the escape hatch is one `git revert`.
 
 Authority: `hyperpolymath/standards`, `3-practice/YAML-POLICY.adoc` (rules Y-1, Y-2, Y-3,
 adoption order §5). This document is the operating manual for the pilot; the policy stays
-the authority, and where the two disagree the policy wins and this file is wrong.
+the authority, and where the two disagree the policy wins and this file is wrong. The
+upstream application touchpoints and the low-risk adoption sequence are mapped in
+[`docs/integration/kyaml-upstream-adoption.md`](../integration/kyaml-upstream-adoption.md).
 
 ## 1. Why this is worth doing, in one paragraph
 
@@ -80,7 +82,7 @@ Refused, by name and line number, leaving the file untouched:
 | Multi-line plain scalars | Folded into one line by YAML rules, so the source bytes are not recoverable. |
 | An end-of-line comment on a block scalar | The scalar owns the rest of the line; there is nowhere lossless to put the comment. |
 
-This repository's corpus needs none of those: a census of the 16 tracked YAML files found
+This repository's corpus needs none of those: a census of the 17 tracked YAML files found
 **zero** anchors, aliases, tags, multi-document streams or directives; block scalars in two
 files (`ci.yml`, 22 of them; `.github/ISSUE_TEMPLATE/bug_report.yml`, 2); 12 `~` nulls; and
 comment-bearing lines concentrated in `ci.yml` (313), `config/defaults/pipeline.yml` (97) and

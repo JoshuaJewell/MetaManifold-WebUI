@@ -1234,7 +1234,7 @@ function _kyaml_cli(argv::Vector{String})::Int
 
             Options:
               --report              print the decisions taken per file
-              --skip-file PATH      file listing paths to leave alone (default config/kyaml/drift.txt)
+              --skip-file PATH      --check-only exemptions (default config/kyaml/drift.txt)
               --expect kyaml|yaml   style --check compares against (default kyaml)
 
             Exit codes: 0 ok, 1 a check failed, 2 a file was refused (nothing was written).
@@ -1256,10 +1256,18 @@ function _kyaml_cli(argv::Vector{String})::Int
         end
     end
     isempty(paths) && (paths = KYAML.git_yaml_paths())
-    kept = [p for p in paths if !any(s -> startswith(p, s), skip)]
+    # Drift exemptions are a gate policy, not a migration boundary. Bot-owned
+    # workflows are still converted (and can be rolled back); only --check omits
+    # them, so an external formatter cannot make the canonicality gate flap.
+    skipped = String[]
+    kept = paths
+    if mode == "check"
+        skipped = [p for p in paths if any(s -> startswith(p, s), skip)]
+        kept = [p for p in paths if !any(s -> startswith(p, s), skip)]
+    end
 
     failures = String[]
-    reports = Dict{String,Stats}()
+    reports = Dict{String,KYAML.Stats}()
     rendered = Dict{String,String}()
     for p in kept
         stats = KYAML.Stats()
@@ -1285,7 +1293,7 @@ function _kyaml_cli(argv::Vector{String})::Int
     if mode == "check"
         if isempty(failures)
             println("kyaml check: $(length(kept)) file(s) in canonical $expect form" *
-                    (isempty(skip) ? "" : ", $(length(skip)) exempt"))
+                    (isempty(skipped) ? "" : ", $(length(skipped)) exempt"))
             return 0
         end
         println(stderr, "kyaml check: $(length(failures)) file(s) are not canonical $expect:")
@@ -1302,7 +1310,7 @@ function _kyaml_cli(argv::Vector{String})::Int
         written += 1
     end
     println("kyaml $mode: $(written) of $(length(kept)) file(s) rewritten" *
-            (isempty(skip) ? "" : ", $(length(skip)) exempt"))
+            (isempty(skipped) ? "" : ", $(length(skipped)) exempt"))
     if report
         for p in sort(collect(keys(reports)))
             s = reports[p]

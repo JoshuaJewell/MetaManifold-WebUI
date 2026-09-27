@@ -2,16 +2,18 @@
 # SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
 #
 # Files that `just check-kyaml` does NOT require to be canonical KYAML, because a
-# tool that is not this repository writes them. One path prefix per line; `#`
-# starts a comment. Every entry needs a reason and an owner, and the list is
-# reviewed with docs/pilots/kyaml-pilot.md — an exemption without a reason is drift.
+# tool that is not this repository writes them. This is a check-only exemption:
+# `use-kyaml` and `use-yaml` still convert and roll these files back. One path
+# prefix per line; `#` starts a comment. Every entry needs a reason and an owner,
+# and the list is reviewed with docs/pilots/kyaml-pilot.md — an exemption without
+# a reason is drift.
 #
 # Owner ruling, 2026-09-26: the drift is ACCEPTED IN WRITING (standards
 # YAML-POLICY.adoc §5 step 6 requires either KYAML-emitting bots or an explicit
-# written acceptance). The files below ARE converted to KYAML — they are simply
-# not gated, because Dependabot and `gh actions-lock` rewrite their `uses:` pins
-# in block style, and a gate that goes red on a bot's schedule trains everyone to
-# ignore it. Reconcile after a bot PR with: just use-kyaml
+# written acceptance). These paths remain in the conversion scope, but are not
+# gated: Dependabot and `gh actions-lock` rewrite their `uses:` pins in block
+# style, and a gate that goes red on a bot's schedule trains everyone to ignore
+# it. Reconcile after a bot PR with: just use-kyaml
 #
 # .github/workflows/ci.yml      Dependabot + gh actions-lock rewrite `uses:` pins
 # .github/workflows/ui.yml      same
