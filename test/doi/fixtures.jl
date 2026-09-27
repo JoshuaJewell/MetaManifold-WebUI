@@ -31,7 +31,7 @@ function bundle_fixture(root; result=false, mock=false, dangerous=false)
             "method" => "nb_glm", "provenance" => Dict("mock" => mock),
             "results" => Dict("synthetic_fixture" => Dict("status" => "fixture")))))
     end
-    B.write_checksums!(dir)
+    Target.DOIBundles.write_checksums!(dir)
     return dir
 end
 
@@ -102,13 +102,13 @@ function prepared_fixture(f; result=false, dangerous=false, environment="sandbox
         root = joinpath(tmp, "publications")
         fake = FakeZenodo(; environment)
         c = client(fake)
-        prepared = P.prepare!(root, source, metadata_fixture(), c)
+        prepared = Target.DOIPublications.prepare!(root, source, metadata_fixture(), c)
         f(tmp, root, source, fake, c, prepared)
     end
 end
 
 function publish_fixture(root, prepared, c)
-    P.publish!(root, prepared["id"], c; confirmation=prepared["confirmation_phrase"],
+    Target.DOIPublications.publish!(root, prepared["id"], c; confirmation=prepared["confirmation_phrase"],
         bundle_sha256=prepared["bundle_sha256"], acknowledge_public=true)
 end
 

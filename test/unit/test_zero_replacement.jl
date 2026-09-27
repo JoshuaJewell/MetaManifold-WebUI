@@ -212,7 +212,7 @@ vector(vals)::Vector{Float64} = Float64[Float64(v) for v in vals]
                 write.table(r, stdout(), sep = ",", row.names = FALSE, col.names = FALSE)
                 """
                 r_out = read(`$rscript -e $script`, String)
-                rows = [Float64.(parse.(Float64, split(l, ","))) for l in
+                rows = [parse.(Float64, split(l, ",")) for l in
                         split(strip(r_out), "\n") if !isempty(strip(l))]
                 reference = permutedims(Matrix{Float64}(hcat(rows...)), (1, 1))
                 ours = multiplicative_replacement(counts; delta = Float64(mr.delta))
