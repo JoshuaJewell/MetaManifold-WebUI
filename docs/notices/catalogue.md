@@ -54,21 +54,21 @@ something the reader will not expect.
 
 | id | cat | sev | usable / blocks | banner | summary | action | site · audit |
 |---|---|---|---|---|---|---|---|
-| `exec.heal.nan_inf` | R | danger | **no / yes** | yes | `{nan_count} NaN and {inf_count} Inf in the prepared table were replaced with {rule}.` | Choose `drop_policy = refuse`, or re-run with a transform that does not produce them. | `Execution.jl:600, 1305` · §N1, §N2 |
+| `exec.heal.nan_inf` | R | danger | **no / yes** | yes | `{nan_count} NaN and {inf_count} Inf in the prepared table were replaced with {rule}.` | Choose `drop_policy = refuse`, or re-run with a transform that does not produce them. | `Execution.jl:600, 1320` · §N1, §N2 |
 | `exec.heal.nan_inf.value_scale_mixed` | R | danger | **no / yes** | yes | `Healing replaced NaN with {epsilon} but ±Inf with log(1/{epsilon}); those are different scales for one table.` | Pick one scale and record it. | `Execution.jl:600-616` · §N1 |
 | `exec.heal.all_zero_samples_dropped` | Q | warning | yes / no | yes | `{n} samples with no reads at all were dropped before the transform.` | Re-run; their relative abundances do not exist. | `Execution.jl:654` · §N2 |
 | `exec.heal.all_zero_samples_imputed` | M | warning | yes / no | yes | `{n} samples with no reads at all were imputed with {epsilon} before the transform.` | Prefer `drop`; imputation invents a uniform distribution. | `Execution.jl:654` · §N2 |
-| `exec.heal.all_zero_taxa_dropped` | Q | warning | yes / no | yes | `{n} all-zero taxa were dropped after the transform.` | Note that balances and CLR centres were computed with them present. | `Execution.jl:675, 1320` · §N2 |
+| `exec.heal.all_zero_taxa_dropped` | Q | warning | yes / no | yes | `{n} all-zero taxa were dropped after the transform.` | Note that balances and CLR centres were computed with them present. | `Execution.jl:675, 1335` · §N2 |
 | `exec.heal.all_zero_taxa_imputed` | M | warning | yes / no | yes | `{n} all-zero taxa were imputed with {epsilon}.` | Prefer `drop`. | `Execution.jl:675` · §N2 |
 | `exec.heal.positions_unrecorded` | R | warning | yes / no | yes | `{n} values were rewritten but only the count was recorded, so healed cells cannot be told from measured ones.` | Re-run once positions are recorded. | `Execution.jl:706` · §N2 |
 | `exec.diag.zero_variance` | Q | warning | yes / no | no | `{n_taxa} taxa and {n_samples} samples have zero variance; singularities are likely in LM/GLM.` | Inspect them. | `Execution.jl:556` |
 | `exec.diag.library_size_outliers` | Q | warning | yes / no | no | `{n} samples are more than 3 sd from the mean library size.` | Check for contamination or a failed run. | `Execution.jl:563` |
 | `exec.diag.low_prevalence_abundance` | Q | warning | yes / no | no | `{n_prev} taxa below min_prevalence and {n_abund} below min_abundance were filtered.` | Relax the thresholds if the biology is rare. | `Execution.jl:568` |
-| `exec.diag.batch_confounding_not_implemented` | T | warning | yes / no | no | **Batch confounding was not checked; this check is not implemented.** | Treat confounding as unknown. | `Execution.jl:500` · §N3 |
+| `exec.diag.batch_confounding_not_implemented` | T | warning | yes / no | no | **Batch confounding was not checked; this check is not implemented.** | Treat confounding as unknown. | `Execution.jl:504` · §N3 |
 | `exec.filter.max_features` | M | warning | yes / no | yes | `Filtered to the {n} most abundant taxa; the rest were not tested.` | Raise `max_features`. | `Execution.jl:870` |
 | `exec.epistemic.no_avec_fibre` | Q | warning | yes / no | yes | `No taxon has avec_fibre = true, so epistemic filtering would remove everything; nothing was filtered.` | Check the taxon metadata. | `Execution.jl:883` |
-| `exec.rarefy_is_scaling` | M | danger | yes / no | yes | `normalization.method = 'rarefy' scaled each sample by min_lib/lib; it did not subsample reads.` | Use the pipeline's `rarefy` (real subsampling) or a depth offset. | `Execution.jl:1225-1234` · §N4 |
-| `exec.estimation_not_run` | R | danger | **no / yes** | yes | `No statistics were produced: {reason}.` | Fix the cause named in the reason and re-run. | `Execution.jl:1641-1658` · §W1 |
+| `exec.rarefy_is_scaling` | M | danger | yes / no | yes | `normalization.method = 'rarefy' scaled each sample by min_lib/lib; it did not subsample reads.` | Use the pipeline's `rarefy` (real subsampling) or a depth offset. | `Execution.jl:1228-1237` · §N4 |
+| `exec.estimation_not_run` | R | danger | **no / yes** | yes | `No statistics were produced: {reason}.` | Fix the cause named in the reason and re-run. | `Execution.jl:1657-1685` · §W1 |
 | `exec.memory.allocation_churn` | T | notice | yes / no | no | `Preparation allocated {bytes} across {phases} phases.` | None; recorded for provenance. | new · §M1–M4 |
 | `exec.memory.peak_rss` | T | notice | yes / no | no | `Peak process memory grew by {bytes} during preparation.` | None; recorded for provenance. | new · §M2, §M5 |
 
@@ -99,11 +99,14 @@ something the reader will not expect.
 
 | id | cat | sev | usable / blocks | banner | summary | action | site · audit |
 |---|---|---|---|---|---|---|---|
-| `estimation.not_run` | R | danger | **no / yes** | yes | `No model was fitted: {reason}.` | Fix the cause named in the reason. | `estimation.jl:263, 488` |
-| `estimation.feature_failed` | M | notice | yes / no | no | `{n} of {total} features produced no fit; each row says why and is excluded from the BH family.` | None, unless the rate is high. | `estimation.jl:~530` |
-| `estimation.feature_boundary` | M | warning | yes / no | yes | `{n} features are at a boundary ({reasons}); their standard errors are not trustworthy.` | Do not interpret those rows. | `estimation.jl:786-799` |
-| `estimation.dispersion_refused` | F | fatal | **no / yes** | yes | `dispersion_method '{method}' has no implementation here: {reason}.` | Use `parametric`. | `estimation.jl:70-75` |
+| `estimation.not_run` | R | danger | **no / yes** | yes | `No model was fitted: {reason}.` | Fix the cause named in the reason. | `estimation.jl:276, 549` |
+| `estimation.feature_failed` | M | notice | yes / no | no | `{n} of {total} features produced no fit; each row says why and is excluded from the BH family.` | None, unless the rate is high. | `estimation.jl:591` |
+| `estimation.feature_boundary` | M | warning | yes / no | yes | `{n} features are at a boundary ({reasons}); their standard errors are not trustworthy.` | Do not interpret those rows. | `estimation.jl:979-995` |
+| `estimation.dispersion_refused` | F | fatal | **no / yes** | yes | `dispersion_method '{method}' has no implementation here: {reason}.` | Use `parametric` or `glmgampoi`; `local`, `mean` and `pooled` are refused by name. | `estimation.jl:71-79` |
 | `estimation.exclusion_rate_high` | R | danger | yes / yes | yes | `{pct}% of features produced no fit; that is a finding about the data, not a detail.` | Investigate before publishing. | new |
+| `estimation.dispersion_glmgampoi_port` | M | warning | yes / no | yes | `The dispersion estimate came from this repository's pure-Julia port of glmGamPoi, not from R's glmGamPoi (two-pass fit: per-feature NB means, then a refit at fixed dispersion).` | Read `docs/statistics/method-conditions/dispersion-glmGamPoi.md` before citing it as glmGamPoi. | `estimation.jl:85`, `src/analysis/dispersion.jl` |
+| `estimation.dispersion_spline_refused` | F | fatal | **no / yes** | yes | `glmGamPoi with {n} features (>= {threshold}) needs the spline abundance trend, which the port does not implement.` | Set `advanced.glmgampoi_abundance_trend` to the non-trended prior, or use `parametric`. | `src/analysis/dispersion.jl:68`, `estimation.jl:83` |
+| `estimation.dispersion_pass1_fallback` | Q | warning | yes / no | no | `{n} feature(s) had no pass-1 fit and entered the dispersion estimate with their mean over samples; they fail again in pass 2 with their own reason.` | Inspect those features. | `estimation.jl:508` |
 
 ## `r.*` — the embedded R runtime
 
@@ -113,8 +116,8 @@ something the reader will not expect.
 | `r.package_missing` | D | error | **no / yes** | yes | `R is reachable but {packages} are not installed.` | Restore the renv library. | `provenance.jl:358` · §B4 |
 | `r.package_not_probed` | D | warning | yes / no | no | `{package} is required by the estimator but is not in the probed package list, so provenance cannot see it missing.` | Add it to `R_PACKAGES`. | `provenance.jl:303` · §B4 |
 | `r.runtime_busy` | D | warning | **no / yes** | yes | `The R runtime was busy for {waited}s (a pipeline run holds it); nothing was computed.` | Retry when the pipeline has finished. | `analysis.jl:617` · §B3 |
-| `r.state_leaked` | D | warning | yes / no | no | `R objects from a failed fit remain in the global environment for the life of the process.` | None at runtime; fixed by cleaning up in `finally`. | `estimation.jl:478` · §B2 |
-| `r.warning_uncollected` | T | notice | yes / no | no | `R emitted {n} warning(s) outside the per-feature handler; they are in the process log only.` | Grep the log by `run_id`. | `estimation.jl:741` · §B5 |
+| `r.state_leaked` | D | warning | yes / no | no | `R objects from a failed fit remain in the global environment for the life of the process.` | None at runtime; fixed by cleaning up in `finally`. | `estimation.jl:535` · §B2 |
+| `r.warning_uncollected` | T | notice | yes / no | no | `R emitted {n} warning(s) outside the per-feature handler; they are in the process log only.` | Grep the log by `run_id`. | `estimation.jl:942` · §B5 |
 | `r.adapter_packages_unpinned` | D | warning | yes / no | no | `The adapter records r_packages {packages}, which renv.lock does not pin; nothing verified them.` | Record what is actually loaded. | `Execution.jl:133` · §B4 |
 
 ## `ord.*` / `analysis.*` — ordination, diversity, charts

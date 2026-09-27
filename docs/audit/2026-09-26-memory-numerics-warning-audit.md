@@ -12,6 +12,48 @@ Appendix A so each number can be re-derived.
 **Revision audited:** `main` @ `4a848da` (branch `arena/01a0de46-metamanifold-webui`,
 clean tree at audit time).
 
+## Revision note — 2026-09-27, after this audit landed
+
+This document was written against `main` @ `4a848da`. `main` has since been
+rewritten to a **new root** (`4c2c79e`, PR #83) that shares no history with
+`4a848da` — `git merge-base` returns nothing — and the audited code moved with
+it. On 2026-09-27 every finding was re-checked against `4c2c79e`:
+
+| file | state | effect on citations |
+|---|---|---|
+| `src/analysis/ilr_basis.jl` | byte-identical | none |
+| `src/analysis/analysis.jl` | byte-identical | none |
+| `src/core/provenance.jl` | byte-identical | none |
+| `bench/ilr_bases/benchmark.jl` | byte-identical | none |
+| `src/analysis/Execution.jl` | +125 / −60 | every citation re-located |
+| `src/analysis/estimation.jl` | +231 / −29 | every citation re-located |
+
+**All 21 findings still reproduce.** The four headline ones were re-verified by
+reading the new code, not by trusting the old line numbers: M3 (`clr_table` is
+still written at 1164 and read only for its dimensions at 1167, 1182, 1183), M4
+(`copy(counts)` at 840, two composable row slices at 858 and 868,
+`counts_after_zero = copy(filtered_counts)` at 989, `prepared =
+copy(counts_after_zero)` at 1062), N1 (`heal_nan_inf` still writes `epsilon` at
+603 and `log(1/epsilon)` at 608), and W1 (`is_dangerous =
+diagnostics.is_dangerous` at 1682, still copied from the pre-estimation
+diagnostics).
+
+Two things landed after the audit that bear on it:
+
+1. **`glmGamPoi` dispersion is now implemented** (issue #21), as a pure-Julia
+   port in `src/analysis/dispersion.jl` (1 163 lines) driven by a two-pass fit.
+   `SUPPORTED_DISPERSION = ("parametric", "glmgampoi")`; only `local`, `mean`
+   and `pooled` remain refused. The catalogue entry
+   `estimation.dispersion_refused` was written when all four were refused and
+   has been corrected; three entries have been added for the port, its
+   unported spline trend, and its pass-1 fallback.
+2. **There are now two pure-Julia kernels, not one** (`dispersion.jl`,
+   `zero_replacement.jl`). This strengthens the answer to question 10 without
+   changing the gate: both still need what `ILRBasis` already has — a published
+   conditions document, an independent oracle, and a stated parity tolerance —
+   before any accelerated backend is contemplated. CI still has no recorded
+   verdict on any of them (B1).
+
 ## What I could and could not run
 
 | | |
@@ -78,7 +120,7 @@ check ran and found nothing".
 Two rules fall out of the table and both are violated today:
 
 - **A check that did not run is `technical_resource`, not `data_quality`.**
-  `check_batch_confounding` (Execution.jl:500-518) always returns
+  `check_batch_confounding` (Execution.jl:504-522) always returns
   `has_batch_confounding => false`; that is `technical_resource` ("this check is
   a stub") and must never render as "no confounding detected" (**N3**).
 - **A result with no statistics is `result_safety`, and it blocks export even
@@ -97,7 +139,7 @@ boundary).
 
 ### M1 — The default Helmert ILR basis is O(D²·n) in allocation, and the O(D·n) replacement is already in the tree `severity: notice · category: technical_resource`
 
-`Execution.jl:1188` — `mean_first_i = mean(log_col[1:i])` inside
+`Execution.jl:1191` — `mean_first_i = mean(log_col[1:i])` inside
 `for i in 1:(n_taxa-1)`, inside `for j in 1:size(clr_table, 2)`.
 
 `log_col[1:i]` is a fresh `Vector{Float64}` of length `i`, allocated and summed
@@ -110,7 +152,7 @@ transform allocates **4·n·D·(D−1) bytes**:
 | 1 500 × 40 (the regression-gate workload) | 360 MB |
 | 10 000 × 20 (the benchmark's largest size) | **8.0 GB** |
 
-The comment at `Execution.jl:1175-1177` says the default loop is "left exactly
+The comment at `Execution.jl:1178-1180` says the default loop is "left exactly
 as it was so that no default-basis result moves", which was the right call for
 the PR that changed everything around it. But the engine it is protecting
 against drift from is in the same repository, is pure Julia, and is already
@@ -160,7 +202,7 @@ one-constant change and is the safer first step.
 
 ### M3 — The ILR branch builds a D×n CLR table and never reads a single value from it `severity: notice · category: technical_resource`
 
-`Execution.jl:1154-1180`:
+`Execution.jl:1157-1183`:
 
 ```
 clr_table = similar(counts_after_zero)   # 1154  — D×n Float64
@@ -191,8 +233,8 @@ refusal behaviour, one fewer `D×n` matrix.
 | 840 | `filtered_counts = copy(counts)` | **no** — only read to compute prevalence/abundance, then replaced at 858 |
 | 858 | `filtered_counts = filtered_counts[keep_taxa, :]` | yes |
 | 868 | `filtered_counts = filtered_counts[top_indices, :]` | yes, but composable with 858 into one slice |
-| 1059 | `prepared = copy(counts_after_zero)` | only for `clr` (writes in place at 1147) and `rarefy` (1233); every other branch reassigns `prepared` before reading it |
-| 1161 | `clr_table` (see M3) | no |
+| 1062 | `prepared = copy(counts_after_zero)` | only for `clr` (writes in place at 1150) and `rarefy` (1236); every other branch reassigns `prepared` before reading it |
+| 1164 | `clr_table` (see M3) | no |
 
 For a 20 000-taxon input filtered to 10 000 taxa over 200 samples the peak drops
 from ~107 MiB to ~76 MiB by removing the dead copy, the composable slice and
@@ -313,7 +355,7 @@ a linear scale. Both branches run on the same table. Consequences:
   proportions table.
 
 Two arbitrary sentinel values, chosen by an inconsistency, written into the
-table that is then fitted. The counts are recorded (`Execution.jl:1306`) but not the values, so nothing downstream can tell.
+table that is then fitted. The counts are recorded (`Execution.jl:1321`) but not the values, so nothing downstream can tell.
 
 **Change (low risk, and a decision the owner should make explicitly):** pick the
 rule per transform scale and record it. The honest options are (a) refuse
@@ -333,7 +375,7 @@ Question 7, answered: **self-healing changes data, not metadata.**
 | … with `DROP` | removes rows/columns, so the result table has a different shape **and** the surviving taxa/samples are renumbered |
 
 All three are recorded — `diagnostics.healings`, and again in
-`provenance["diagnostics"]["healings"]` (`Execution.jl:1676-1679`). What is
+`provenance["diagnostics"]["healings"]` (`Execution.jl:1703-1706`). What is
 recorded is a **sentence with a count**:
 `"Healed 3 NaN and 0 Inf with epsilon=1e-6"`. There is no record of *which*
 cells, so a healed value is indistinguishable from a measured one in the result
@@ -342,12 +384,12 @@ table, and two runs with the same input and the same count can differ.
 **Change (low risk, additive):** alongside each healing entry, record a compact
 fingerprint of what changed — the affected `(row, col)` positions when they are
 few, otherwise a count plus a SHA-256 of the position bitmap. The prepared-table
-hash (`Execution.jl:740`) already exists as a precedent for fingerprinting a
+hash (`Execution.jl:737`) already exists as a precedent for fingerprinting a
 matrix. **Belongs in:** MetaManifold.
 
 ### N3 — A check that always reports "no problem" `severity: warning · category: technical_resource`
 
-`Execution.jl:500-518`: `check_batch_confounding` returns
+`Execution.jl:504-522`: `check_batch_confounding` returns
 `has_batch_confounding => false` unconditionally, with
 `note => "Stub: real implementation would check correlation between batch and
 group via chi-square or ANOVA"`.
@@ -366,7 +408,7 @@ the record that it is owed. **Belongs in:** MetaManifold.
 | where | what it does |
 |---|---|
 | `diversity.jl:55-85` (`rarefy`) | genuine without-replacement subsampling: a pool of one entry per read, partial Fisher–Yates, `depth` draws |
-| `Execution.jl:1225-1234` (`normalization.method = "rarefy"`) | `prepared[:, j] = counts_after_zero[:, j] .* (min_lib / lib_sizes[j])` — a comment at line 1230 says *"For stub, rarefy by subsampling proportionally to min_lib (not exact, just scaling)"* |
+| `Execution.jl:1228-1237` (`normalization.method = "rarefy"`) | `prepared[:, j] = counts_after_zero[:, j] .* (min_lib / lib_sizes[j])` — a comment at line 1233 says *"For stub, rarefy by subsampling proportionally to min_lib (not exact, just scaling)"* |
 
 Both are reachable from the product: the catalogue
 (`docs/statistics/method-catalogue-v1.md:32`) lists `rarefy` under
@@ -425,7 +467,7 @@ repo settings. Recorded here because it gates everything in Part 5.
 
 ### B2 — RCall holds a second copy of the prepared table, and the cleanup is on the success path only `severity: warning · category: dependency_environment`
 
-`estimation.jl:458` `RCall.globalEnv[:est_counts] = prepared` copies the whole
+`estimation.jl:473` `RCall.globalEnv[:est_counts] = prepared` copies the whole
 `features × samples` matrix into R's global environment; Julia's `prepared` is
 still live. Peak is 2× the largest object for the duration of the fit.
 
@@ -481,17 +523,17 @@ carried rather than re-derived. **Belongs in:** MetaManifold.
 ### B4 — The provenance inventory does not include the package the estimator requires `severity: warning · category: dependency_environment`
 
 - `provenance.jl:303` — `const R_PACKAGES = ["dada2", "Biostrings", "ShortRead", "vegan"]`.
-- `estimation.jl:675` — `suppressPackageStartupMessages(library(MASS))`. **`MASS`
+- `estimation.jl:838` — `suppressPackageStartupMessages(library(MASS))`. **`MASS`
   is not in `R_PACKAGES`.** It *is* pinned in `renv.lock` (81 packages, `MASS`
   present), so this is an inventory gap, not a missing pin.
 - Consequence: `probe_r` can return `:ok` — *every required package present* —
   on a machine where the estimator will fail on its first line. The failure
-  does land in the right place (`estimation.jl:492` → `_not_run` with
+  does land in the right place (`estimation.jl:553` → `_not_run` with
   `"the fit could not be run: …"`) but it lands *after* provenance has declared
   the environment ready.
 - Separately, `Execution.jl:133` — `RAdapter(; r_packages = String["DESeq2", "edgeR"])`.
   **Neither is in `renv.lock`.** Those names are copied into the manifest
-  (`Execution.jl:1419`) as `adapter_config.r_packages`, so the manifest
+  (`Execution.jl:1434`) as `adapter_config.r_packages`, so the manifest
   asserts a dependency the pinned environment does not provide and nothing
   verifies.
 
@@ -503,7 +545,7 @@ list. **Belongs in:** MetaManifold.
 
 ### B5 — R-side warnings raised outside the per-feature handler never reach the manifest `severity: notice · category: technical_resource`
 
-`estimation.jl:741-748` wraps each fit in
+`estimation.jl:942-949` wraps each fit in
 `withCallingHandlers(..., warning = function(w) { warns <<- …; invokeRestart("muffleWarning") })`
 and folds the captured text into `est_note[i]`. That is a **capture**, not a
 suppression, and it is done well: a `glm.nb` "iteration limit reached" becomes a
@@ -524,7 +566,7 @@ MetaManifold.
 
 `Execution.jl:159-178` defines `JuliaAdapter(method, use_multithreading, seed,
 optimizer)`. `run_analysis` uses the adapter for exactly two things: the method
-match check (`Execution.jl:1580`) and `seed` (`1636`). Estimation always goes
+match check (`Execution.jl:1607`) and `seed` (`1663`). Estimation always goes
 through `Estimation.estimate_models`, i.e. R. There is no pure-Julia estimator
 to serve as a reference path (question 10 — qualified in Part 2).
 
@@ -537,7 +579,7 @@ one. **Belongs in:** MetaManifold.
 
 ### W1 — A run that produced no statistics is reported as safe `severity: danger · category: result_safety`
 
-`Execution.jl:1641-1658`:
+`Execution.jl:1657-1685`:
 
 ```
 outcome = Estimation.estimate_models(…)          # may return :not_run
@@ -555,7 +597,7 @@ The reason *is* recorded, in two places (`warnings` and
 `checks["estimation"]`), which is the good half. The other half:
 `is_dangerous` and `banner` are copied from the pre-estimation diagnostics, so
 they do not know that nothing was fitted. And
-`log_danger_banner_execution` runs **before** estimation (`Execution.jl:1619`),
+`log_danger_banner_execution` runs **before** estimation (`Execution.jl:1646`),
 so the log line for such a run is:
 
 ```
@@ -581,8 +623,8 @@ Question 8, answered in three parts:
 |---|---|---|
 | healings | `diagnostics.healings`, `provenance["diagnostics"]["healings"]` | **preserved** (counts only — see N2) |
 | warnings | `diagnostics.warnings`, `provenance["diagnostics"]["warnings"]` | **preserved** |
-| ILR basis warnings + DANGER reasons | `checks["ilr"]`, appended to `warnings` after `self_diagnostics` (`Execution.jl:1290-1295`, `1372-1400`) | **preserved**, with a comment explaining why the append must happen after |
-| scaling warnings | `checks["scaling"]` + `append!(warnings, scaling.warnings)` (`Execution.jl:1286-1289`, with a comment about not being clobbered) | **preserved** |
+| ILR basis warnings + DANGER reasons | `checks["ilr"]`, appended to `warnings` after `self_diagnostics` (`Execution.jl:1278-1279`, `1383-1398`) | **preserved**, with a comment explaining why the append must happen after |
+| scaling warnings | `checks["scaling"]` + `append!(warnings, scaling.warnings)` (`Execution.jl:1255-1256`, with a comment about not being clobbered) | **preserved** |
 | estimation `:not_run` | `checks["estimation"]` + a warning | **preserved in the record, invisible to `is_dangerous`** (W1) |
 | **a disabled analysis** (vegan absent → no NMDS/PERMANOVA) | `@warn` in the log, and a 503/500 from the route | **not in any manifest** — chart routes have no manifest at all |
 | **a degraded chart** (boxplot with no significance annotations) | caption text `_significance_caption` | **preserved for alpha only** |
@@ -666,8 +708,8 @@ intercepted:
 |---|---|
 | `bench/ilr_bases/benchmark.jl:108`, `regression_gate.jl:62`, `test/unit/test_provenance.jl:262`, `src/doi/Zenodo.jl:33` | `NullLogger` around a measured or network block — benchmark noise, not a warning policy |
 | `src/server/server.jl:216` | `_SuppressEpipe(global_logger())` — filters broken-pipe errors from HTTP handlers only |
-| `estimation.jl:741-748` | R `muffleWarning` around a single fit — **captures** the warning text into `est_note[i]`, so nothing is lost |
-| `analysis.jl:1031`, `estimation.jl:674` | `suppressWarnings(friedman.test(...))`, `suppressPackageStartupMessages` — targeted to one call each |
+| `estimation.jl:942-949` | R `muffleWarning` around a single fit — **captures** the warning text into `est_note[i]`, so nothing is lost |
+| `analysis.jl:1031`, `estimation.jl:838` | `suppressWarnings(friedman.test(...))`, `suppressPackageStartupMessages` — targeted to one call each |
 
 None is a global suppression. `run_nmds`'s `tryCatch(..., error = function(e) NULL)`
 at `analysis.jl:1026-1034` is the closest thing to a silent swallow — it discards
@@ -719,7 +761,7 @@ use views in `check_prevalence_abundance` and the two `check_all_zero_*` loops.
    kernel matters (**M8**). Nothing here needs a new library.
 
 4. **Does RCall duplicate large data structures?** Yes, in two ways. Inherently:
-   `RCall.globalEnv[:est_counts] = prepared` (`estimation.jl:458`) copies the
+   `RCall.globalEnv[:est_counts] = prepared` (`estimation.jl:473`) copies the
    whole table into R while Julia keeps its own, so peak is 2× the largest
    object for the duration of the fit. Avoidably: the `rm(...); gc()` that
    releases it is inside the `try`, so any throw leaks it for the process
@@ -759,7 +801,7 @@ use views in `check_prevalence_abundance` and the two `check_all_zero_*` loops.
 9. **Does a missing R package cause a clear "not run" rather than a plausible
    replacement?** For the *estimator*, yes — `Estimation` returns
    `EstimationOutcome(:not_run, reason, …)` with an empty `results`
-   (`estimation.jl:263-275`, `488-495`), and there is deliberately no fourth
+   (`estimation.jl:276-283`, `549-556`), and there is deliberately no fourth
    status meaning "something plausible was produced". For the *ordination and
    significance* layer, no — four different behaviours, one of which is a
    NaN-filled coordinate matrix (**B3**). And the provenance probe does not
@@ -793,7 +835,7 @@ Category key: **T** technical/resource · **D** dependency/environment ·
 | id | site | today | category | sev | action |
 |---|---|---|---|---|---|
 | `ilr.part_weights_unused_kinds` | `ilr_basis.jl:976` | silent | T | info | compute only the selected kind |
-| `exec.prepared_copy_unused` | `Execution.jl:1059` | silent | T | info | move the copy into `clr`/`rarefy` |
+| `exec.prepared_copy_unused` | `Execution.jl:1062` | silent | T | info | move the copy into `clr`/`rarefy` |
 | `exec.counts_copy_unused` | `Execution.jl:840` | silent | T | info | drop |
 | `bench.phase_undecomposed` | `bench/ilr_bases/benchmark.jl:70` | `::warning` | T | notice | phase the measurement |
 | `analysis.r_unavailable_relogged` | `analysis.jl:1000` | `@warn` per call | D | notice | memoise |
@@ -803,10 +845,10 @@ Category key: **T** technical/resource · **D** dependency/environment ·
 | id | site | today | category | sev | action |
 |---|---|---|---|---|---|
 | `ci.no_verdict` | `.github/workflows/ci.yml` | none | D | **fatal** | owner action; blocks the whole gate |
-| `r.package_not_probed` (`MASS`) | `provenance.jl:303` vs `estimation.jl:675` | none | D | warning | add `MASS` to `R_PACKAGES` |
+| `r.package_not_probed` (`MASS`) | `provenance.jl:303` vs `estimation.jl:838` | none | D | warning | add `MASS` to `R_PACKAGES` |
 | `r.adapter_packages_unpinned` | `Execution.jl:133` | manifest claims them | D | warning | default to pinned packages; mark verified |
-| `r.est_counts_leaked_on_error` | `estimation.jl:478` | none | D | warning | clean up in `finally` |
-| `r.warning_outside_handler` | `estimation.jl:741` | process log only | T | notice | collect into diagnostics |
+| `r.est_counts_leaked_on_error` | `estimation.jl:535` | none | D | warning | clean up in `finally` |
+| `r.warning_outside_handler` | `estimation.jl:942` | process log only | T | notice | collect into diagnostics |
 | `r.unavailable` | `analysis.jl:1005` | `@warn` | D | warning | return `RProbeStatus`, record as a notice |
 | `r.busy` | `analysis.jl:617`, `1023` | `@warn` / unhandled | D | warning | catch in both ordination paths |
 
@@ -819,28 +861,28 @@ Category key: **T** technical/resource · **D** dependency/environment ·
 | `ilr.balance_weights_not_isometric` | `ilr_basis.jl:1291` | in `checks` only | M | warning | *"effect sizes change, per-balance test statistics do not"* |
 | `ilr.pruned_tips` | `ilr_basis.jl:1225` | warning string | M | warning | |
 | `ilr.zero_length_tip_edges_replaced` | `ilr_basis.jl:1271` | warning string | M | warning | |
-| `exec.rarefy_discouraged` | `Execution.jl:1220` | `@warn` + DANGER | M | danger | see N4 — the method is not rarefaction |
+| `exec.rarefy_discouraged` | `Execution.jl:1223` | `@warn` + DANGER | M | danger | see N4 — the method is not rarefaction |
 | `config.pseudocount_unusual` (≥1, <0.1) | `AnalysisConfig.jl:182`, `401-404` | `@warn` | M | warning | |
 | `config.epsilon_extreme` | `AnalysisConfig.jl:212`, `412-415` | `@warn` | M | warning | |
 | `config.css_quantile_below_median` | `AnalysisConfig.jl:229` | `@warn` | M | warning | |
 | `config.tmm_trims_zero` | `AnalysisConfig.jl:240` | `@warn` | M | warning | |
 | `config.parameter_inert` (`css_quantile` / `tmm_*` with a method that ignores them) | `AnalysisConfig.jl:249-252` | `@warn` | M | warning | a recorded parameter that does nothing |
 | `scaling.*` (CSS quantile, TMM undefined, RLE zero features) | `scaling.jl:214`, `342`, `348`, `410`, `416` | warning strings | Q | warning | already well worded |
-| `estimation.boundary_theta` / `separation` | `estimation.jl:786-799` | row `status = "boundary"` | M | warning | correctly not counted as `ok` |
+| `estimation.boundary_theta` / `separation` | `estimation.jl:979-995` | row `status = "boundary"` | M | warning | correctly not counted as `ok` |
 
 ## Possible correctness risks
 
 | id | site | risk | category | sev |
 |---|---|---|---|---|
-| `estimation.not_run_reported_safe` | `Execution.jl:1641-1658` | zero results, `is_dangerous = false`, log says "safe" | R | **danger** |
+| `estimation.not_run_reported_safe` | `Execution.jl:1657-1685` | zero results, `is_dangerous = false`, log says "safe" | R | **danger** |
 | `nmds.nan_filled_result` | `analysis.jl:1020` | a full-size NaN coordinate matrix is a plausible-looking result | R | **danger** |
 | `permanova.reason_discarded` | `analysis.jl:1086-1091` | `nothing` conflates three distinct causes | R | warning |
 | `exec.batch_confounding_stub` | `Execution.jl:500` | renders as "no confounding found" | T | warning |
 | `heal.nan_inf_scale_mixed` | `Execution.jl:600-616` | writes out-of-scale values into the fitted table | R | **danger** |
 | `heal.positions_unrecorded` | `Execution.jl:706` | healed cells indistinguishable from measured ones | R | warning |
-| `exec.rarefy_is_scaling` | `Execution.jl:1225-1234` | fractional counts into a count model, under the name "rarefy" | M | **danger** |
+| `exec.rarefy_is_scaling` | `Execution.jl:1228-1237` | fractional counts into a count model, under the name "rarefy" | M | **danger** |
 | `ilr.dendrogram_threshold_half` | `ilr_basis.jl:1250-1252` | refuses at a reported 2 GiB that is really 4 GiB | T | warning |
-| `ilr.helmert_quadratic` | `Execution.jl:1188` | 8 GB of churn at the benchmark's largest size; not a wrong answer, but a wall | T | notice |
+| `ilr.helmert_quadratic` | `Execution.jl:1191` | 8 GB of churn at the benchmark's largest size; not a wrong answer, but a wall | T | notice |
 
 ---
 
@@ -885,7 +927,7 @@ These are infrastructure. They have large, boring test matrices (allocation
 bounds, streaming edge cases, concurrency) that would drown a statistics suite,
 and no scientific semantics of their own.
 
-1. **The R hand-off protocol.** The 2× copy at `estimation.jl:458` is inherent
+1. **The R hand-off protocol.** The 2× copy at `estimation.jl:473` is inherent
    to RCall. A zero-copy or shared-memory hand-off (Arrow C data interface, or
    a shared array for the duration of the fit) belongs here, together with the
    session-pool problem implied by `r_runtime.jl` (one embedded interpreter for
@@ -991,7 +1033,7 @@ asking a kernel library to make it faster.
 
 `Float64 = 8 bytes`. All figures DERIVED from source, not measured.
 
-**A1. Default Helmert allocation** (`Execution.jl:1188`).
+**A1. Default Helmert allocation** (`Execution.jl:1191`).
 Per sample: Σ_{i=1}^{D−1} 8i = 4·D·(D−1) bytes. Per run: × n.
 
 | D × n | bytes |
@@ -1017,7 +1059,7 @@ file text = 2·D(D−1); `String(copy(bytes))` = the same; `W` (Int8) = D(D−1)
 |---|---|---|---|---|---|
 | 10 000 | 191 MiB | 191 MiB | 95 MiB | 477 MiB | 1.0e8 |
 
-**A4. Count-table copies** (`Execution.jl:840`, `858`, `868`, `1059`, `1154`),
+**A4. Count-table copies** (`Execution.jl:840`, `858`, `868`, `1062`, `1157`),
 input 20 000 taxa → 10 000 retained, 200 samples. One retained copy = 15.3 MiB;
 input = 30.5 MiB. Current peak ≈ 107 MiB; after removing the dead copy, the
 composable slice and `clr_table` ≈ 76 MiB.
@@ -1032,6 +1074,6 @@ samples: a 40 MiB `DataFrame` plus a 40 MiB `Matrix`, filled by 5 000 000
 |---|---|
 | M1's 8 GB, M2's 2×, M5's 477 MiB | `julia --project=. bench/ilr_bases/benchmark.jl ILR_BENCH_TAXA=10000` (already reports `allocated_bytes` and ΔpeakRSS) |
 | that `hclust_r`'s `diss` copy is not elided | `@allocated` on `hclust_r(tau, D, "average")` vs `2·sizeof(tau)` |
-| that the R copy of `est_counts` doubles peak | `Sys.maxrss()` immediately before and after `estimation.jl:458` |
+| that the R copy of `est_counts` doubles peak | `Sys.maxrss()` immediately before and after `estimation.jl:473` |
 | whether `MASS` is present in the CI image | `Rscript -e 'packageVersion("MASS")'`, or extend `probe_r` (B4) and read the manifest |
 | the `startup_failure` root cause | `gh api /repos/hyperpolymath/MetaManifold-WebUI/actions/runs/<id>` — zero jobs, and GitHub's own "workflow file issue" verdict |
