@@ -281,14 +281,21 @@ struct ExecutionManifest
         if !haskey(prov, "config_hash")
             prov["config_hash"] = config_hash
         end
+        # Both probe fallbacks warn: a placeholder written silently makes the
+        # manifest look probed when it was not, which is exactly the
+        # concealment rule every fallback in this product is judged by
+        # (audit category: dependency_environment). The placeholder keeps the
+        # schema; the warning keeps the reason.
         try
             prov["metamanifold"] = probe_metamanifold()
-        catch
+        catch err
+            @warn "Metamanifold probe failed — manifest will record version=unknown" probe="metamanifold" err=sprint(showerror, err)
             prov["metamanifold"] = OrderedDict("version" => "unknown")
         end
         try
             prov["host"] = probe_host()
-        catch
+        catch err
+            @warn "Host probe failed — manifest will record hostname=unknown" probe="host" err=sprint(showerror, err)
             prov["host"] = OrderedDict("hostname" => "unknown")
         end
 

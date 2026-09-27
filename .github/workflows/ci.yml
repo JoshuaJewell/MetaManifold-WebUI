@@ -240,17 +240,53 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Julia
-        uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32  # v3.0.2
-        with:
-          # Pinned rather than tracking latest stable, because a pinned Manifest.toml
-          # resolved by an unpinned Julia is not a reproducible build. This must equal
-          # julia_version in Manifest.toml; it cannot be read from the pin file, since
-          # nothing can be read before Julia exists. test/unit/test_install_pins.jl
-          # fails if the three ever disagree.
-          version: "1.12.5"
+        # julia-actions/setup-julia is refused by this repository's Actions
+        # allow-list: every action must be from a repository owned by
+        # hyperpolymath, created by GitHub, verified in the GitHub Marketplace,
+        # or match the configured pattern, AND be pinned to a full-length
+        # commit SHA. A refused action does not fail the job -- it prevents the
+        # job from starting (startup_failure), which silenced every workflow
+        # from 2026-09-25 22:19 UTC onward. Julia is therefore installed
+        # straight from the official binaries and verified against the
+        # official checksum file before anything from it executes.
+        #
+        # JULIA_VERSION is pinned rather than tracking latest stable, because a
+        # pinned Manifest.toml resolved by an unpinned Julia is not a
+        # reproducible build. It must equal julia_version in Manifest.toml; it
+        # cannot be read from the pin file, since nothing can be read before
+        # Julia exists. test/unit/test_install_pins.jl fails if the three ever
+        # disagree.
+        run: |
+          set -euo pipefail
+          JULIA_VERSION="1.12.5"
+          archive="julia-${JULIA_VERSION}-linux-x86_64.tar.gz"
+          base="https://julialang-s3.julialang.org/bin"
+          curl --fail --location --retry 3 --retry-all-errors --max-time 600 \
+            "${base}/linux/x64/${JULIA_VERSION%.*}/${archive}" \
+            -o "${RUNNER_TEMP}/${archive}"
+          curl --fail --location --retry 3 --retry-all-errors --max-time 120 \
+            "${base}/checksums/julia-${JULIA_VERSION}.sha256" \
+            -o "${RUNNER_TEMP}/julia-${JULIA_VERSION}.sha256"
+          grep "${archive}" "${RUNNER_TEMP}/julia-${JULIA_VERSION}.sha256" \
+            | (cd "${RUNNER_TEMP}" && sha256sum --check)
+          mkdir -p "${RUNNER_TEMP}/julia"
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}/julia" --strip-components=1
+          echo "${RUNNER_TEMP}/julia/bin" >> "${GITHUB_PATH}"
 
       - name: Cache Julia packages
-        uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8  # v3.3.0
+        # julia-actions/cache is refused by the Actions allow-list (see
+        # "Set up Julia" above); actions/cache at a full-length SHA is
+        # permitted and caches the same depot directories.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/compiled
+            ~/.julia/registries
+          key: julia-depot-${{ runner.os }}-${{ hashFiles('Manifest.toml', 'Project.toml') }}
+          restore-keys: |
+            julia-depot-${{ runner.os }}-
 
       # Static source lint, deliberately dependency-free (`--project=no`) so it can
       # run before instantiation and fail in seconds rather than after the ~26
@@ -632,7 +668,21 @@ jobs:
           exit "$status"
 
       - name: Process coverage
-        uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38  # v1
+        # Faithful replacement for julia-actions/julia-processcoverage, which
+        # the Actions allow-list refuses: same library (CoverageTools), same
+        # default directories (src and ext, with ext skipped when absent), same
+        # output (lcov.info at the workspace root). The temporary environment
+        # keeps the checkout's Project/Manifest untouched.
+        run: |
+          set -euo pipefail
+          julia --startup-file=no -e '
+            using Pkg
+            Pkg.activate(temp = true)
+            Pkg.add(PackageSpec(name = "CoverageTools"))
+            using CoverageTools
+            dirs = filter(isdir, ["src", "ext"])
+            LCOV.writefile("lcov.info", mapreduce(process_folder, vcat, dirs))
+          '
 
       - name: Upload coverage artifact (local, Codecov removed per Milestone 2)
         if: always()

@@ -29,10 +29,10 @@ const EXPECTED_PLATFORMS = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "ma
 
 is_sha256(s) = s isa AbstractString && occursin(r"^[0-9a-f]{64}$", s)
 
-"""Return the first step of `job` whose `uses:` names `action`, or nothing."""
-function ci_step_using(job, action)
+"""Return the first step of `job` whose `name:` is `name`, or nothing."""
+function ci_step_named(job, name)
     for step in get(job, "steps", [])
-        startswith(get(step, "uses", ""), action) && return step
+        get(step, "name", nothing) == name && return step
     end
     return nothing
 end
@@ -203,11 +203,22 @@ end
         # Read from the `Set up Julia` step rather than from a matrix: the matrix was
         # removed because GitHub appends a matrix combination to the posted check name
         # (see "a required check name is a stable identifier" below). The step is located
-        # by its `uses:` rather than by index, so reordering the steps cannot make this
+        # by its name rather than by index, so reordering the steps cannot make this
         # assertion quietly vanish.
-        setup = ci_step_using(job, "julia-actions/setup-julia")
+        #
+        # It used to be located by its `uses: julia-actions/setup-julia`, but that
+        # action is refused by the repository's Actions allow-list (see "every GitHub
+        # Action satisfies the repository Actions policy" below), so Julia is now
+        # installed by a pinned `run:` step whose JULIA_VERSION carries the copy this
+        # testset exists to keep honest.
+        setup = ci_step_named(job, "Set up Julia")
         @test setup !== nothing
-        @test setup["with"]["version"] == pins["runtimes"]["julia"]["version"]
+        setup_run = setup === nothing ? "" : get(setup, "run", "")
+        julia_pin = match(r"JULIA_VERSION=\"([^\"]+)\"", setup_run)
+        @test julia_pin !== nothing
+        if julia_pin !== nothing
+            @test julia_pin[1] == pins["runtimes"]["julia"]["version"]
+        end
 
         # A floating runner would carry the R apt pin, which names a 24.04 build, off to
         # whatever the next LTS ships.
@@ -301,6 +312,55 @@ end
         for ref in (raw"$VSEARCH_URL", raw"$SWARM_URL", raw"$FASTQC_URL")
             @test occursin("fetch_pinned \"$ref\"", runs)
         end
+    end
+
+    @testset "every GitHub Action satisfies the repository Actions policy" begin
+        # MEASURED 2026-09-25 22:19 UTC through 2026-09-27: every workflow run
+        # failed with `startup_failure` and zero jobs because the repository
+        # began enforcing an Actions allow-list. The run annotation reads:
+        # actions must be "from a repository owned by hyperpolymath, created by
+        # GitHub, verified in the GitHub Marketplace, or match the pattern"
+        # configured for the repository, and "all actions must also be pinned
+        # to a full-length commit SHA". A violation is not a red job -- it is a
+        # job that never starts, so nothing INSIDE the workflow can report it.
+        # This testset is where that policy becomes visible to `Pkg.test`.
+        #
+        # Local actions (`./...`) are part of the checked-out tree: always
+        # allowed, and there is no remote ref to pin.
+        github_owned_owners = ("actions", "github", "hyperpolymath")
+        # Marketplace-verified third parties used by this repository. Extend
+        # deliberately -- each entry is a claim that the action is verified,
+        # made here because the check itself cannot reach the Marketplace.
+        marketplace_verified = ("oven-sh/setup-bun",)
+
+        violations = String[]
+        workflows = sort(readdir(joinpath(REPO_ROOT, ".github", "workflows")))
+        @test !isempty(workflows)
+        for file in workflows
+            (endswith(file, ".yml") || endswith(file, ".yaml")) || continue
+            workflow = YAML.load_file(joinpath(REPO_ROOT, ".github", "workflows", file))
+            for (_, job) in get(workflow, "jobs", Dict())
+                for step in get(job, "steps", [])
+                    uses = get(step, "uses", nothing)
+                    uses === nothing && continue
+                    startswith(uses, "./") && continue
+                    parts = split(uses, '@'; limit = 2)
+                    if length(parts) != 2
+                        push!(violations, "$file: $uses has no @ref")
+                        continue
+                    end
+                    src, ref = parts
+                    if !occursin(r"^[0-9a-f]{40}$", ref)
+                        push!(violations, "$file: $uses is not pinned to a full-length commit SHA")
+                    end
+                    owner = first(split(src, '/'))
+                    if !(owner in github_owned_owners || src in marketplace_verified)
+                        push!(violations, "$file: $uses is neither github-owned, hyperpolymath-owned, nor on the verified list")
+                    end
+                end
+            end
+        end
+        @test isempty(violations)
     end
 
     @testset "a required check name is a stable identifier" begin

@@ -21,10 +21,38 @@ jobs:
       JULIA_PKG_PRECOMPILE_AUTO: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32  # v3.0.2
+      # julia-actions/* is refused by the repository's Actions allow-list
+      # (startup_failure), so Julia is installed from the official binaries
+      # with checksum verification instead -- same version and procedure as
+      # ci.yml's "Set up Julia" step, which test/unit/test_install_pins.jl pins.
+      - name: Set up Julia
+        run: |
+          set -euo pipefail
+          JULIA_VERSION="1.12.5"
+          archive="julia-${JULIA_VERSION}-linux-x86_64.tar.gz"
+          base="https://julialang-s3.julialang.org/bin"
+          curl --fail --location --retry 3 --retry-all-errors --max-time 600 \
+            "${base}/linux/x64/${JULIA_VERSION%.*}/${archive}" \
+            -o "${RUNNER_TEMP}/${archive}"
+          curl --fail --location --retry 3 --retry-all-errors --max-time 120 \
+            "${base}/checksums/julia-${JULIA_VERSION}.sha256" \
+            -o "${RUNNER_TEMP}/julia-${JULIA_VERSION}.sha256"
+          grep "${archive}" "${RUNNER_TEMP}/julia-${JULIA_VERSION}.sha256" \
+            | (cd "${RUNNER_TEMP}" && sha256sum --check)
+          mkdir -p "${RUNNER_TEMP}/julia"
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}/julia" --strip-components=1
+          echo "${RUNNER_TEMP}/julia/bin" >> "${GITHUB_PATH}"
+      - name: Cache Julia packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          version: '1.12.5'
-      - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8  # v3.3.0
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/compiled
+            ~/.julia/registries
+          key: julia-depot-${{ runner.os }}-${{ hashFiles('ui/Manifest.toml', 'ui/Project.toml') }}
+          restore-keys: |
+            julia-depot-${{ runner.os }}-
       - name: Instantiate isolated UI environment
         run: julia --project=ui -e 'using Pkg; Pkg.instantiate()'
       - name: Test contracts and backend URL validation
