@@ -1,3 +1,7 @@
+<!--
+SPDX-License-Identifier: CC-BY-SA-4.0
+-->
+
 # Formal verification of the validated statistics layer
 
 Status: **the Agda gate is green**. See [`proofs/PROOF-STATUS.md`](../../proofs/PROOF-STATUS.md)

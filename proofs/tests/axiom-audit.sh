@@ -34,7 +34,7 @@ note() { printf 'axiom-audit: %s\n' "$*"; }
 
 [[ -f "$ENTRY" ]] || { printf 'axiom-audit: FATAL: missing %s\n' "$ENTRY" >&2; exit 1; }
 
-mapfile -t FILES < <(find "$AGDA_DIR" -name '*.agda' -type f | sort)
+mapfile -t FILES < <(find "$AGDA_DIR/MetaManifold" -name '*.agda' -type f | sort)
 [[ ${#FILES[@]} -gt 0 ]] || { printf 'axiom-audit: FATAL: no .agda files found\n' >&2; exit 1; }
 note "auditing ${#FILES[@]} module(s)"
 
@@ -87,7 +87,7 @@ while [[ ${#queue[@]} -gt 0 ]]; do
   [[ -f "$path" ]] || { fail "imported module $mod has no file at $path"; continue; }
   while read -r dep; do
     queue+=("$dep")
-  done < <(grep -oE '^[[:space:]]*open[[:space:]]+import[[:space:]]+[A-Za-z0-9_.]+' "$path" \
+  done < <(grep -oE '^[[:space:]]*(open[[:space:]]+)?import[[:space:]]+[A-Za-z0-9_.]+' "$path" \
              | awk '{print $NF}' | grep '^MetaManifold\.')
 done
 

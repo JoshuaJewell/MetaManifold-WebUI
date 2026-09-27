@@ -113,7 +113,7 @@ expect_reject "exact counts: overflow no longer refused" run_gate "MetaManifold/
 # --- the axiom audit must reject an unchecked or unsound module -------------
 
 expect_reject "audit: module dropped from the gate entry" run_audit "MetaManifold/All.agda" \
-  'sed -i "/open import MetaManifold.DecimalRounding public/d" "$1"'
+  'sed -i "/import MetaManifold.DecimalRounding/d" "$1"'
 
 expect_reject "audit: postulate injected" run_audit "MetaManifold/DecimalRounding.agda" \
   'printf "postulate cheat : ∀ {A : Set} → A\n" >> "$1"'
