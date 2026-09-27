@@ -1,0 +1,25 @@
+{
+  "schema": "metamanifold.bridge-index/v1",
+  "tree": { "newick_sha256": "EXAMPLE-not-a-real-hash", "node_count": 7 },
+  "nodes": {
+    "n0": { "label": "Eukaryota",   "rank": "Domain", "domains": ["exacts", "warrant"] },
+    "n1": { "label": "Alveolata",   "rank": "Phylum", "domains": ["exacts", "warrant"] },
+    "n2": { "label": "Apicomplexa", "rank": "Class",  "domains": ["exacts"] }
+  },
+  "domains": {
+    "exacts":  { "kind": "epistemic_domain", "id": "exacts",  "label": "exact-descriptive-summaries",
+                 "standpoint": "MetaManifold.ExactSummaries", "epi_status": "Factive",
+                 "receipt_ids": ["r-checked-sum-n2", "r-checked-sum-any"] },
+    "warrant": { "kind": "epistemic_domain", "id": "warrant", "label": "warrant-without-soundness",
+                 "standpoint": "reviewer", "epi_status": "Warranted",
+                 "receipt_ids": ["r-epi-not-factive"] }
+  },
+  "receipts": {
+    "r-checked-sum-n2":  { "href": "receipts/r-checked-sum-n2.json",  "claim": "CladeTotalIsExact",
+                           "status": "Proof", "artifacts": ["n2"] },
+    "r-checked-sum-any": { "href": "receipts/r-checked-sum-any.json", "claim": "CheckedSumNeverRounds",
+                           "status": "ProofUnder", "artifacts": [] },
+    "r-epi-not-factive": { "href": "receipts/r-epi-not-factive.json", "claim": "WarrantIsNotTruth",
+                           "status": "Receipt", "artifacts": [] }
+  }
+}

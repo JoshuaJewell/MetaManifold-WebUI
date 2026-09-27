@@ -1,0 +1,13 @@
+{
+  "schema": "metamanifold.proof-transport-receipt/v1",
+  "id": "r-checked-sum-n2",
+  "holder": "MetaManifold.ExactSummaries",
+  "artifact": "Apicomplexa (n2): cumulative count over clade",
+  "claim": "CladeTotalIsExact",
+  "meaning": "The clade total is the exact integer sum of its member counts, or the sum is refused; it is never silently rounded.",
+  "status": "Proof",
+  "mode": "Public",
+  "agda": { "module": "MetaManifold.ExactCounts", "theorem": "checkedSumOf-is-exact",
+            "source": "proofs/agda/MetaManifold/ExactCounts.agda", "checked_commit": "e6726fa765aebf9289b114cefe9cd270a439403c", "safe": true },
+  "exacts": { "summary_ref": "exact_summary/group/Apicomplexa", "policy_fingerprint": "EXAMPLE-fingerprint" }
+}

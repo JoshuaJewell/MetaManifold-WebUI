@@ -1,0 +1,13 @@
+{
+  "schema": "metamanifold.proof-transport-receipt/v1",
+  "id": "r-epi-not-factive",
+  "holder": "reviewer",
+  "artifact": "any warranted assignment",
+  "claim": "WarrantIsNotTruth",
+  "meaning": "Holding a warrant token for a taxon assignment does not by itself entail the assignment.",
+  "status": "Receipt",
+  "mode": "OpaqueReceipt",
+  "gap": "OpaqueGap",
+  "agda": { "module": "MetaManifold.Evidence.Warrant", "theorem": "epi-does-not-give",
+            "source": "proofs/agda/MetaManifold/Evidence/Warrant.agda", "checked_commit": "e6726fa765aebf9289b114cefe9cd270a439403c", "safe": true }
+}

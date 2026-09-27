@@ -1,0 +1,13 @@
+{
+  "schema": "metamanifold.proof-transport-receipt/v1",
+  "id": "r-checked-sum-any",
+  "holder": "MetaManifold.ExactSummaries",
+  "artifact": "any clade",
+  "claim": "CheckedSumNeverRounds",
+  "meaning": "checkedAdd refuses exactly when the true sum does not fit the bound.",
+  "status": "ProofUnder",
+  "under": ["Julia BigInt addition agrees with Agda ℤ addition (not proved; see proofs/residue/exact-counts.residue)"],
+  "mode": "Public",
+  "agda": { "module": "MetaManifold.ExactCounts", "theorem": "checkedAdd-refuses-exactly-when-it-must",
+            "source": "proofs/agda/MetaManifold/ExactCounts.agda", "checked_commit": "e6726fa765aebf9289b114cefe9cd270a439403c", "safe": true }
+}
