@@ -1,15 +1,18 @@
 import { useCallback, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useJobRefetch } from '../hooks/useJobEvents'
 import { api } from '../api/client'
 import { JobBadge } from '../components/JobBadge'
 import { Skeleton } from '../components/Skeleton'
-import { timeAgo } from '../utils/timeago'
+import { parseUtc, timeAgo } from '../utils/timeago'
 import type { Job } from '../api/types'
+import { useToast } from '../components/Toast'
 
 export function JobsView() {
   const fetcher = useCallback(() => api.jobs.list(), [])
   const { data: jobs, loading, error, refetch } = useApi(fetcher)
+  const toast = useToast()
 
   useJobRefetch(refetch, {})
 
@@ -21,7 +24,13 @@ export function JobsView() {
   }, [refetch])
 
   const cancel = async (id: string) => {
-    await api.jobs.cancel(id)
+    if (!window.confirm(`Cancel job ${id}?`)) return
+    try {
+      await api.jobs.cancel(id)
+      toast.success(`Cancelled ${id}`)
+    } catch (e) {
+      toast.error(`Cancel failed: ${(e as Error).message}`)
+    }
     refetch()
   }
 
@@ -47,19 +56,19 @@ export function JobsView() {
                 <strong style={{ fontSize: '.9rem' }}>{job.id}</strong>
                 <div style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)' }}>
                   {job.type}
-                  {job.study && ` - ${job.study}`}
-                  {job.run   && ` / ${job.run}`}
-                  {job.stage && ` - ${job.stage}`}
-                  {job.message && ` - ${job.message}`}
+                  {job.study && <>{' · '}<Link to={`/${job.study}`}>{job.study}</Link></>}
+                  {job.study && job.run && <>{' / '}<Link to={job.group ? `/${job.study}/${job.group}/${job.run}` : `/${job.study}/${job.run}`}>{job.group ? `${job.group}/${job.run}` : job.run}</Link></>}
+                  {job.stage && ` · ${job.stage}`}
+                  {job.message && ` · ${job.message}`}
                 </div>
                 <div style={{ fontSize: '.75rem', color: 'var(--color-muted-fg)' }}>
-                  <span title={new Date(job.created_at).toLocaleString()}>
+                  <span title={parseUtc(job.created_at).toLocaleString()}>
                     {timeAgo(job.created_at)}
                   </span>
                   {job.finished_at && (
                     <>
-                      {' - finished '}
-                      <span title={new Date(job.finished_at).toLocaleString()}>
+                      {' · finished '}
+                      <span title={parseUtc(job.finished_at).toLocaleString()}>
                         {timeAgo(job.finished_at)}
                       </span>
                     </>

@@ -8,13 +8,16 @@
   --color-border:         #dee2e6;
   --color-border-light:   #f1f3f5;
   --color-fg:             #212529;
-  --color-muted-fg:       #868e96;
+  --color-muted-fg:       #6c757d;
   --color-muted-bg:       #e9ecef;
   --color-primary:        #228be6;
   --color-primary-fg:     #ffffff;
   --color-sidebar-bg:     #1a1b2e;
   --color-sidebar-fg:     #c1c2d3;
   --color-sidebar-active: #228be6;
+  --color-danger:         #c92a2a;
+  --color-danger-border:  #ffc9c9;
+  --color-warn:           #b45309;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
                Helvetica, Arial, sans-serif;
@@ -65,7 +68,7 @@ a:hover  { text-decoration: underline; }
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: .06em;
-  opacity:     .5;
+  opacity:     .7;
 }
 
 .sidebar-link {
@@ -84,12 +87,20 @@ a:hover  { text-decoration: underline; }
 .sidebar-link-indented2   { padding-left: 44px; font-size: .82rem; }
 .sidebar-link-indented3   { padding-left: 60px; font-size: .78rem; }
 
+.sidebar-legal {
+  padding:   10px 16px 12px;
+  font-size: .7rem;
+  opacity:   .6;
+}
+.sidebar-legal a { color: inherit; text-decoration: underline; }
+
 .sidebar-sub-label {
   font-size:      .6rem;
   font-weight:    600;
   text-transform: uppercase;
   letter-spacing: .06em;
-  color:          #3d3e52;
+  color:          var(--color-sidebar-fg);
+  opacity:        .6;
   padding:        8px 12px 2px 44px;
 }
 
@@ -104,6 +115,35 @@ a:hover  { text-decoration: underline; }
 .sidebar-section-link.active { color: #fff; opacity: 1; }
 
 .sidebar-spacer { flex: 1; }
+
+/*## Narrow screens: the sidebar slides in over the page */
+.btn.nav-toggle, .sidebar-backdrop { display: none; }
+
+@media (max-width: 900px) {
+  .app-layout { grid-template-columns: 1fr; }
+  .sidebar {
+    position:   fixed;
+    inset:      0 auto 0 0;
+    width:      var(--sidebar-width);
+    z-index:    100;
+    transform:  translateX(-100%);
+    transition: transform .2s;
+  }
+  .nav-open .sidebar { transform: none; }
+  .sidebar-backdrop {
+    display:    block;
+    position:   fixed;
+    inset:      0;
+    z-index:    99;
+    background: rgba(0, 0, 0, .35);
+  }
+  .btn.nav-toggle { display: inline-flex; margin-bottom: 12px; }
+  .main-content { padding: 16px; }
+}
+
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .sidebar { transition: none; }
+}
 
 /*## Main content */
 .main-content {
@@ -188,6 +228,38 @@ a:hover  { text-decoration: underline; }
 }
 .btn-primary:hover:not(:disabled) { background: #1c7ed6; }
 
+.btn-sm { padding: 3px 10px; font-size: .78rem; }
+
+.btn-danger {
+  color:        var(--color-danger);
+  border-color: var(--color-danger-border);
+}
+.btn-danger:hover:not(:disabled) { background: #fff5f5; }
+
+/* A disclosure header: a full-width button that shows or hides the content below it. */
+.toggle-btn {
+  display:     flex;
+  align-items: center;
+  gap:         10px;
+  width:       100%;
+  padding:     0;
+  border:      none;
+  background:  none;
+  font:        inherit;
+  color:       inherit;
+  text-align:  left;
+  cursor:      pointer;
+}
+
+.visually-hidden {
+  position: absolute;
+  width:    1px;
+  height:   1px;
+  overflow: hidden;
+  clip:     rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /*## Misc */
 .tabs {
   display:      flex;
@@ -206,7 +278,8 @@ a:hover  { text-decoration: underline; }
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
 }
-.tab:hover  { color: var(--color-fg); }
+.tab:hover:not(:disabled) { color: var(--color-fg); }
+.tab:disabled { opacity: .4; cursor: default; }
 .tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
 
 .empty-state {

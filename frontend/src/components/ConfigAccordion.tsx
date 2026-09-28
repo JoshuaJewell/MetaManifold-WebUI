@@ -7,10 +7,11 @@ import {
   StageConfig,
 } from './PipelineStages'
 import type { ConfigMap, ConfigSource } from '../api/types'
+import type { ConfigSection } from './PipelineStages'
 
-const VISIBLE_STAGES = Object.keys(STAGE_CONFIG_PREFIXES) as (keyof typeof STAGE_CONFIG_PREFIXES)[]
+export const ALL_SECTIONS = Object.keys(STAGE_CONFIG_PREFIXES) as ConfigSection[]
 
-export function ConfigAccordion({ configMap, study, run, group, onConfigChanged, patchFn, deleteFn, sourceLevel, overrides }: {
+export function ConfigAccordion({ configMap, study, run, group, onConfigChanged, patchFn, deleteFn, sourceLevel, overrides, sections }: {
   configMap: ConfigMap
   study: string
   run: string
@@ -20,26 +21,32 @@ export function ConfigAccordion({ configMap, study, run, group, onConfigChanged,
   deleteFn?: (study: string, run: string, key: string, group?: string) => Promise<ConfigMap>
   sourceLevel?: ConfigSource
   overrides?: Record<string, string[]> | null
+  // Which sections to render; every one by default. The run page passes the
+  // handful that are not pipeline stages, because the stage sections are
+  // already on that page as the runnable rows.
+  sections?: ConfigSection[]
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
 
   return (
     <div>
-      {VISIBLE_STAGES.map(stage => {
+      {(sections ?? ALL_SECTIONS).map(stage => {
         const prefixes = STAGE_CONFIG_PREFIXES[stage]
         const hasKeys = prefixes.some(p => Object.keys(configMap).some(k => k.startsWith(p)))
-        // Always show the global section at the default config level so your_name can be set.
-        if (!hasKeys && !(stage === 'global' && sourceLevel === 'default')) return null
+        if (!hasKeys) return null
         const isExpanded = expanded === stage
         return (
           <div key={stage} style={{ marginBottom: 4 }}>
-            <div
-              style={{ cursor: 'pointer', fontWeight: 600, fontSize: '.85rem', padding: '4px 0' }}
+            <button
+              type="button"
+              className="toggle-btn"
+              aria-expanded={isExpanded}
+              style={{ fontWeight: 600, fontSize: '.85rem', padding: '4px 0', gap: 6 }}
               onClick={() => setExpanded(isExpanded ? null : stage)}
             >
-              <span style={{ fontSize: '.8rem', marginRight: 6, opacity: .65 }}>{isExpanded ? 'v' : '>'}</span>
+              <span aria-hidden="true" style={{ fontSize: '.8rem', opacity: .65 }}>{isExpanded ? '▾' : '▸'}</span>
               {STAGE_LABELS[stage]}
-            </div>
+            </button>
             {isExpanded && (
               <StageConfig
                 configMap={configMap}

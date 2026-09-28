@@ -63,3 +63,7 @@
   border:     none;
   border-radius: 0;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .dot.running { animation: none; }
+}

@@ -6,17 +6,18 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "bun test src",
+    "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@types/react-plotly.js": "^2.6.4",
     "@upsetjs/react": "^1.11.0",
+    "jspdf": "^4.2.1",
     "plotly.js-dist-min": "^2.35.2",
     "react": "^18.3.1",
-    "react-chart-editor": "0.46.1",
     "react-dom": "^18.3.1",
-    "react-plotly.js": "4.0.0",
-    "react-router-dom": "^6.28.0"
+    "react-router-dom": "^6.28.0",
+    "svg2pdf.js": "^2.8.1"
   },
   "devDependencies": {
     "@types/plotly.js": "^2.33.4",

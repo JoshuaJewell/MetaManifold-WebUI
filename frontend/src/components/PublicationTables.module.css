@@ -1,0 +1,59 @@
+/* © 2026 Joshua Benjamin Jewell. All rights reserved. */
+/* Licensed under the GNU Affero General Public License version 3 (AGPLv3). */
+.controls {
+  display:     flex;
+  flex-wrap:   wrap;
+  gap:         8px 16px;
+  align-items: center;
+  font-size:   .82rem;
+  margin-bottom: 12px;
+}
+
+.controls label { display: flex; align-items: center; gap: 4px; }
+.controls select { font: inherit; padding: 1px 4px; }
+.values { display: flex; align-items: center; gap: 8px; }
+
+.block { margin-bottom: 20px; }
+
+.blockHead {
+  display:     flex;
+  align-items: baseline;
+  gap:         8px;
+  margin-bottom: 4px;
+}
+
+.caption { font-family: 'Times New Roman', Times, serif; font-size: .95rem; flex: 1; }
+
+.scroll { overflow-x: auto; }
+
+/* Three-rule table: heavy rules above and below, light rules under the
+   headings and above the totals. */
+.table {
+  border-collapse: collapse;
+  font-family:     'Times New Roman', Times, serif;
+  font-size:       .85rem;
+  white-space:     nowrap;
+}
+
+.table th, .table td { padding: 2px 10px; }
+.table thead tr:first-child th { border-top: 2px solid currentColor; }
+.table thead tr:last-child th  { border-bottom: 1px solid currentColor; }
+.table .group { text-align: center; border-bottom: 1px solid currentColor; }
+.table .num   { text-align: right; font-variant-numeric: tabular-nums; }
+.table .left  { text-align: left; }
+/* Heatmap fills are light, so their text stays dark in either theme. */
+.table .heat  { color: #111; }
+.table .footer tr:first-child td { border-top: 1px solid currentColor; }
+.table tbody:last-child tr:last-child td { border-bottom: 2px solid currentColor; }
+
+.note {
+  font-family: 'Times New Roman', Times, serif;
+  font-size:   .8rem;
+  font-style:  italic;
+  color:       var(--color-muted-fg);
+  margin:      4px 0 0;
+  max-width:   80ch;
+  white-space: normal;
+}
+
+.small { padding: 2px 8px; font-size: .78rem; }

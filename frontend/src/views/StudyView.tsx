@@ -7,12 +7,20 @@ import { Skeleton } from '../components/Skeleton'
 import { NameDialog } from '../components/NameDialog'
 import { CardActions, RunCard } from '../components/CardActions'
 import { useToast } from '../components/Toast'
-import { ComparisonPanel } from '../components/ComparisonPanel'
-import type { ComparisonRunSpec, Run } from '../api/types'
-import { expandRunSpecs } from '../api/types'
+import { AnalysisWorkspace } from '../components/AnalysisWorkspace'
+import { useTabParam } from '../hooks/useTabParam'
+import type { AnnotationSource, ComparisonRunSpec, Run } from '../api/types'
+import { carriesSource, expandRunSpecs } from '../api/types'
 import { ConfigAccordion } from '../components/ConfigAccordion'
+import { TreesPanel } from '../components/TreesPanel'
+import { PlacementPanel } from '../components/PlacementPanel'
+import { ReportPanel } from '../components/ReportPanel'
+import { useNavRefresh } from '../hooks/useNavRefresh'
 
 type GroupedRun = Run & { group?: string | null }
+
+const VIEWS = ['runs', 'analysis-dada2', 'analysis-vsearch', 'trees', 'report', 'config'] as const
+type StudyTab = (typeof VIEWS)[number]
 
 type Dialog =
   | { mode: 'rename-study' }
@@ -25,8 +33,9 @@ export function StudyView() {
   const { study } = useParams<{ study: string }>()
   const navigate  = useNavigate()
   const toast     = useToast()
+  const refreshNav = useNavRefresh()
   const [dialog, setDialog] = useState<Dialog | null>(null)
-
+  const [view, setView] = useTabParam<StudyTab>('view', VIEWS, 'runs')
 
   const fetcher = useCallback(() => api.runs.list(study!), [study])
   const { data: runs, loading, error, refetch } = useApi(fetcher)
@@ -35,7 +44,7 @@ export function StudyView() {
   const { data: detail, refetch: refetchDetail } = useApi(studyFetcher)
 
   const configFetcher = useCallback(() => api.config.getStudy(study!), [study])
-  const { data: configMap, refetch: refetchConfig } = useApi(configFetcher)
+  const { data: configMap, loading: configLoading, error: configError, refetch: refetchConfig } = useApi(configFetcher)
 
   const overridesFetcher = useCallback(() => api.config.studyOverrides(study!), [study])
   const { data: overrides } = useApi(overridesFetcher)
@@ -52,7 +61,7 @@ export function StudyView() {
     [study],
   )
 
-  // Fetch runs from each group for the comparison panel
+  // Fetch runs from each group for the analysis workspace
   const [groupRuns, setGroupRuns] = useState<GroupedRun[]>([])
   useEffect(() => {
     if (!detail?.groups?.length) { setGroupRuns([]); return }
@@ -64,15 +73,25 @@ export function StudyView() {
       })
     ).then(results => {
       if (!cancelled) setGroupRuns(results.flat())
+    }).catch(e => {
+      if (!cancelled) toast.error(`Could not list group runs: ${e.message ?? e}`)
     })
     return () => { cancelled = true }
   }, [detail?.groups, study])
 
-  const allComparisonRuns = useMemo<ComparisonRunSpec[]>(() => {
-    const ungrouped = expandRunSpecs(runs ?? [])
-    const grouped = groupRuns.flatMap(r => expandRunSpecs([r], r.group))
-    return [...ungrouped, ...grouped]
-  }, [runs, groupRuns])
+  const analysisSource: AnnotationSource = view === 'analysis-dada2' ? 'DADA2' : 'VSEARCH'
+  const comparisonRunsFor = useCallback((source: AnnotationSource): ComparisonRunSpec[] => [
+    ...expandRunSpecs((runs ?? []).filter(r => carriesSource(r, source))),
+    ...groupRuns.filter(r => carriesSource(r, source)).flatMap(r => expandRunSpecs([r], r.group)),
+  ], [runs, groupRuns])
+  const allComparisonRuns = useMemo(() => comparisonRunsFor(analysisSource), [comparisonRunsFor, analysisSource])
+  const hasSource = (source: AnnotationSource) => runs == null || comparisonRunsFor(source).length > 0
+
+  const placementRuns = useMemo(() => [
+    ...(runs ?? []).map(r => ({ run: r.name, group: null, subgroups: r.pooled ? r.subgroups : [] })),
+    ...groupRuns.map(r => ({ run: r.name, group: r.group ?? null, subgroups: r.pooled ? r.subgroups : [] })),
+  ], [runs, groupRuns])
+  const [treesVersion, setTreesVersion] = useState(0)
 
   const jobFilter = useMemo(() => ({ study: study! }), [study])
   useJobRefetch(refetch, jobFilter)
@@ -80,7 +99,13 @@ export function StudyView() {
   const refetchAll = useCallback(() => { refetch(); refetchDetail() }, [refetch, refetchDetail])
 
   const runPipeline = async () => {
-    await api.pipeline.runStudy(study!)
+    if (!window.confirm(`Run the full pipeline for every run in '${study}'?`)) return
+    try {
+      await api.pipeline.runStudy(study!)
+      toast.success('Pipeline queued')
+    } catch (e) {
+      toast.error(`Could not start the pipeline: ${(e as Error).message}`)
+    }
     refetch()
   }
 
@@ -88,20 +113,27 @@ export function StudyView() {
     await api.studies.rename(study!, newName)
     setDialog(null)
     toast.success(`Renamed to '${newName}'`)
+    refreshNav()
     navigate(`/${newName}`)
   }
 
   const handleDeleteStudy = async () => {
     if (!window.confirm(`Delete study '${study}'? This cannot be undone.`)) return
-    await api.studies.delete(study!)
-    toast.success(`Study '${study}' deleted`)
-    navigate('/studies')
+    try {
+      await api.studies.delete(study!)
+      toast.success(`Study '${study}' deleted`)
+      refreshNav()
+      navigate('/studies')
+    } catch (e) {
+      toast.error(`Delete failed: ${(e as Error).message}`)
+    }
   }
 
   const handleNewGroup = async (name: string) => {
     await api.groups.create(study!, name)
     setDialog(null)
     toast.success(`Group '${name}' created`)
+    refreshNav()
     refetchAll()
   }
 
@@ -109,20 +141,27 @@ export function StudyView() {
     await api.groups.rename(study!, oldName, newName)
     setDialog(null)
     toast.success(`Renamed to '${newName}'`)
+    refreshNav()
     refetchDetail()
   }
 
   const handleDeleteGroup = async (name: string) => {
     if (!window.confirm(`Delete group '${name}' and all its runs? This cannot be undone.`)) return
-    await api.groups.delete(study!, name)
-    toast.success(`Group '${name}' deleted`)
-    refetchDetail()
+    try {
+      await api.groups.delete(study!, name)
+      toast.success(`Group '${name}' deleted`)
+      refreshNav()
+      refetchDetail()
+    } catch (e) {
+      toast.error(`Delete failed: ${(e as Error).message}`)
+    }
   }
 
   const handleNewRun = async (name: string) => {
     await api.runs.create(study!, name)
     setDialog(null)
     toast.success(`Run '${name}' created`)
+    refreshNav()
     refetch()
   }
 
@@ -130,14 +169,20 @@ export function StudyView() {
     await api.runs.rename(study!, oldName, newName)
     setDialog(null)
     toast.success(`Renamed to '${newName}'`)
+    refreshNav()
     refetch()
   }
 
   const handleDeleteRun = async (name: string) => {
     if (!window.confirm(`Delete run '${name}'? This cannot be undone.`)) return
-    await api.runs.delete(study!, name)
-    toast.success(`Run '${name}' deleted`)
-    refetch()
+    try {
+      await api.runs.delete(study!, name)
+      toast.success(`Run '${name}' deleted`)
+      refreshNav()
+      refetch()
+    } catch (e) {
+      toast.error(`Delete failed: ${(e as Error).message}`)
+    }
   }
 
   return (
@@ -148,23 +193,35 @@ export function StudyView() {
           {detail && (
             <p>
               {detail.run_count} run{detail.run_count !== 1 ? 's' : ''}
-              {' - '}
+              {' · '}
               {detail.group_count} group{detail.group_count !== 1 ? 's' : ''}
             </p>
           )}
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
           <button className="btn" onClick={() => setDialog({ mode: 'rename-study' })}>Rename</button>
-          <button className="btn" style={{ color: '#c92a2a', borderColor: '#ffc9c9' }} onClick={handleDeleteStudy}>Delete</button>
+          <button className="btn btn-danger" onClick={handleDeleteStudy}>Delete</button>
           <button className="btn btn-primary" onClick={runPipeline}>Run full pipeline</button>
         </div>
+      </div>
+
+      <div className="tabs" role="tablist">
+        {VIEWS.map(v => (
+          <button key={v} role="tab" aria-selected={view === v} className={`tab ${view === v ? 'active' : ''}`} onClick={() => setView(v)}
+            disabled={v.startsWith('analysis') && !hasSource(v === 'analysis-dada2' ? 'DADA2' : 'VSEARCH')}
+            title={v.startsWith('analysis') && !hasSource(v === 'analysis-dada2' ? 'DADA2' : 'VSEARCH')
+              ? `No run has a results table with ${v === 'analysis-dada2' ? 'DADA2' : 'VSEARCH'} taxonomy yet` : undefined}>
+            {v === 'runs' ? 'Runs & Groups' : v === 'analysis-dada2' ? 'DADA2 analysis' : v === 'analysis-vsearch' ? 'VSEARCH analysis' : v === 'trees' ? 'Trees' : v === 'report' ? 'Report' : 'Config'}
+          </button>
+        ))}
       </div>
 
       {loading && <Skeleton lines={3} />}
       {error   && <p className="error-msg">{error}</p>}
 
-      <h2 style={{ fontSize: '1rem', marginBottom: 8, marginTop: 24 }}>Study Config</h2>
-      {configMap && (
+      {view === 'config' && configLoading && !configMap && <Skeleton lines={4} />}
+      {view === 'config' && configError && <p className="error-msg">{configError}</p>}
+      {view === 'config' && configMap && (
         <div style={{ marginBottom: 24 }}>
           <ConfigAccordion
             configMap={configMap}
@@ -179,10 +236,14 @@ export function StudyView() {
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 24, marginBottom: 8 }}>
+      {view === 'runs' && <>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <h2 style={{ fontSize: '1rem' }}>Groups</h2>
-        <button className="btn" style={{ padding: '3px 10px', fontSize: '.82rem' }} onClick={() => setDialog({ mode: 'new-group' })}>+ New Group</button>
+        <button className="btn btn-sm" onClick={() => setDialog({ mode: 'new-group' })}>+ New Group</button>
       </div>
+      {detail && (!detail.groups || detail.groups.length === 0) && (
+        <p style={{ color: 'var(--color-muted-fg)', fontSize: '.88rem' }}>No groups yet.</p>
+      )}
       {detail && detail.groups && detail.groups.length > 0 && (
         <div className="card-grid">
           {detail.groups.map((group: string) => (
@@ -204,7 +265,7 @@ export function StudyView() {
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 24, marginBottom: 8 }}>
         <h2 style={{ fontSize: '1rem' }}>Runs</h2>
-        <button className="btn" style={{ padding: '3px 10px', fontSize: '.82rem' }} onClick={() => setDialog({ mode: 'new-run' })}>+ New Run</button>
+        <button className="btn btn-sm" onClick={() => setDialog({ mode: 'new-run' })}>+ New Run</button>
       </div>
 
       {runs && runs.length > 0 && (
@@ -227,9 +288,18 @@ export function StudyView() {
         <p style={{ color: 'var(--color-muted-fg)', fontSize: '.88rem' }}>No runs yet. Add FASTQ files or create a run above.</p>
       )}
 
-      {allComparisonRuns.length >= 2 && (
-        <ComparisonPanel study={study!} runs={allComparisonRuns} />
-      )}
+      </>}
+
+      {view.startsWith('analysis') && (allComparisonRuns.length > 0
+        ? <AnalysisWorkspace key={view} study={study!} runs={allComparisonRuns}
+            source={analysisSource} />
+        : <p className="empty-state">No run has a results table with {analysisSource} taxonomy yet.</p>)}
+
+      {view === 'trees' && <>
+        <PlacementPanel study={study!} runs={placementRuns} onPublished={() => setTreesVersion(v => v + 1)} />
+        <TreesPanel key={treesVersion} study={study!} />
+      </>}
+      {view === 'report' && <ReportPanel study={study!} />}
 
       {dialog?.mode === 'rename-study' && (
         <NameDialog

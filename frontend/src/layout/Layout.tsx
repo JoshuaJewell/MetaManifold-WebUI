@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { NavLink, Outlet, useParams } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useSSE } from '../hooks/useSSE'
 import { api } from '../api/client'
@@ -7,10 +7,15 @@ import { createJobEventBus, JobEventContext, SSEConnectedContext } from '../hook
 import { Breadcrumb } from '../components/Breadcrumb'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import type { Job, StudySummary } from '../api/types'
+import { COPYRIGHT, LICENSE_URL, SOURCE_URL } from '../about'
+import { NavRefreshContext } from '../hooks/useNavRefresh'
 
 export function Layout() {
   const { study, group: groupParam, slug } = useParams<{ study?: string; group?: string; slug?: string }>()
-  const { data: studies } = useApi(api.studies.list)
+  const { pathname } = useLocation()
+  const { data: studies, refetch: refetchStudies } = useApi(api.studies.list)
+  const [navOpen, setNavOpen] = useState(false)
+  useEffect(() => { setNavOpen(false) }, [pathname])
   const [runningJobIds, setRunningJobIds] = useState<Set<string>>(new Set())
 
   const jobBus = useMemo(() => createJobEventBus(), [])
@@ -39,7 +44,7 @@ export function Layout() {
     () => study ? api.studies.get(study) : Promise.resolve(null),
     [study]
   )
-  const { data: studyDetail } = useApi(studyFetcher)
+  const { data: studyDetail, refetch: refetchDetail } = useApi(studyFetcher)
 
   const activeGroup = groupParam ?? (studyDetail?.groups?.includes(slug!) ? slug : undefined)
 
@@ -47,11 +52,17 @@ export function Layout() {
     () => study && activeGroup ? api.runs.listGroup(study, activeGroup) : Promise.resolve(null),
     [study, activeGroup]
   )
-  const { data: groupRuns } = useApi(groupRunsFetcher)
+  const { data: groupRuns, refetch: refetchGroupRuns } = useApi(groupRunsFetcher)
+
+  const refreshNav = useCallback(() => {
+    refetchStudies()
+    refetchDetail()
+    refetchGroupRuns()
+  }, [refetchStudies, refetchDetail, refetchGroupRuns])
 
   return (
-    <div className="app-layout">
-      <nav className="sidebar">
+    <div className={`app-layout ${navOpen ? 'nav-open' : ''}`}>
+      <nav className="sidebar" id="sidebar">
         <div className="sidebar-brand">MetaManifold</div>
 
         <NavLink to="/studies" end className={({ isActive }) => `sidebar-section sidebar-section-link ${isActive ? 'active' : ''}`}>
@@ -115,20 +126,31 @@ export function Layout() {
         </NavLink>
         <NavLink to="/databases" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Databases</NavLink>
         <NavLink to="/config" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Default Config</NavLink>
-        <NavLink to="/compositions" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Compositions</NavLink>
         <NavLink to="/primers" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Primers</NavLink>
-        <div style={{ height: 12 }} />
+        <NavLink to="/compositions" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Compositions</NavLink>
+        <NavLink to="/reference-trees" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Reference trees</NavLink>
+        <NavLink to="/about" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>About</NavLink>
+        <div className="sidebar-legal">
+          {COPYRIGHT} · <a href={LICENSE_URL} target="_blank" rel="noreferrer">AGPL-3.0</a> ·{' '}
+          <a href={SOURCE_URL} target="_blank" rel="noreferrer">Source and Documentation</a>
+        </div>
       </nav>
 
+      {navOpen && <div className="sidebar-backdrop" onClick={() => setNavOpen(false)} />}
+
       <main className="main-content">
+        <button className="btn btn-sm nav-toggle" aria-controls="sidebar" aria-expanded={navOpen}
+          onClick={() => setNavOpen(o => !o)}>☰ Menu</button>
+        <NavRefreshContext.Provider value={refreshNav}>
         <JobEventContext.Provider value={jobBus}>
           <SSEConnectedContext.Provider value={sseConnected}>
             <Breadcrumb />
-            <ErrorBoundary>
+            <ErrorBoundary key={pathname}>
               <Outlet />
             </ErrorBoundary>
           </SSEConnectedContext.Provider>
         </JobEventContext.Provider>
+        </NavRefreshContext.Provider>
       </main>
     </div>
   )

@@ -101,9 +101,14 @@ end
 # Resolve the tagging source (the taxonomy side, VSEARCH or DADA2, read at merge
 # time for both rank and category labelling) from a run's run_config.yml, falling
 # back to `fallback` when the config is absent or the tagging block is missing.
+#
+# An analysis request that names a classifier (the DADA2 and VSEARCH analysis
+# tabs) overrides the configured source for that request.
 function _tagging_source(study::String, run::String;
                          group::Union{String,Nothing}=nothing,
                          fallback::String="VSEARCH")
+    src = _analysis_source()
+    isnothing(src) || return src
     cfg = _load_run_config(_run_project_dir(study, run; group))
     isnothing(cfg) && return fallback
     string(get(get(cfg, "tagging", Dict()), "source", fallback))
@@ -350,7 +355,8 @@ function _run_data(study::String, run::String;
     ) for s in STAGES)
 
     (; name=run, study, group=resolved, sample_count=length(samples), samples,
-     stages, pooled, subgroups)
+     stages, pooled, subgroups,
+     taxonomy_sources=_taxonomy_sources(study, run; group=resolved))
 end
 
 @get "/api/v1/studies/{study}/runs" function(req, study::String)
@@ -365,7 +371,8 @@ end
         statuses, _ = _all_stage_statuses(run_dir; study)
         stages   = Dict(s => (; status=statuses[s]) for s in STAGES)
         (; name=run, study, sample_count=length(samples), stages, pooled,
-         subgroups=pooled ? _subgroup_names(data_dir) : String[])
+         subgroups=pooled ? _subgroup_names(data_dir) : String[],
+         taxonomy_sources=_taxonomy_sources(study, run))
     end
     json(runs)
 end
@@ -385,7 +392,8 @@ end
                       (Dict(s => "not_started" for s in STAGES), Dict{String,Vector{String}}())
         stages   = Dict(s => (; status=statuses[s]) for s in STAGES)
         (; name=run, study, group, sample_count=length(samples), stages, pooled,
-         subgroups=pooled ? _subgroup_names(data_dir) : String[])
+         subgroups=pooled ? _subgroup_names(data_dir) : String[],
+         taxonomy_sources=_taxonomy_sources(study, run; group))
     end
     json(runs)
 end
@@ -415,6 +423,8 @@ end
     name = string(name)
     _valid_name(name) || return json_error(400, "invalid_name",
         "Name must contain only letters, digits, hyphens, underscores, or dots")
+    isnothing(group) || _valid_name(string(group)) ||
+        return json_error(400, "invalid_group", "Invalid group name")
     all_run_names = _all_run_names(study)
     name in all_run_names && return json_error(409, "run_exists",
         "Run '$name' already exists in study '$study'")
@@ -426,10 +436,8 @@ end
 end
 
 @post "/api/v1/studies/{study}/runs/{run}/rename" function(req, study::String, run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                          "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     body = JSON3.read(String(req.body))
     new_name = get(body, :name, nothing)
     isnothing(new_name) && return json_error(400, "missing_name", "Body must include 'name'")
@@ -453,10 +461,8 @@ end
 end
 
 @delete "/api/v1/studies/{study}/runs/{run}" function(req, study::String, run::String)
-    study in _study_names() || return json_error(404, "study_not_found",
-                                                     "Study '$study' not found")
-    run in _all_run_names(study) || return json_error(404, "run_not_found",
-                                                          "Run '$run' not found")
+    err = _validate_run_request(study, run)
+    isnothing(err) || return err
     _run_has_active_jobs(study, run) && return json_error(409, "jobs_active",
         "Run '$run' has active jobs - wait for them to finish before deleting")
     group   = let g = _req_group(req); isnothing(g) ? _run_group(study, run) : g end

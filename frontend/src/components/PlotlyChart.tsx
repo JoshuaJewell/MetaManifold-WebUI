@@ -55,9 +55,10 @@ export function PlotlyChart({ figure, className, heightRatio = 0.6 }: Props) {
     const plot = plotRef.current
     if (!wrap || !plot) return
     const ro = new ResizeObserver(() => {
-      if (!ready.current) return
       const w = wrap.clientWidth
       const h = wrap.clientHeight
+      // A hidden tab reports 0 x 0, which Plotly cannot lay out.
+      if (!ready.current || w === 0 || h === 0) return
       Plotly.relayout(plot, { height: h, width: w })
       setDims(prev => (prev?.w === w && prev?.h === h) ? prev : { w, h })
     })
