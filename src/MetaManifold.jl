@@ -17,16 +17,20 @@ include("core/primers_library.jl")
 include("core/databases_library.jl")
 
 # Annotation
-include("annotation/funcdb.jl")
 
 # Pipeline
 include("pipeline/tools.jl")
+include("pipeline/remote_exec.jl")
 include("pipeline/merge_taxa.jl")
 include("pipeline/dada2.jl")
 include("pipeline/swarm.jl")
+include("pipeline/phylogeny.jl")
 
 # Analysis
 include("analysis/diversity.jl")
 include("analysis/analysis.jl")
+
+# Web server
+include("server/server.jl")
 
 end

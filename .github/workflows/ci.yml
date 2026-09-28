@@ -156,6 +156,10 @@ jobs:
           bun install --frozen-lockfile
           bun run build
 
+      - name: Frontend unit tests
+        working-directory: frontend
+        run: bun run test
+
       - name: Download PR2 databases
         run: julia --project=. config/ci/download_databases.jl
 
@@ -184,7 +188,7 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
-          file: lcov.info
+          files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: JoshuaJewell/MetaManifold-WebUI
           fail_ci_if_error: false

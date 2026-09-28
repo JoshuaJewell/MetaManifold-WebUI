@@ -1,14 +1,12 @@
 # Unit tests for the HTTP server's route helper functions.
 #
-# server.jl includes the route files into `module Server`, defining their
-# helper functions in that scope. Including it here (rather than spawning a
-# subprocess as the smoke tests do) lets these helpers run inside the
-# coverage-instrumented process, so their lines are counted. Including the
+# The route helpers live in `MetaManifold.Server`. Calling them here (rather
+# than through a subprocess as the smoke tests do) runs them inside the
+# coverage-instrumented process, so their lines are counted. Loading the
 # module does not start the HTTP listener; only Server.start() does that.
-if !isdefined(Main, :Server)
-    include(joinpath(@__DIR__, "..", "..", "src", "server", "server.jl"))
-end
-SV = Main.Server
+using MetaManifold
+SV = MetaManifold.Server
+_saved_root = SV.ServerState._root[]
 
 @testset "Route helpers" begin
 
@@ -138,6 +136,35 @@ SV = Main.Server
     end
 
     ## pipeline.jl: the database key a run's config names
+    ## results.jl: which classifiers a run's merged table carries
+    @testset "_taxonomy_sources" begin
+        tmp = mktempdir()
+        old_root = SV.ServerState._root[]
+        try
+            for r in ("run1", "run2", "run3")
+                mkpath(joinpath(tmp, "data", "studyT", r))
+                touch(joinpath(tmp, "data", "studyT", r, "s_R1.fastq.gz"))
+            end
+            SV.ServerState.set_root!(tmp)
+            make(run, cols) = let dir = joinpath(tmp, "projects", "studyT", run, "merged")
+                mkpath(dir)
+                db = DuckDB.DB(joinpath(dir, "results.duckdb"))
+                con = DBInterface.connect(db)
+                DBInterface.execute(con, "CREATE TABLE merged (SeqName VARCHAR, $(join(["$c VARCHAR" for c in cols], ", ")), s_1 BIGINT)")
+                DBInterface.close!(con); close(db)
+            end
+            make("run1", ["Genus_dada2"])
+            make("run2", ["Genus", "Pident", "Genus_dada2"])
+            @test SV._taxonomy_sources("studyT", "run1") == ["DADA2"]
+            @test SV._taxonomy_sources("studyT", "run2") == ["VSEARCH", "DADA2"]
+            # No results database yet.
+            @test SV._taxonomy_sources("studyT", "run3") == String[]
+        finally
+            SV.ServerState.set_root!(old_root)
+            rm(tmp; recursive=true, force=true)
+        end
+    end
+
     @testset "_run_database" begin
         # The route must honour the run's config, as DADA2's _resolve_taxonomy_db
         # and Validation.validate_project both already do. _load_dbs read a `default:`
@@ -155,59 +182,12 @@ SV = Main.Server
         @test SV._run_database(Dict("dada2" => Dict("taxonomy" => "scalar"))) == "pr2"
     end
 
-    ## annotations.jl: source validation and taxon-column mapping
-    @testset "annotation helpers" begin
+    ## sources.jl: taxonomy source validation
+    @testset "source validation" begin
         @test SV._validate_source("VSEARCH")
         @test SV._validate_source("DADA2")
         @test !SV._validate_source("BLAST")
         @test !SV._validate_source("")
-
-        ## Every rank in the hierarchy maps to its source-specific column.
-        for entry in MetaManifold.FuncDBAnnotation.RANK_HIERARCHY
-            @test SV._matched_taxon_column("VSEARCH", entry.rank) == entry.vsearch
-            @test SV._matched_taxon_column("DADA2", entry.rank) == entry.dada2
-            @test SV._annotation_required_col("VSEARCH", entry.rank) == entry.vsearch
-        end
-        @test SV._matched_taxon_column("VSEARCH", "no_such_rank") === nothing
-
-        ## The BLAST assignment column is synthesised when absent.
-        @test SV._annotation_select_expr(["Genus"]) ==
-              "*, '' AS \"BLAST Assignment\""
-        @test SV._annotation_select_expr(["Genus", "BLAST Assignment"]) == "*"
-        @test SV._annotation_response_columns(["Genus"]) ==
-              ["Genus", "BLAST Assignment"]
-        @test SV._annotation_response_columns(["Genus", "BLAST Assignment"]) ==
-              ["Genus", "BLAST Assignment"]
-    end
-
-    ## config.jl: per-study chart cosmetics resolution
-    @testset "chart cosmetics" begin
-        tmp = mktempdir()
-        study_dir = joinpath(tmp, "data", "StudyX"); mkpath(study_dir)
-        old_root = SV.ServerState._root[]
-        SV.ServerState.set_root!(tmp)
-        try
-            @test isempty(SV._resolve_chart_cosmetics("StudyX", "taxa_bar"))
-
-            write(joinpath(study_dir, "pipeline.yml"), """
-            chart_cosmetics:
-              taxa_bar:
-                layout:
-                  title:
-                    text: My bars
-                traces:
-                  Bacteria:
-                    marker:
-                      color: "#00ff00"
-            """)
-            cos = SV._resolve_chart_cosmetics("StudyX", "taxa_bar")
-            @test cos["layout"]["title"]["text"] == "My bars"
-            @test cos["traces"]["Bacteria"]["marker"]["color"] == "#00ff00"
-            @test isempty(SV._resolve_chart_cosmetics("StudyX", "alpha_richness"))
-        finally
-            SV.ServerState.set_root!(old_root)
-            rm(tmp; recursive=true, force=true)
-        end
     end
 
     ## analysis.jl: aggregate run expansion
@@ -291,6 +271,21 @@ SV = Main.Server
         @test Set(res.segment_labels) == Set(["Chlorella", "Escherichia", "Clostridium"])
         @test Set(res.sample_names) == Set(all_scols)
         @test size(res.counts) == (3, 4)
+
+        ## Counts are read sums per (label, sample), never a count of ASVs and
+        ## never depth-normalised. Rarefaction belongs to the diversity and
+        ## ordination surfaces; on a composition bar it would rescale every
+        ## sample to the smallest positive library in the set, so a single
+        ## shallow sample would flatten the whole chart to that sample's total.
+        by_label = Dict(res.segment_labels[i] => res.counts[i, :] for i in eachindex(res.segment_labels))
+        col = Dict(c => i for (i, c) in enumerate(res.sample_names))
+        # Chlorella is one ASV (seq1) but 10 reads in A_s1: a read sum, not a row count.
+        @test by_label["Chlorella"][col["A_s1"]] == 10.0
+        @test by_label["Escherichia"][col["A_s2"]] == 20.0
+        # A_s1 totals 15 reads and A_s2 totals 25; unequal library sizes survive,
+        # which is what depth normalisation would have destroyed.
+        @test sum(res.counts[:, col["A_s1"]]) == 15.0
+        @test sum(res.counts[:, col["A_s2"]]) == 25.0
 
         ## tag=rank, subgroup prefix "A": only A_s1 and A_s2
         res_A = SV._chart_data(con, "merged", columns, all_scols,
@@ -404,7 +399,7 @@ SV = Main.Server
                   - { name: NotHost }
             """)
 
-            columns = ["SeqName", "Class", "A_s1"]
+            columns = ["SeqName", "Class", "Pident", "A_s1"]
             conds = SV._exclusion_conditions(study, run, nothing, columns; surface="diversity")
             @test !isempty(conds)
             @test occursin("'Host'", conds[1])
@@ -928,3 +923,6 @@ SV = Main.Server
     end
 
 end
+
+# Testsets above point the server at temporary roots.
+SV.ServerState._root[] = _saved_root

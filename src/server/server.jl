@@ -4,23 +4,21 @@ module Server
     #
     # This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-    # MetaManifold WebUI backend
+    # MetaManifold WebUI backend, a submodule of the package so that its
+    # compiled code is cached with it.
     #
-    # Start with:
-    #   julia --project=. src/server/server.jl
-    # or from a Julia session:
-    #   include("src/server/server.jl"); Server.start()
-    # or via start.sh
+    # Start with start.sh, `julia --project=. scripts/serve.jl`, or from a
+    # Julia session: `using MetaManifold; MetaManifold.Server.start()`.
 
-    using MetaManifold
+    import ..MetaManifold
     using Oxygen, HTTP, JSON3, YAML, Logging
+    using PrecompileTools: @setup_workload, @compile_workload
 
-    using MetaManifold.PipelineTypes, MetaManifold.PipelineLog, MetaManifold.Config
-    using MetaManifold.Databases, MetaManifold.DuckDBStore, MetaManifold.Validation
-    using MetaManifold.FuncDBAnnotation
-    using MetaManifold.Tools, MetaManifold.TaxonomyTableTools, MetaManifold.ProjectSetup
-    using MetaManifold.DADA2, MetaManifold.OTUPipeline
-    using MetaManifold.DiversityMetrics, MetaManifold.Analysis
+    using ..PipelineTypes, ..PipelineLog, ..Config
+    using ..Databases, ..DuckDBStore, ..Validation
+    using ..Tools, ..TaxonomyTableTools, ..ProjectSetup
+    using ..DADA2, ..OTUPipeline
+    using ..DiversityMetrics, ..Analysis
 
     ## EPIPE log filter
     # HTTP.jl logs every broken-pipe error from SSE streams as @error
@@ -72,19 +70,121 @@ module Server
             body = JSON3.write(body))
     end
 
+    ## Route registration
+    # Oxygen's routing macros register with its global router as the file
+    # loads. A precompiled module does not load its files again, so these
+    # macros shadow Oxygen's and collect the routes, and `__init__` registers
+    # them each time the package is loaded.
+    const ROUTES = Tuple{String,Any,Function}[]
+    _route(method, path, func) = let (p, f) = Oxygen.adjustparams(path, func)
+        :(push!(ROUTES, ($method, $(esc(p)), $(esc(f)))))
+    end
+    macro get(path, func = nothing)    _route("GET", path, func) end
+    macro post(path, func = nothing)   _route("POST", path, func) end
+    macro put(path, func = nothing)    _route("PUT", path, func) end
+    macro patch(path, func = nothing)  _route("PATCH", path, func) end
+    macro delete(path, func = nothing) _route("DELETE", path, func) end
+    macro stream(path, func = nothing) _route("STREAM", path, func) end
+
+    register_routes!() = foreach(((m, p, f),) -> Oxygen.route([m], p, f), ROUTES)
+    __init__() = register_routes!()
+
     ## Routes
     include(joinpath(@__DIR__, "routes", "duckdb_helpers.jl"))
+    include(joinpath(@__DIR__, "routes", "heatmap.jl"))
     include(joinpath(@__DIR__, "routes", "studies.jl"))
     include(joinpath(@__DIR__, "routes", "runs.jl"))
     include(joinpath(@__DIR__, "routes", "config.jl"))
     include(joinpath(@__DIR__, "routes", "pipeline.jl"))
     include(joinpath(@__DIR__, "routes", "jobs.jl"))
     include(joinpath(@__DIR__, "routes", "results.jl"))
-    include(joinpath(@__DIR__, "routes", "annotations.jl"))
+    include(joinpath(@__DIR__, "routes", "sources.jl"))
     include(joinpath(@__DIR__, "routes", "databases.jl"))
     include(joinpath(@__DIR__, "routes", "events.jl"))
     include(joinpath(@__DIR__, "routes", "analysis.jl"))
+    include(joinpath(@__DIR__, "routes", "read_funnel.jl"))
     include(joinpath(@__DIR__, "routes", "composition.jl"))
+    include(joinpath(@__DIR__, "routes", "publication_tables.jl"))
+    include(joinpath(@__DIR__, "routes", "trees.jl"))
+    include(joinpath(@__DIR__, "routes", "report.jl"))
+    include(joinpath(@__DIR__, "routes", "figures.jl"))
+    include(joinpath(@__DIR__, "routes", "phylogeny.jl"))
+
+    ## Bad request middleware
+    # Helpers deep in a route (e.g. `_req_group`) throw this to reject a request.
+    struct BadRequest <: Exception
+        message::String
+    end
+
+    # Oxygen URL-decodes path parameters, so an encoded '/' would reach a handler
+    # as a real separator. No study, run, table, column or file name needs one.
+    function _unsafe_path_segment(target::AbstractString)
+        path = first(split(target, '?'; limit=2))
+        startswith(path, "/api/") || return nothing
+        for seg in split(path, '/')
+            d = HTTP.URIs.unescapeuri(seg)
+            (d in (".", "..") || any(c -> c in ('/', '\\', '"', '\0'), d)) && return d
+        end
+        nothing
+    end
+
+    function _bad_request_middleware(next)
+        function(req::HTTP.Request)
+            bad = _unsafe_path_segment(req.target)
+            isnothing(bad) || return json_error(400, "bad_request", "Invalid path segment: $(repr(bad))")
+            if startswith(req.target, "/api/")
+                g = get(HTTP.queryparams(HTTP.URI(req.target)), "group", "")
+                isempty(g) || _valid_name(g) ||
+                    return json_error(400, "bad_request", "Invalid group name: $(repr(g))")
+            end
+            try
+                next(req)
+            catch e
+                e isa BadRequest || rethrow()
+                json_error(400, "bad_request", e.message)
+            end
+        end
+    end
+
+    ## Analysis source
+    # The classifier an analysis request names (body or query `source`), held for
+    # the request so column resolution can follow it; nothing keeps the configured one.
+    _analysis_source() = get(task_local_storage(), :mm_analysis_source, nothing)
+
+    function _request_source(req::HTTP.Request)
+        occursin(r"/(analysis|composition)(/|\?|$)", req.target) || return nothing
+        q = get(HTTP.queryparams(HTTP.URI(req.target)), "source", nothing)
+        if isnothing(q) && req.method == "POST" && !isempty(req.body)
+            body = try JSON3.read(String(copy(req.body))) catch; nothing end
+            if body isa JSON3.Object
+                q = get(body, :source, nothing)
+                # Cross-run requests carry it on their run specs.
+                runs = get(body, :runs, nothing)
+                if isnothing(q) && runs isa AbstractVector && !isempty(runs) && first(runs) isa JSON3.Object
+                    q = get(first(runs), :source, nothing)
+                end
+            end
+        end
+        q isa AbstractString || return nothing
+        s = uppercase(q)
+        s in ("VSEARCH", "DADA2") ? s : nothing
+    end
+
+    function _analysis_source_middleware(next)
+        function(req::HTTP.Request)
+            src = _request_source(req)
+            isnothing(src) && return next(req)
+            task_local_storage(() -> next(req), :mm_analysis_source, src)
+        end
+    end
+
+    # Rank and category columns for the request's source.
+    _rank_column(columns, rank::AbstractString) = let src = _analysis_source()
+        isnothing(src) ? MetaManifold.Analysis.taxon_column(columns, String(rank)) :
+                         MetaManifold.Categories.rank_col(rank, src, Set(columns))
+    end
+    _category_column(set_name::AbstractString) = MetaManifold.Categories.column_name(set_name, _analysis_source())
+    _suffixed() = !isnothing(_analysis_source())
 
     ## R-runtime busy middleware
     # The embedded R interpreter is shared between the pipeline and the analysis
@@ -105,8 +205,17 @@ module Server
     end
 
     ## CORS middleware (needed when the frontend is served from a different origin)
+    # Loopback binds also check Host, so a DNS-rebinding page cannot read the API.
+    const _bound_host = Ref("127.0.0.1")
+    _is_loopback(h::AbstractString) = lowercase(h) in ("localhost", "127.0.0.1", "::1", "[::1]")
+
     function _cors_middleware(next)
         function(req::HTTP.Request)
+            if _is_loopback(_bound_host[])
+                host = replace(HTTP.header(req, "Host", ""), r":\d+\z" => "")
+                isempty(host) || _is_loopback(host) ||
+                    return HTTP.Response(403, "Forbidden: unexpected Host")
+            end
             origin = HTTP.header(req, "Origin", "")
             if isempty(origin)
                 # Same-origin request - no CORS headers needed
@@ -167,9 +276,11 @@ module Server
             startswith(uri, "/api/") && return next(req)
 
             # SPA catch-all: serve frontend build or index.html
-            rel    = lstrip(uri, '/')
-            target = joinpath(_frontend_dir, rel)
-            if isfile(target)
+            rel    = lstrip(HTTP.URIs.unescapeuri(uri), '/')
+            root   = abspath(_frontend_dir)
+            target = abspath(joinpath(root, rel))
+            inside = startswith(target, root * Base.Filesystem.path_separator)
+            if inside && isfile(target)
                 ext  = last(splitext(target))
                 mime = get(_mime_map, ext, "application/octet-stream")
                 # Content-hashed assets (js/css in assets/) are immutable.
@@ -190,10 +301,51 @@ module Server
         end
     end
 
+    ## Startup warm-up
+    # The precompile workload (precompile.jl) compiles the routes a first visit
+    # uses into the package cache. A developer who turns it off in
+    # LocalPreferences.toml gets the same requests made once in the background
+    # as the server starts, so the first page visit does not wait on compilation.
+    _workload_enabled() =
+        get(Base.get_preferences(Base.PkgId(MetaManifold).uuid), "precompile_workload", true) !== false
+    function _warm_routes(host::String, port::Int)
+        base = "http://$(host == "0.0.0.0" ? "127.0.0.1" : host):$port/api/v1"
+        fetch(path) = try
+            # Closed after each request: an idle keep-alive connection back to this
+            # server would hold its shutdown open.
+            r = HTTP.get(base * path, ["Connection" => "close"];
+                         status_exception=false, retry=false, readtimeout=600)
+            r.status == 200 ? JSON3.read(r.body) : nothing
+        catch
+            nothing
+        end
+        for _ in 1:240
+            isnothing(fetch("/studies")) || break
+            sleep(0.5)
+        end
+        t0 = time()
+        fetch("/jobs")
+        for s in something(fetch("/studies"), [])
+            study = HTTP.escapeuri(String(s.name))
+            detail = fetch("/studies/$study")
+            isnothing(detail) && continue
+            foreach(fetch, ("/studies/$study/config", "/studies/$study/config/overrides",
+                            "/studies/$study/runs"))
+            runs = get(detail, :runs, [])
+            isempty(runs) && continue
+            run = "/studies/$study/runs/$(HTTP.escapeuri(String(first(runs))))"
+            foreach(fetch, (run, "$run/config", "$run/results/qc", "$run/results/dada2",
+                            "$run/results/tables", "$run/analysis/read-funnel"))
+            break
+        end
+        @info "Routes warmed" seconds = round(time() - t0; digits=1)
+    end
+
     ## Entry point
     function start(; root=pwd(), host="127.0.0.1", port=8080, listen::Bool=true)
         global_logger(_SuppressEpipe(global_logger()))
         ServerState.set_root!(root)
+        _bound_host[] = host
         @info "MetaManifold server starting" root host port
 
         # Initialise all projects on startup
@@ -201,18 +353,22 @@ module Server
         isempty(initialised) || @info "Initialised projects" initialised
 
         listen || return nothing
+        _workload_enabled() || errormonitor(@async _warm_routes(host, port))
         serve(; host, port, access_log=nothing,
-              middleware=[_r_busy_middleware, _cors_middleware, _file_middleware],
+              middleware=[_bad_request_middleware, _r_busy_middleware, _cors_middleware,
+                          _analysis_source_middleware, _file_middleware],
               show_errors=false)
     end
 
-end
+    """
+        main()
 
-# Allow running directly: julia src/server/server.jl
-# Respects env vars JULIA_METAMANIFOLD_ROOT and JULIA_METAMANIFOLD_PORT for
-# headless/subprocess startup (e.g. integration tests).
-if abspath(PROGRAM_FILE) == @__FILE__
-    root = get(ENV, "JULIA_METAMANIFOLD_ROOT", pwd())
-    port = parse(Int, get(ENV, "JULIA_METAMANIFOLD_PORT", "8080"))
-    Server.start(; root, port)
+    Start the server with the root and port from `JULIA_METAMANIFOLD_ROOT` and
+    `JULIA_METAMANIFOLD_PORT`, as start.sh and the integration tests do.
+    """
+    main() = start(; root=get(ENV, "JULIA_METAMANIFOLD_ROOT", pwd()),
+                     port=parse(Int, get(ENV, "JULIA_METAMANIFOLD_PORT", "8080")))
+
+    include(joinpath(@__DIR__, "precompile.jl"))
+
 end

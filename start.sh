@@ -3,45 +3,59 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 ## Frontend build
+# install.sh puts the pinned bun in bin/; a bun on PATH is the fallback.
+BUN=""
+if [ -x bin/bun ]; then
+  BUN="$(pwd)/bin/bun"
+elif command -v bun >/dev/null 2>&1; then
+  BUN="$(command -v bun)"
+fi
 
-has_bundled_frontend() {
-  [ -f web/dist/index.html ] && [ -f web/dist/config.json ]
+frontend_stale() {
+  [ -f web/dist/index.html ] || return 0
+  [ -n "$(find frontend/src frontend/public frontend/index.html frontend/package.json \
+            frontend/bun.lock frontend/vite.config.ts frontend/tsconfig.json \
+            -newer web/dist/index.html -print -quit 2>/dev/null)" ]
 }
 
-build_frontend() {
-  if command -v bun >/dev/null 2>&1; then
-    (cd frontend && bun install --frozen-lockfile && bun run build)
-    return
+if [ "${BUILD:-0}" = "1" ] || frontend_stale; then
+  if [ -z "$BUN" ]; then
+    echo "The frontend needs building and bun was not found. Run ./install.sh first." >&2
+    exit 1
   fi
-
-  if [ -x frontend/node_modules/.bin/tsc ] && [ -x frontend/node_modules/.bin/vite ]; then
-    (cd frontend && ./node_modules/.bin/tsc && ./node_modules/.bin/vite build)
-    return
-  fi
-
-  echo "No frontend build toolchain found. Install bun or restore frontend/node_modules." >&2
-  exit 1
-}
-
-if [ "${BUILD:-0}" = "1" ]; then
   echo "Building frontend..."
-  build_frontend
-elif has_bundled_frontend; then
-  echo "Using bundled frontend from web/dist"
-else
-  echo "Bundled frontend not found. Building frontend..."
-  build_frontend
+  (cd frontend && "$BUN" install --frozen-lockfile && "$BUN" run build)
 fi
 
 ## Backend
+
+# Fall back to juliaup's shim dir if julia isn't already on PATH (e.g. a fresh
+# shell that never sourced ~/.juliaup/env after install.sh ran).
+if ! command -v julia >/dev/null 2>&1; then
+  if [ -f "$HOME/.juliaup/env" ]; then
+    # shellcheck disable=SC1091
+    . "$HOME/.juliaup/env"
+  fi
+  [ -x "$HOME/.juliaup/bin/julia" ] && PATH="$HOME/.juliaup/bin:$PATH"
+fi
+
+if ! command -v julia >/dev/null 2>&1; then
+  echo "julia not found on PATH." >&2
+  echo "Run ./install.sh, or add juliaup to your PATH:" >&2
+  echo '  export PATH="$HOME/.juliaup/bin:$PATH"' >&2
+  exit 1
+fi
 
 export JULIA_METAMANIFOLD_ROOT="${JULIA_METAMANIFOLD_ROOT:-$(pwd)}"
 export JULIA_METAMANIFOLD_PORT="${JULIA_METAMANIFOLD_PORT:-8080}"
 
 JULIA_THREADS="${JULIA_THREADS:-8}"
 JULIA_ARGS=(--project=. --threads="$JULIA_THREADS")
-if [ -f MetaManifold.so ]; then
-  JULIA_ARGS+=(--sysimage MetaManifold.so)
-fi
+for sysimage in MetaManifold.so MetaManifold.dylib; do
+  if [ -f "$sysimage" ]; then
+    JULIA_ARGS+=(--sysimage "$sysimage")
+    break
+  fi
+done
 
-exec julia "${JULIA_ARGS[@]}" src/server/server.jl
+exec julia "${JULIA_ARGS[@]}" scripts/serve.jl

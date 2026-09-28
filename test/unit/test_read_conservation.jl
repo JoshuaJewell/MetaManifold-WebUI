@@ -21,10 +21,8 @@
 # turned 100 reads into 200, and the data-table path summed integer OTU identifiers
 # as though they were reads. All are now fixed, and these guard the fixes.
 
-if !isdefined(Main, :Server)
-    include(joinpath(@__DIR__, "..", "..", "src", "server", "server.jl"))
-end
-SV = Main.Server
+using MetaManifold
+SV = MetaManifold.Server
 
 ## A merged table shaped as the annotation step leaves it: two genuine sample
 # columns, the derived `total_<subgroup>` and `total` aggregates written by

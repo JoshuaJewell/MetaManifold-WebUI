@@ -1,9 +1,8 @@
 # Precompile execution script for PackageCompiler sysimage build.
 #
 # Exercises MetaManifold code paths so all method specializations are
-# traced and compiled to native code. Only covers the MetaManifold package
-# (core, pipeline, analysis) - NOT the Server module, which is loaded at
-# runtime via include().
+# traced and compiled to native code. The server's routes are covered by the
+# package's own precompile workload in src/server/precompile.jl.
 
 using MetaManifold
 using MetaManifold.PipelineTypes, MetaManifold.PipelineLog, MetaManifold.Config

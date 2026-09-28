@@ -26,8 +26,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
+# C extensions and the Julia sysimage (MetaManifold.so / .dylib / .dll)
 *.so
+*.dylib
+*.dll
 
 # Distribution / packaging
 .Python
@@ -48,12 +50,6 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-!web/dist/
-!web/dist/index.html
-!web/dist/config.json
-!web/dist/assets/
-!web/dist/assets/*.js
-!web/dist/assets/*.css
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -66,6 +62,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
+lcov.info
 htmlcov/
 .tox/
 .nox/
@@ -326,3 +323,12 @@ archive/
 
 # Brainstorming visual-companion scratch (mock-ups, server state)
 .superpowers/
+
+# Reference tree library (machine data)
+reference_trees/
+
+# Per-machine Julia preferences, e.g. skipping the precompile workload while developing
+LocalPreferences.toml
+
+# Development server log (dev/dev.sh)
+dev/server.log

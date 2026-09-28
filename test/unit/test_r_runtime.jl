@@ -14,10 +14,8 @@
 # was enough to provoke it, since a pipeline runs on a background thread while the
 # browser stays live.
 
-if !isdefined(Main, :Server)
-    include(joinpath(@__DIR__, "..", "..", "src", "server", "server.jl"))
-end
-SV = Main.Server
+using MetaManifold
+SV = MetaManifold.Server
 
 using MetaManifold.RRuntime
 const RR = MetaManifold.RRuntime
@@ -72,9 +70,9 @@ const RR = MetaManifold.RRuntime
         @test !RR.r_busy()
     end
 
-    ## An analysis degrades rather than failing when a pipeline holds the runtime:
-    # the boxplot is still worth drawing, just without its significance annotation.
-    @testset "alpha significance degrades while the runtime is busy" begin
+    ## Alpha significance waits on the runtime like the other R analyses, and
+    # refuses once the wait runs out.
+    @testset "alpha significance refuses while the runtime is busy" begin
         held    = Channel{Bool}(1)
         release = Channel{Bool}(1)
         holder = Threads.@spawn RR.with_r_lock() do
@@ -87,10 +85,8 @@ const RR = MetaManifold.RRuntime
         previous = MetaManifold.Analysis.R_WAIT_SECONDS[]
         MetaManifold.Analysis.R_WAIT_SECONDS[] = 0.1
         try
-            p, pairs = MetaManifold.Analysis._alpha_significance(
+            @test_throws RR.RBusyError MetaManifold.Analysis._alpha_significance(
                 [1.0, 2.0, 3.0, 4.0], ["a", "a", "b", "b"], ["s1", "s2", "s3", "s4"])
-            @test isnothing(p)
-            @test nrow(pairs) == 0
         finally
             MetaManifold.Analysis.R_WAIT_SECONDS[] = previous
             put!(release, true)

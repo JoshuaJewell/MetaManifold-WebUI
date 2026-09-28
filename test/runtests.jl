@@ -1,15 +1,70 @@
 #!/usr/bin/env julia
-# MetabarcodingPipeline test suite
+# MetaManifold test suite
 #
 # Run with:
 #   julia --project=. test/runtests.jl
 #
 # For integration tests (requires tools + databases):
 #   julia --project=. -t4 test/runtests.jl --integration
+#
+# Name unit test files to run only those, e.g.
+#   julia --project=. test/runtests.jl test_routes.jl trees
 using Test
 
 const RUN_INTEGRATION = "--integration" in ARGS
 const RUN_SERVER      = "--server"      in ARGS
+
+const UNIT_FILES = [
+    "test_diversity.jl",
+    "test_merge_taxa.jl",
+    "test_config.jl",
+    "test_validation.jl",
+    "test_tools.jl",
+    "test_analysis.jl",
+    "test_duckdb_store.jl",
+    "test_analysis_duckdb.jl",
+    "test_config_hashing.jl",
+    "test_project.jl",
+    "test_log.jl",
+    "test_databases.jl",
+    "test_merge_taxa_mappings.jl",
+    "test_routes.jl",
+    "test_publication_tables.jl",
+    "test_heatmap.jl",
+    "test_trees.jl",
+    "test_report_funnel.jl",
+    "test_phylogeny.jl",
+    "test_composition.jl",
+    "test_composition_library.jl",
+    "test_primers_library.jl",
+    "test_databases_library.jl",
+    "test_categories.jl",
+    "test_read_conservation.jl",
+    "test_r_runtime.jl",
+    "test_dada2_commands.jl",
+    "test_remote_stages.jl",
+    "test_jobs.jl",
+    "test_provenance.jl",
+    "test_install_pins.jl",
+    "test_migrate_composition.jl",
+    "test_sample_reads.jl",
+    "test_determinism.jl",
+]
+
+# The files named on the command line ("test_routes.jl", "routes" or
+# "unit/test_routes.jl"), or every unit file when none is named.
+function _selected_files()
+    named = filter(a -> !startswith(a, "--"), ARGS)
+    isempty(named) && return UNIT_FILES
+    files = map(named) do a
+        b = basename(a)
+        b = startswith(b, "test_") ? b : "test_" * b
+        endswith(b, ".jl") ? b : b * ".jl"
+    end
+    unknown = filter(f -> !isfile(joinpath(@__DIR__, "unit", f)), files)
+    isempty(unknown) || error("No such unit test file: $(join(unknown, ", "))")
+    files
+end
 
 using MetaManifold
 using CSV, DataFrames, JSON3, Logging, YAML, DuckDB, DBInterface, Dates
@@ -18,39 +73,14 @@ using MetaManifold.PipelineTypes, MetaManifold.PipelineLog, MetaManifold.Config
 using MetaManifold.Databases, MetaManifold.DuckDBStore, MetaManifold.Validation
 using MetaManifold.Tools, MetaManifold.TaxonomyTableTools, MetaManifold.ProjectSetup
 using MetaManifold.DiversityMetrics, MetaManifold.Analysis
-using MetaManifold.FuncDBAnnotation
 using MetaManifold.Categories, MetaManifold.CompositionLibrary
 
 ## Unit tests (always run)
-@testset "MetabarcodingPipeline" begin
+@testset "MetaManifold" begin
 
-    include("unit/test_diversity.jl")
-    include("unit/test_merge_taxa.jl")
-    include("unit/test_config.jl")
-    include("unit/test_validation.jl")
-    include("unit/test_tools.jl")
-    include("unit/test_analysis.jl")
-    include("unit/test_duckdb_store.jl")
-    include("unit/test_analysis_duckdb.jl")
-    include("unit/test_config_hashing.jl")
-    include("unit/test_project.jl")
-    include("unit/test_log.jl")
-    include("unit/test_databases.jl")
-    include("unit/test_merge_taxa_mappings.jl")
-    include("unit/test_funcdb.jl")
-    include("unit/test_routes.jl")
-    include("unit/test_composition.jl")
-    include("unit/test_composition_library.jl")
-    include("unit/test_primers_library.jl")
-    include("unit/test_databases_library.jl")
-    include("unit/test_categories.jl")
-    include("unit/test_read_conservation.jl")
-    include("unit/test_r_runtime.jl")
-    include("unit/test_dada2_commands.jl")
-    include("unit/test_jobs.jl")
-    include("unit/test_provenance.jl")
-    include("unit/test_install_pins.jl")
-    include("unit/test_migrate_composition.jl")
+    for f in _selected_files()
+        include(joinpath(@__DIR__, "unit", f))
+    end
 
     ## Integration tests (opt-in)
     if RUN_INTEGRATION

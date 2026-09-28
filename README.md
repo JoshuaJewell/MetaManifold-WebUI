@@ -1,20 +1,20 @@
 # MetaManifold
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![Julia ≥ 1.0](https://img.shields.io/badge/Julia-%E2%89%A51.0-9558B2?logo=julia)](https://julialang.org)
+[![Julia 1.12](https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia)](https://julialang.org)
 [![R ≥ 4.0](https://img.shields.io/badge/R-%E2%89%A54.0-276DC3?logo=r)](https://www.r-project.org)
 [![CI](https://github.com/JoshuaJewell/MetaManifold-WebUI/actions/workflows/ci.yml/badge.svg)](https://github.com/JoshuaJewell/MetaManifold-WebUI/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/JoshuaJewell/MetaManifold-WebUI/graph/badge.svg?token=20F1VLF590)](https://codecov.io/gh/JoshuaJewell/MetaManifold-WebUI)
 
-MetaManifold wraps standard amplicon sequencing workflows into a single configurable Julia orchestrator: from raw paired-end Next Generation Sequencing reads through denoising, taxonomy assignment, taxonomic filtering, and functional annotation, with interactive configuration and analysis in the browser.
+MetaManifold wraps standard amplicon sequencing workflows into a single configurable Julia orchestrator: from raw paired-end Next Generation Sequencing reads through denoising, taxonomy assignment and taxonomic filtering, with interactive configuration and analysis in the browser.
 
 <p align="center">
-  <img src=".github/screenshots/hero.png" width="850" alt="MetaManifold web interface showing a study with interactive analysis charts">
+  <img src=".github/screenshots/hero.png" width="850" alt="A study's DADA2 analysis tab comparing richness between two runs, with paired samples joined">
 </p>
 
 ## Overview
 
-MetaManifold consists of a Julia backend (pipeline engine + REST API) and a TypeScript/React frontend. The pipeline runs FastQC, MultiQC, cutadapt, DADA2, SWARM, vsearch, and cd-hit-est under the hood; results are stored in per-run DuckDB databases and served to the frontend as interactive Plotly charts and filterable tables. Pipeline configuration is editable directly in the web UI at every cascade level (see [Configuration](#configuration)), and a functional-annotation layer supports manual curation.
+MetaManifold consists of a Julia backend (pipeline engine + REST API) and a TypeScript/React frontend. The pipeline runs FastQC, MultiQC, cutadapt, DADA2, SWARM, vsearch, and cd-hit-est under the hood, and places ASVs on reference trees with MAFFT, trimAl, IQ-TREE, RAxML and gappa; results are stored in per-run DuckDB databases and served to the frontend as interactive Plotly charts and filterable tables. Pipeline configuration is editable directly in the web UI at every cascade level (see [Configuration](#configuration)).
 
 **Pipeline stages**
 
@@ -52,23 +52,23 @@ Raw FASTQs  (data/{study}/[{group}/]{run}/*.fastq.gz)
 
 Once a run completes, analysis is performed on request through the web UI, both per run and across runs within a study:
 
-- Alpha diversity (richness, Shannon, Simpson), per sample or as cross-run comparison boxplots with significance testing
+- Alpha diversity (richness, Shannon, Simpson), per sample or as cross-run comparison boxplots with significance testing and optional lines joining paired samples
 - Taxonomic composition bar charts at a chosen rank, relative or absolute
 - Organism-composition charts that classify ASVs/OTUs into biological categories (a "Composition" view, e.g. protozoa, helminths, fungi, host)
 - Taxon overlap across runs as proportional Euler or UpSet plots
 - Pipeline stage read-count summaries
 - NMDS ordination (Bray-Curtis, via R/vegan)
-- PERMANOVA (via R/vegan)
+- PERMANOVA, with PERMDISP to check for differences in dispersion (via R/vegan)
 
-Counts may be normalised before analysis (none, rarefaction to a fixed or auto-resolved depth, or relative sum scaling), and contamination-flagged taxa may be included or excluded. All analysis charts are returned as Plotly JSON and rendered interactively in the browser.
+Counts may be normalised before analysis (none, rarefaction to a fixed or auto-resolved depth, or SRS — scaling with ranked subsampling, which reaches the same depth by scaling rather than resampling and so retains more of the community structure), and contamination-flagged taxa may be included or excluded. Ordinations may additionally apply a Hellinger transform before the Bray-Curtis dissimilarity. Composition charts can be drawn as a grid faceted on any two of run, group and sub-group. All analysis charts are returned as Plotly JSON and rendered interactively in the browser.
 
 ## Prerequisites
 
-- **Julia** >= 1.0 (installed automatically by `install.sh` if missing)
+- **Julia** 1.12 (installed by `install.sh` if missing, and pinned to the Manifest version for this directory)
 - **R** >= 4.0 (required for the DADA2 stage and NMDS/PERMANOVA analysis)
   - Ubuntu/Debian: `sudo apt install r-base`
   - macOS: `brew install r` or [CRAN package](https://cran.r-project.org/bin/macosx/)
-- **bun** or **Node.js** for building the frontend (bun preferred); `bun install` in `frontend/` pulls all JS dependencies, including `react-chart-editor` and `react-plotly.js`. The chart editor is fed `plotly.js-dist-min` rather than full `plotly.js` to keep the bundle size manageable.
+- **bun** builds the frontend. The installer uses a bun on PATH at the version pinned in `config/defaults/tool_versions.yml`, or downloads that release into `bin/`.
 
 ## Installation
 
@@ -78,7 +78,26 @@ cd MetaManifold-WebUI
 bash install.sh
 ```
 
-`install.sh` will check for Julia and R, install Julia and R dependencies, locate or download each external tool (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est). Tool paths can be configured manually in `config/tools.yml`, including by SSH if you wish to use a server-hosted binary.
+`install.sh` installs Julia (via juliaup) if missing, checks for R (and stops
+with install instructions if it is absent), then hands off to `install.jl`,
+which installs the Julia dependencies, locates or downloads each external tool
+(cutadapt, FastQC, MultiQC, vsearch, cd-hit-est, and the phylogeny tools MAFFT,
+trimAl, IQ-TREE, RAxML and gappa), and reproduces the R
+environment from `renv.lock`. It ends with a summary listing every dependency as
+`OK`, `SKIPPED`, or `ACTION NEEDED`, so anything it could not finish itself is
+stated explicitly rather than surfacing later as a broken pipeline stage. Tool
+paths can be configured manually in `config/tools.yml`. MAFFT, IQ-TREE and RAxML
+can be skipped on a machine that sends those stages to a server (see
+[Threads and remote execution](#threads-and-remote-execution-top-level-of-pipelineyml));
+trimAl and gappa always run locally.
+
+`install.sh` does **not** install R itself, nor the system `-dev` headers the R
+stack compiles against (both need root). Missing R stops the install with a
+message telling you how to get it. If the build headers are incomplete the
+installer does not start `renv::restore()` (it would compile for minutes and
+then fail on the first package that needs one); instead the summary prints the
+single command that installs every missing one — run it and re-run `install.sh`
+to finish the R setup.
 
 To update:
 ```bash
@@ -88,37 +107,39 @@ bash install.sh --update
 ### Reproducing the R environment
 
 The R-side dependencies (DADA2, vegan, and their transitive packages) are
-pinned with [`renv`](https://rstudio.github.io/renv/). The lockfile lives at
-`renv.lock` and a project-local library is created on first activation.
+pinned with [`renv`](https://rstudio.github.io/renv/); `renv.lock` is the source
+of truth and the committed `.Rprofile` activates the project-local library on
+any `R`/`Rscript` invocation from the repository root. `install.sh` runs the
+restore for you; to redo it by hand (e.g. after adding the missing headers):
 
 ```bash
-Rscript -e 'if (!requireNamespace("renv", quietly=TRUE)) install.packages("renv", repos="https://cloud.r-project.org"); renv::restore(prompt = FALSE)'
+Rscript -e 'renv::restore(prompt = FALSE)'
 ```
 
-Subsequent invocations of `Rscript` or `R` from the repository root will pick
-up the project library automatically via the committed `.Rprofile`. To add or
-upgrade a package, install it inside the project (`renv::install(...)`) and
-record the change with `renv::snapshot()`.
+To add or upgrade a package, install it inside the project
+(`renv::install(...)`) and record the change with `renv::snapshot()`.
 
 ### Tool paths
 
-`install.sh` generates `config/tools.yml`. You can edit it manually, for example, to point a tool at a remote server:
+`install.sh` generates `config/tools.yml`, one local path per tool:
 
 ```yaml
 vsearch:
-  path: "user@bioserver:/home/user/software/vsearch"
+  path: "/home/user/software/vsearch"
 ```
 
-When a remote SSH path is set, the pipeline routes that tool's invocations through
-`ssh`. `config/defaults/tools.yml` contains the full config format.
+`config/defaults/tools.yml` contains the full config format. Work that runs on a
+server is configured with the `remote` block of `pipeline.yml`, not here.
 
 ## Quick start
 
 ### 1. Place paired-end FASTQs under data/
 Put `.fastq.gz` files into `data/MyProject/run_A`. 
 
-### 2. Start the server (builds frontend on first run)
+### 2. Start the server
 `bash start.sh`
+
+The installer builds the frontend into `web/dist`, and `install.sh --update` rebuilds it. `start.sh` rebuilds it whenever a frontend source is newer than the build; `BUILD=1 bash start.sh` forces a rebuild.
 
 ### 3. Open http://localhost:8080
 
@@ -133,8 +154,21 @@ The web UI lets you create studies, configure pipeline parameters, launch runs, 
 Or run the Julia server directly:
 
 ```bash
-julia --project=. src/server/server.jl
+julia --project=. scripts/serve.jl
 ```
+
+The server is part of the `MetaManifold` package, so the first start after an
+install or a source change compiles the package. That compile runs a workload of
+the requests a first page visit makes, which takes a few minutes and caches
+their native code. While developing, skip the workload with a
+`LocalPreferences.toml` (git-ignored) in the repository root:
+
+```toml
+[MetaManifold]
+precompile_workload = false
+```
+
+The server then makes those requests itself in the background as it starts, so the first page visit does not wait on compilation.
 
 ## Web interface
 
@@ -142,18 +176,14 @@ The browser interface is the primary way to drive MetaManifold. Beyond creating 
 
 ### Editing configuration
 
-Every pipeline setting can be edited in the UI without touching a YAML file. Configuration is presented as collapsible accordion sections (study design, primer trimming, DADA2 denoising and taxonomy, OTU clustering, annotation, analysis) and can be set at any level of the cascade: the instance-wide defaults, a study, a group, or an individual run. Edits at a finer level override coarser ones (see [Configuration](#configuration) for the cascade rules). When a setting changes, the affected pipeline stages are flagged as stale, so it is clear which outputs a re-run would regenerate; a tooltip lists exactly which keys changed and at which level.
+Every pipeline setting can be edited in the UI without touching a YAML file. Configuration is presented as collapsible accordion sections (study design, primer trimming, DADA2 denoising and taxonomy, OTU clustering, analysis) and can be set at any level of the cascade: the instance-wide defaults, a study, a group, or an individual run. Edits at a finer level override coarser ones (see [Configuration](#configuration) for the cascade rules). When a setting changes, the affected pipeline stages are flagged as stale, so it is clear which outputs a re-run would regenerate; a tooltip lists exactly which keys changed and at which level.
 
 ### Pipeline runs and outputs
 
-A run's page is the working surface for that run. It is where the run-level configuration above is edited, where the full pipeline or any individual stage (including the DADA2 substages) is launched, and where each stage's status is shown. Long-running jobs report progress live through a server-sent event stream, and the jobs panel lets you watch or cancel them. As stages complete, their outputs become available through the views that follow: quality reports, the results table, functional annotation, and composition.
+A run's page is the working surface for that run. It is where the run-level configuration above is edited, where the full pipeline or any individual stage (including the DADA2 substages) is launched, and where each stage's status is shown. Long-running jobs report progress live through a server-sent event stream, and the jobs panel lets you watch or cancel them. As stages complete, their outputs become available through the views that follow: quality reports, the results table and composition.
 
 <p align="center">
   <img src=".github/screenshots/run-view.png" width="800" alt="A run page showing per-stage status, launch controls, and run-level configuration">
-</p>
-
-<p align="center">
-  <img src=".github/screenshots/pipeline-progress.png" width="800" alt="Live pipeline progress: the jobs panel and the server-sent event stream">
 </p>
 
 ### QC
@@ -161,7 +191,7 @@ A run's page is the working surface for that run. It is where the run-level conf
 Raw-read QC (FastQC aggregated by MultiQC) and the DADA2 quality, denoising, merging, and taxonomy diagnostics are embedded in the UI, each with the relevant per-stage configuration alongside and a re-run control.
 
 <p align="center">
-  <img src=".github/screenshots/qc.png" width="800" alt="QC view embedding the MultiQC report and DADA2 quality diagnostics">
+  <img src=".github/screenshots/qc.png" width="800" alt="DADA2 quality profiles before and after filtering, above the filter settings">
 </p>
 
 ### Results explorer
@@ -172,18 +202,34 @@ Each run's merged taxonomy-and-count table, and any derived tables, can be brows
   <img src=".github/screenshots/results-explorer.png" width="800" alt="Results explorer table with per-column filters and taxonomy-source column presets">
 </p>
 
-### Annotation
+### Phylogenetic placement
 
-The annotation view applies a functional database (`funcdb`) to a run's merged table, independently for the VSEARCH and DADA2 taxonomies. For each sequence it attaches functional metadata (function, associated organism and material, environment, pathogen status, and free-text notes) down to a configurable maximum rank. It also derives a 'consensus rank' (the finest rank at which the two classifiers agree) and a composite confidence score combining DADA2's bootstrap support at this rank and VSEARCH's percent identity (mostly for the sake of curiosity).
-
-Curation is supported directly in the view:
-
-- **Contamination tagging:** mark a taxon as contamination (yes / no / unassigned); the flag applies to all rows sharing that rank and taxon, with a live summary of affected reads.
-- **Manual BLAST assignment:** override the assignment for an individual sequence inline.
-- **FuncDB ledger:** add a new functional entry for a taxon, prefilled from the selected row. Entries are written to an append-only ledger and become available to subsequent annotation runs. User edits (contamination flags, manual assignments) are preserved when annotations are regenerated.
+Reference trees (under SYSTEM) are built once from uploaded reference sequences
+and used by any study. A study's Trees tab places its ASVs on one of them: pick
+runs and, for pooled runs, subgroups, a results table, a rank and taxa, or upload
+a FASTA. Each step shows where it runs, its state, its log and its QC; trimming
+can be previewed before it is rerun. See
+[Configuring phylogenetic placement](#configuring-phylogenetic-placement-phylogeny-in-pipelineyml).
 
 <p align="center">
-  <img src=".github/screenshots/annotation.png" width="800" alt="Annotation view showing consensus rank, confidence score, and contamination tagging controls">
+  <img src=".github/screenshots/reference-tree.png" width="800" alt="A reference tree's settings and steps, with the trimAl QC showing column occupancy against the -gt threshold">
+</p>
+
+<p align="center">
+  <img src=".github/screenshots/placement.png" width="800" alt="A placement of one subgroup's ASVs, with each query's likelihood weight and whether gappa kept it">
+</p>
+
+### Tree viewer
+
+Newick and jplace files in a study's tree list open in an interactive viewer:
+rectangular or circular layouts, rerooting, ladderizing, collapsing and naming
+clades, per-clade colours and fonts, placement symbols sized by count, and
+support values carried over from another tree. The view is saved beside the
+tree and exports as SVG, PNG or Newick. Reference trees open in the same viewer
+from the library page.
+
+<p align="center">
+  <img src=".github/screenshots/tree-viewer.png" width="800" alt="The tree viewer showing a placement tree with collapsed clades, bootstrap support and placement symbols">
 </p>
 
 ### Composition
@@ -191,7 +237,23 @@ Curation is supported directly in the view:
 The composition view classifies each ASV/OTU into a biological category and renders per-sample or pooled stacked bar charts. Category sets live in `config/composition.yml` (the bundled `default` set covers protozoa, helminths, fungi, host, plants, and invertebrates); each category references a named taxonomic filter from the `filters:` library in that same file. Both are editable from the Compositions page under SYSTEM in the sidebar. A category summary precedes the chart, and a quality filter can cap the number of unresolved taxonomic placeholders admitted.
 
 <p align="center">
-  <img src=".github/screenshots/composition.png" width="800" alt="Composition view with a stacked organism-category bar chart and category summary">
+  <img src=".github/screenshots/composition.png" width="800" alt="Organism-category composition drawn as a grid of stacked bar charts, one panel per run and subgroup">
+</p>
+
+### Figures and report
+
+The Figures tab lays analysis charts out on a page (A4, letter or a journal
+column width), in lettered groups of panels with shared colours, fonts and
+sizes, and exports it as PDF, PNG or TIFF at a chosen resolution. The
+Publication Tables tab builds one table at a time: rows of taxa at a rank or of
+categories from a Compositions set, columns of runs, sub-groups or samples, and
+any of ASVs, reads and percentage per column, with an optional difference
+between two sub-groups. A table can be copied for Word or downloaded as .xlsx or
+CSV. Charts, figures, tables and trees can be added to the study's Report tab,
+which downloads them together as one ZIP with a captions file.
+
+<p align="center">
+  <img src=".github/screenshots/figures.png" width="800" alt="The figure builder with page settings on the left and a two-panel figure of alpha diversity comparisons">
 </p>
 
 ## Configuration
@@ -207,7 +269,7 @@ Settings can be edited in the web UI (per-study, per-group, or per-run) or as YA
 | `config/presets/` | Saved table-view filter presets, written from the Tables view |
 | `config/databases.yml` | Database URIs and optional local paths. Editable from the Databases page under SYSTEM in the sidebar |
 | `config/primers.yml` | Primer sequences and pair definitions. Editable from the Primers page under SYSTEM in the sidebar |
-| `config/tools.yml` | Tool binary paths (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est) |
+| `config/tools.yml` | Tool binary paths (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est, MAFFT, trimAl, IQ-TREE, RAxML, gappa) |
 | `config/pipeline.yml` | Machine-level overrides (lowest user-editable precedence) |
 | `data/{name}/pipeline.yml` | Study-level overrides |
 | `data/{name}/{group}/pipeline.yml` | Group-level overrides (intermediate directories) |
@@ -284,6 +346,81 @@ cutadapt:
   optional_args: ""         # additional flags passed verbatim to cutadapt
 ```
 
+### Threads and remote execution (top level of `pipeline.yml`)
+
+Both settings sit at the top level, not under a stage, and neither participates
+in any stage hash: changing the thread count or the server never marks completed
+work stale, because neither can change a result.
+
+```yaml
+# Worker threads for every DADA2 R stage - learn_errors, denoise,
+# chimera_removal and assign_taxonomy all read this one key.
+# true = every core, false = one, or a positive integer.
+r_threads: 4
+
+# DISCLAIMER: you are solely responsible for ensuring you are authorised to use
+# the host configured here, and to place sequencing data on it.
+remote:
+  host: ~                        # user@hostname; ~ keeps every stage local
+  rscript: "Rscript"             # Rscript on the server
+  staging_dir: "/absolute/path/on/server"
+  identity_file: ~               # SSH key; ~ uses the agent, then a password prompt
+  threads: ~                     # threads on the server; ~ uses r_threads (DADA2) or phylogeny.threads
+  stages: []                     # any of the stages below
+  tools:                         # programs the phylogeny stages call on the server
+    mafft: "mafft"
+    iqtree: "iqtree"
+    raxml: "raxmlHPC-PTHREADS-SSE3"
+```
+
+Each offloadable stage ships its own inputs and collects its own outputs, so the
+choice is per stage and the stages are independent - a run denoised locally can
+still have its chimeras removed on the server, and vice versa. What that costs
+differs sharply between them:
+
+| Stage | Uploads | Notes |
+| --- | --- | --- |
+| `learn_errors` | only the leading reads the `dada2.dada.nbases` budget reaches | Returns `ckpt_errors.RData` and the error-rate plot |
+| `denoise` | filtered reads and `ckpt_errors.RData` | Heaviest stage; returns `ckpt_denoise.RData` |
+| `chimera_removal` | two checkpoints | Cheapest to offload - no read ever crosses |
+| `assign_taxonomy` | one checkpoint, and the database unless `remote_path` names a copy on the server | Set `dada2.remote_path` in `config/databases.yml` to skip the database transfer |
+| `phylogeny_align` | the reference FASTA | MAFFT for a reference tree |
+| `phylogeny_tree` | the trimmed reference alignment | IQ-TREE; usually the longest phylogeny step |
+| `phylogeny_add` | the queries and the trimmed reference alignment | MAFFT `--addfragments` for a placement |
+| `phylogeny_place` | the trimmed combined alignment and the reference tree | RAxML EPA |
+
+Trimming (trimAl) and accumulation (gappa) always run on this machine, so trimAl
+and gappa must be installed locally. Reference trees belong to no study and read
+`remote` from `config/pipeline.yml`; placements read it through their study's
+cascade.
+
+`filter_trim` is deliberately not offloadable and not threaded by `r_threads`:
+`dada2::filterAndTrim` honours `multithread` only by switching off its own
+OpenMP path and forking through `mcmapply`, which is the deadlock described at
+the top of `src/pipeline/dada2/dada2_functions.r`. It stays on OpenMP, which is
+already parallel. The other three thread through RcppParallel's in-process
+workers, so `r_threads` is safe for them inside the embedded R session.
+
+`learn_errors` sends less than the others because it needs less: dada2
+dereplicates the files in the order given and stops as soon as the cumulative
+base count exceeds `nbases`, so only that prefix contributes to the error model
+and only that prefix is uploaded. The model that comes back is identical to the
+one a full upload would produce. The saving grows with the study, since the
+budget is fixed while the read set is not.
+
+A staging directory is created per stage invocation and removed when the stage
+ends. If this machine dies mid-stage, a `trap` on the remote side removes it
+when sshd hangs up the session, and any directory older than a week is swept on
+the next connection.
+
+**Migrating from `dada2.taxonomy.multithread` / `dada2.taxonomy.remote`:** both
+still work for `assign_taxonomy` and are deprecated. After moving them to the
+top level, run once so completed taxonomy work is not marked stale by the move:
+
+```
+julia --project=. -e 'include("scripts/migrate_r_threads.jl"); MigrateRThreads.run_migration("projects")'
+```
+
 ### Configuring DADA2 (`dada2:` in `pipeline.yml`)
 
 ```yaml
@@ -323,22 +460,9 @@ dada2:
   # Taxonomy; assignTaxonomy() against the configured database:
   taxonomy:
     database: pr2                # key into config/databases.yml
-    multithread: 4               # threads for assignTaxonomy(); higher values increase memory use
     min_boot: 0                  # minimum bootstrap confidence to retain (0-100)
     # Taxonomy rank names are read from databases.yml (the `levels:` key under
     # each database entry). Do not set them here.
-
-    # Optional: offload the memory-intensive assignTaxonomy() step to a remote
-    # server via SSH. Omit or set host to null to run locally.
-    # DISCLAIMER: You are solely responsible for ensuring you have authorisation
-    # to use the configured host. See config/defaults/pipeline.yml for the full disclaimer.
-    remote:
-      host: ~                    # user@hostname
-      identity_file: ~           # path to SSH private key; null to use password auth
-      rscript: "Rscript"         # path to Rscript on the server
-      staging_dir: "/absolute/path/on/server"
-      # To avoid transferring the database each run, set dada2.remote_path under
-      # the relevant database entry in config/databases.yml instead.
 
   # Output filename prefixes (all written to dada2/Tables/):
   output:
@@ -400,6 +524,128 @@ swarm:
   optional_args: ""       # additional flags passed verbatim to swarm
 ```
 
+### Configuring phylogenetic placement (`phylogeny:` in `pipeline.yml`)
+
+Placement is split into two workflows, each run as a job and each with its own
+QC.
+
+**Reference trees** are a library shared by every study (Reference trees, under
+SYSTEM in the sidebar). One is a set of reference sequences taken through:
+
+1. **align**: MAFFT, `mafft --maxiterate 1000 --localpair` by default.
+2. **trim**: trimAl on that alignment.
+3. **tree**: IQ-TREE, `iqtree -m MFP -b 100` by default.
+
+**Placements** belong to a study (its Trees tab). One picks a reference tree from
+the library and a set of queries, either ASVs chosen by run, subgroup, table,
+rank and taxon, or an uploaded FASTA. It runs:
+
+1. **align**: `mafft --auto --addfragments` adds the queries to the trimmed
+   reference alignment.
+2. **trim**: trimAl on the combined alignment.
+3. **place**: RAxML EPA (`raxmlHPC-PTHREADS-SSE3 -f v -G 0.2 -m GTRCATI`) places
+   each query on the reference tree.
+4. **accumulate**: `gappa edit accumulate --threshold 0.8`.
+
+When a placement finishes, the reference tree, the placement jplace and the
+accumulated jplace are added to the study's tree list. The viewer's Import from…
+can carry the reference tree's bootstrap support onto the jplace tree.
+
+A step reruns only when its inputs or its settings change, so changing a trim
+setting reruns trimming and what follows it and keeps the MAFFT alignment.
+Rebuilding a reference tree makes every placement on it rerun from its align
+step the next time it runs. Where a step runs and how many threads it uses do not
+count as a change.
+
+#### Trimming
+
+Both trim steps take the same settings. `method: manual` applies the thresholds;
+the other methods are trimAl's automated modes and ignore them.
+
+| Key | trimAl | Meaning |
+| --- | --- | --- |
+| `method` | `-gappyout`, `-strict`, `-strictplus`, `-automated1`, `-nogaps`, `-noallgaps` | Or `manual` |
+| `gap_threshold` | `-gt` | Keep columns with residues in at least this fraction of sequences |
+| `conservation` | `-cons` | Keep at least this percentage of columns whatever the thresholds |
+| `similarity_threshold` | `-st` | Minimum average similarity of a kept column |
+| `residue_overlap`, `sequence_overlap` | `-resoverlap`, `-seqoverlap` | Set together: remove sequences that overlap too few others |
+| `optional_args` | | Extra trimAl flags |
+
+Preview trimming, beside the trim settings, runs trimAl with the settings as
+they stand on the current alignment and shows the result without changing
+anything. Run the workflow to use them.
+
+#### QC
+
+Each step's QC opens from its row in the Run panel:
+
+- **align and trim**: sequences and columns, the columns trimming kept, the share
+  of each column holding a residue (references and queries apart in a
+  placement, with the kept columns shaded and the `-gt` line drawn), each
+  sequence's residues and the share trimming kept, the sequences trimming
+  removed, and a colour view of the whole alignment with trimmed columns faded.
+- **tree**: the model (and whether ModelFinder chose it), log-likelihood,
+  parsimony-informative sites and the distribution of bootstrap support.
+- **place and accumulate**: for each query, its length before and after trimming,
+  whether it was placed, its best likelihood weight ratio, how many branches it
+  was placed on, and whether gappa accumulate kept it.
+
+trimAl removes any sequence left with no residues, so a query trimmed away never
+reaches RAxML; the trim QC lists it.
+
+gappa accumulate walks the placement tree from the tips towards its root and
+assigns each query to the first branch whose clade holds at least the
+threshold share of the query's weight. A query whose weight is split between
+branches on either side of the root never reaches the threshold and is removed
+from the accumulated jplace; the placement QC marks it as dropped. The root is
+wherever the reference tree is rooted in the file, so which queries are dropped
+depends on that rooting as well as on the threshold.
+
+#### Settings
+
+`pipeline.yml` holds the defaults; a reference tree or placement can override any
+of its own keys from its page.
+
+```yaml
+phylogeny:
+  threads: 4                  # MAFFT, IQ-TREE, RAxML and gappa on this machine
+  reference:
+    align:
+      strategy: "localpair"   # auto, localpair, genafpair, globalpair or 6merpair
+      maxiterate: 1000        # 0 omits --maxiterate
+    trim:
+      method: "manual"
+      gap_threshold: 0.3
+      conservation: ~
+      similarity_threshold: ~
+      residue_overlap: ~
+      sequence_overlap: ~
+    tree:
+      model: "MFP"
+      bootstrap: "standard"   # standard (-b) or ultrafast (-bb, 1000 replicates or more)
+      replicates: 100
+  placement:
+    align:
+      strategy: "auto"        # with --addfragments
+      maxiterate: 0
+    trim:
+      method: "manual"
+      gap_threshold: 0.01
+    place:
+      model: "GTRCATI"
+      heuristic: 0.2          # RAxML -G; ~ tries every branch
+    accumulate:
+      threshold: 0.8          # gappa --threshold, 0.5 to 1
+```
+
+Every section also takes `optional_args`, appended verbatim to that step's
+command after the same check as the other stages' extra flags.
+
+A reference tree lives in `reference_trees/{id}/` and a placement in
+`projects/{study}/phylogeny/{id}/`, each with its FASTA, one directory per step,
+`logs/`, `qc/`, `status.json` and an `attestation.yml` recording each step's
+tool versions, paths and checksums, including those read on the server.
+
 ### Configuring merge_taxa (`merge_taxa:` in `pipeline.yml`)
 
 Controls which filter configs are applied when merging taxonomy and count tables. `merged.csv` (unfiltered) is always written; each entry in `filters` produces an additional filtered CSV.
@@ -422,25 +668,21 @@ analysis:
     - {set: contamination, category: Contaminant, apply_to: [diversity, taxa, venn]}
                                  # apply_to surfaces: diversity | taxa | composition | venn
                                  # (omit apply_to to act on every surface)
-  normalisation: none            # none | rarefaction | rss (relative sum scaling)
-  normalisation_depth: 0         # rarefaction depth; 0 = auto (min positive library size)
-  alpha:
+  alpha:                         # richness, Shannon and Simpson
+    normalisation: none          # none | rarefy | srs (scaling with ranked subsampling)
+    depth: 0                     # rarefy/srs reads per sample; 0 = smallest non-empty sample
+    rarefaction_iterations: 100  # rarefy draws averaged per value
     show_points: true            # overlay individual sample points on boxplots
     annotate_significance: false # annotate pairwise significance on grouped alpha
     pairwise_brackets: false     # draw significance brackets between groups
     paired_samples: false        # treat samples as paired in the significance test
+    paired_lines: false          # join each sample to itself across groups with a line
     significance_test: "kruskal_wallis"  # test used for group comparison
+  beta:                          # Bray-Curtis for NMDS and PERMANOVA
+    normalisation: hellinger     # hellinger | none | rarefy | srs
+    depth: 0                     # rarefy/srs reads per sample; 0 = smallest non-empty sample
   nmds:
     max_stress: 0.2              # warn if NMDS stress exceeds this value
-```
-
-### Configuring annotation (`annotation:` in `pipeline.yml`)
-
-Controls the functional-annotation layer applied in the Annotation view.
-
-```yaml
-annotation:
-  max_rank: "species"   # finest rank to which functional metadata is attached
 ```
 
 ### Configuring taxonomic filtering (`filters:` in `config/composition.yml`)
@@ -562,6 +804,29 @@ projects/{project_name}/{run}/
     └── results.duckdb           # DuckDB database for API queries
 ```
 
+Phylogeny outputs sit beside the runs and in the shared library:
+
+```
+projects/{project_name}/
+├── trees/                       # Newick and jplace files for the tree viewer
+└── phylogeny/{id}/              # One placement
+    ├── placement.json           # Name, reference tree, queries, settings
+    ├── queries.fasta
+    ├── align/combined.aln.fasta # References plus queries (MAFFT --addfragments)
+    ├── trim/                    # combined.trim.fasta and the kept columns
+    ├── place/placement.jplace   # RAxML EPA, with RAxML's own files
+    ├── accumulate/accumulated.jplace
+    ├── qc/, logs/, status.json, attestation.yml
+
+reference_trees/{id}/            # One reference tree
+├── reference.json               # Name, description, settings
+├── references.fasta
+├── align/reference.aln.fasta
+├── trim/                        # reference.trim.fasta and the kept columns
+├── tree/reference.treefile      # With IQ-TREE's report, log and consensus tree
+└── qc/, logs/, status.json, attestation.yml
+```
+
 ## REST API
 
 The server exposes a REST API under `/api/v1/`. Key endpoint groups:
@@ -574,19 +839,34 @@ The server exposes a REST API under `/api/v1/`. Key endpoint groups:
 | Config         | `GET/PATCH/DELETE .../config`, `GET .../config/overrides`                                                     | Read and edit config at any cascade level; list downstream overrides                     |
 | Primers        | `GET /primers`, `GET /primers/document`, `PUT /primers`                                                       | List pair names; read and replace the whole primers document (validated before writing)  |
 | Pipeline       | `POST .../pipeline`, `POST .../stages/{stage}`                                                                | Launch full-study, single-run, or individual-stage jobs                                  |
-| Jobs           | `GET/DELETE /jobs`, `GET /jobs/{id}/logs`                                                                     | Monitor and cancel running pipeline jobs                                                 |
+| Jobs           | `GET /jobs`, `GET/DELETE /jobs/{id}`                                                                          | Monitor and cancel running pipeline jobs                                                 |
 | Events         | `GET /events`                                                                                                 | Server-sent event stream of real-time job and stage updates                              |
 | Results        | `GET/POST/DELETE .../results/tables/...`                                                                      | List, query, filter, save, export (`.xlsx`), and delete tables; OTU member drill-down    |
 | QC             | `GET .../results/qc`, `GET .../results/dada2`                                                                 | MultiQC report metadata and DADA2 figures, logs, stats                                   |
-| Analysis       | `POST .../analysis/{alpha,taxa-bar,venn}`, `GET .../analysis/{pipeline-stats,ranks}`                          | Per-run charts and rank discovery                                                        |
-| Cross-run      | `POST /studies/{study}/analysis/{alpha,taxa-bar,nmds,permanova,venn}`                                         | Comparison, NMDS, PERMANOVA, taxon overlap across runs                                   |
-| Composition    | `GET /category-sets`, `POST .../composition/{source}/{build,query,distinct,analysis}`                         | Category-set listing and organism-composition tables and charts                          |
-| Annotation     | `GET/POST .../annotations/{source}/...`, `POST /funcdb/entries`, `PATCH .../{contamination,blast-assignment}` | Generate and query annotations, curate contamination and assignments, add FuncDB entries |
+| Analysis       | `POST .../runs/{run}/analysis/{alpha,chart}`, `GET .../runs/{run}/analysis/{pipeline-stats,ranks}`            | Per-run charts and rank discovery                                                        |
+| Cross-run      | `POST /studies/{study}/analysis/{alpha,chart,chart-facet,nmds,permanova,venn,publication-tables}`             | Comparison, faceted charts, NMDS, PERMANOVA, taxon overlap and publication tables across runs |
+| Composition    | `POST .../runs/{run}/composition/summary`, `POST .../composition/{source}/query`, `POST .../composition/{source}/distinct/{column}` | Organism-composition summaries and tables for a run                             |
+| Composition library | `GET /composition`, `POST/DELETE /composition/{filters,sets}/{name}`, `GET /category-sets`, `POST/DELETE /category-sets/{name}` | Edit the filters and category sets in `config/composition.yml`               |
+| Reference trees | `GET/POST /reference-trees`, `GET/PUT/DELETE /reference-trees/{id}`, `GET/PUT .../fasta`, `POST .../run`, `GET .../{log,qc}/{step}`, `GET .../alignment/{raw,trimmed}`, `GET .../treefile`, `POST .../trim-preview` | Build and inspect the shared reference trees |
+| Placements     | `GET/POST /studies/{study}/placements`, `GET/PUT/DELETE .../placements/{id}`, `POST .../placements/preview`, `GET/PUT .../fasta/queries`, `POST .../run`, `GET .../{log,qc}/{step}`, `GET .../alignment/{raw,trimmed}`, `POST .../trim-preview` | Place a study's sequences on a reference tree |
+| Trees          | `GET/POST /studies/{study}/trees`, `GET/DELETE /studies/{study}/trees/{file}`, `PUT /studies/{study}/trees/{file}/view` | Upload, read and delete Newick and jplace files; save each tree's view state          |
 | Filter presets | `GET/POST/DELETE /filter-presets`                                                                             | Save, list, delete reusable table filters                                                |
 | Databases      | `GET /databases`, `GET /databases/document`, `PUT /databases`, `POST /databases/{key}/download`               | List and download taxonomy databases; read and replace the whole databases document (validated before writing, returns advisory warnings) |
 | System         | `POST /init`, `GET /capabilities`                                                                             | Initialise project directories; report server capabilities (e.g. R availability)         |
 
 All responses are JSON. Analysis endpoints return Plotly chart specifications.
+
+## Running tests
+
+```bash
+julia --project=. test/runtests.jl                  # unit tests
+julia --project=. test/runtests.jl --integration    # adds the MiSeq SOP pipeline run
+julia --project=. test/runtests.jl --server         # adds the HTTP server smoke tests
+```
+
+Set `CI_SKIP_TAXONOMY=1` to skip taxonomy assignment in the integration run. The full suite loads R and every package and needs several GB of memory; on a small machine run a few files at a time. `cd frontend && bun run test` runs the frontend unit tests.
+
+Name unit test files to run only those: `julia --project=. test/runtests.jl routes trees`. `dev/dev.sh` runs the development server, rebuilds and tests one job at a time, stopping and restarting the server around builds and tests (`dev/dev.sh` alone lists its commands). Deferred work is listed in `dev/TODO.md`.
 
 ## Architecture
 
@@ -594,11 +874,11 @@ All responses are JSON. Analysis endpoints return Plotly chart specifications.
 frontend/           TypeScript + React + Vite (SPA)
 src/
   core/             Types, config cascade, validation, DuckDB store, logging
-  pipeline/         Pipeline stages (cutadapt, dada2, swarm, vsearch, cd-hit-est, merge_taxa)
-  annotation/       Functional database (funcdb): dual-classifier consensus and curation
+  pipeline/         Pipeline stages (cutadapt, dada2, swarm, vsearch, cd-hit-est, merge_taxa, phylogeny)
   analysis/         Diversity metrics + Plotly chart builders
-  server/           Oxygen.jl HTTP server
+  server/           Oxygen.jl HTTP server (MetaManifold.Server) and its precompile workload
     routes/         REST API route handlers
+scripts/            serve.jl (server entry point) and one-off maintenance scripts
 config/             Default configs, filters, CI fixtures
 data/               Input FASTQs (user-managed)
 projects/           Pipeline outputs (generated)
@@ -619,6 +899,11 @@ This project orchestrates the following tools. Each is fetched from its upstream
 | [swarm](https://github.com/frederic-mahe/swarm) | GPL v3  | GitHub Releases         |
 | [vsearch](https://github.com/torognes/vsearch)  | GPL v3  | GitHub Releases         |
 | [cd-hit](https://github.com/weizhongli/cdhit)   | GPL v2+ | GitHub Releases / apt   |
+| [MAFFT](https://mafft.cbrc.jp/alignment/software/) | BSD  | Source / apt            |
+| [trimAl](https://github.com/inab/trimal)        | GPL v3  | GitHub Releases         |
+| [IQ-TREE](https://github.com/iqtree/iqtree3)    | GPL v2  | GitHub Releases         |
+| [RAxML](https://github.com/stamatak/standard-RAxML) | GPL v3 | Source / apt         |
+| [gappa](https://github.com/lczech/gappa)        | GPL v3  | Source                  |
 
 ## Acknowledgements
 

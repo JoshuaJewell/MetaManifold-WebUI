@@ -1,11 +1,10 @@
 # Integration smoke tests for the Oxygen.jl HTTP server.
 #
-# These tests start the server as a subprocess to avoid module-redefinition
-# conflicts (the main test suite already loads pipeline modules; server.jl
-# re-includes them, creating incompatible type instances).
+# These tests start the server as a subprocess, so that they exercise the
+# real listener and middleware stack.
 #
 # Run via:
-#   julia --project=. -t4 test/runtests.jl --integration
+#   julia --project=. -t4 test/runtests.jl --server
 
 @testset "Server smoke tests" begin
 
@@ -20,15 +19,16 @@
     touch(joinpath(study_run, "sampleX_R2.fastq.gz"))
 
     port = 18765
-    server_script = joinpath(PROJECT_ROOT, "src", "server", "server.jl")
+    server_script = joinpath(PROJECT_ROOT, "scripts", "serve.jl")
     proc = run(Cmd(`$(Base.julia_cmd()) --project=$PROJECT_ROOT $server_script`;
                    env=merge(ENV, Dict("JULIA_METAMANIFOLD_ROOT" => tmp_root,
                                       "JULIA_METAMANIFOLD_PORT" => string(port))));
                wait=false)
 
-    # Wait up to 30 s for the server to accept connections
+    # CI loads the server with --compiled-modules=no, which takes minutes.
     ready = false
-    for _ in 1:60
+    for _ in 1:1200
+        process_running(proc) || break
         try
             HTTP.get("http://localhost:$port/api/v1/studies"; readtimeout=1,
                      status_exception=false)
