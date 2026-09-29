@@ -6,9 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# Pushes to main queue so each merge gets a test result; PR updates cancel the
+# run for the superseded head.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   test:
@@ -38,15 +43,15 @@ jobs:
         os: [ubuntu-24.04]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Set up Julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9  # v2.7.0
         with:
           version: ${{ matrix.julia-version }}
 
       - name: Cache Julia packages
-        uses: julia-actions/cache@v2
+        uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9  # v2.1.0
 
       # Every external version CI installs is read from the committed pin file, so CI
       # and a developer's machine cannot drift apart. A temporary environment is used
@@ -64,6 +69,10 @@ jobs:
                 println(io, "R_APT_VERSION=", pins["runtimes"]["r"]["apt_version"])
                 println(io, "BUN_VERSION=", pins["toolchain"]["bun"]["version"])
                 println(io, "CUTADAPT_SPEC=cutadapt==", pins["tools"]["cutadapt"]["version"])
+                println(io, "MULTIQC_SPEC=multiqc==", pins["tools"]["multiqc"]["version"])
+                fastqc = pins["tools"]["fastqc"]["archives"]["any"]
+                println(io, "FASTQC_URL=", fastqc["url"])
+                println(io, "FASTQC_SHA256=", fastqc["sha256"])
                 for tool in ("vsearch", "swarm")
                     archive = pins["tools"][tool]["archives"]["linux-x86_64"]
                     println(io, uppercase(tool), "_VERSION=", pins["tools"][tool]["version"])
@@ -80,7 +89,7 @@ jobs:
       # this resolves rather than merely requesting the newest.
       - name: Set up R
         run: |
-          wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
+          wget --https-only -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
             | sudo gpg --dearmor -o /usr/share/keyrings/r-project.gpg
           echo "deb [signed-by=/usr/share/keyrings/r-project.gpg] https://cloud.r-project.org/bin/linux/ubuntu $(lsb_release -cs)-cran40/" \
             | sudo tee /etc/apt/sources.list.d/r-project.list
@@ -107,11 +116,43 @@ jobs:
       # .Rprofile, and with it the renv autoloader, which would otherwise rebind
       # .Library to its own sandbox under root's cache; the flag is used rather than
       # the environment variable above because sudo resets the environment first.
+      #
+      # renv's package cache persists across runs, so a restore that fails partway
+      # resumes from the packages it already built. The cache sits outside ~ because
+      # the restore runs as root. The run id makes each key unique so every attempt
+      # saves its progress; restore-keys picks the newest match.
+      - name: Restore the renv cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: /opt/renv-cache
+          key: renv-${{ runner.os }}-R${{ env.R_APT_VERSION }}-${{ hashFiles('renv.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            renv-${{ runner.os }}-R${{ env.R_APT_VERSION }}-${{ hashFiles('renv.lock') }}-
+            renv-${{ runner.os }}-R${{ env.R_APT_VERSION }}-
+
+      # R_CLI_DYNAMIC and TERM make renv print progress one line at a time in the log.
       - name: Install R packages
+        env:
+          RENV_PATHS_CACHE: /opt/renv-cache
         run: |
-          sudo Rscript --no-init-file -e 'install.packages(c("renv", "BiocManager"), repos="https://cloud.r-project.org", lib=.Library)'
-          sudo Rscript --no-init-file -e 'renv::restore(project=".", library=.Library, prompt=FALSE)'
+          sudo mkdir -p "$RENV_PATHS_CACHE"
+          sudo chmod 777 "$RENV_PATHS_CACHE"
+          sudo env R_CLI_DYNAMIC=false TERM=dumb Rscript --no-init-file -e 'install.packages(c("renv", "BiocManager"), repos="https://cloud.r-project.org", lib=.Library)'
+          sudo env RENV_PATHS_CACHE="$RENV_PATHS_CACHE" R_CLI_DYNAMIC=false TERM=dumb Rscript --no-init-file -e 'renv::restore(project=".", library=.Library, prompt=FALSE)'
           Rscript --no-init-file -e 'for (pkg in c("dada2","Biostrings","ShortRead","vegan","dplyr")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
+
+      # Saved on failure too, since the packages built before a failure are the ones
+      # the next attempt should reuse. Root writes the cache, so it is made readable first.
+      - name: Make the renv cache readable
+        if: always()
+        run: sudo chmod -R a+rX /opt/renv-cache || true
+
+      - name: Save the renv cache
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: /opt/renv-cache
+          key: renv-${{ runner.os }}-R${{ env.R_APT_VERSION }}-${{ hashFiles('renv.lock') }}-${{ github.run_id }}
 
       - name: Install cutadapt
         run: pip install "$CUTADAPT_SPEC"
@@ -126,7 +167,8 @@ jobs:
       # SHA256, so CI runs the same bytes install.jl puts on a developer's machine.
       - name: Install vsearch
         run: |
-          curl -sSL -o vsearch.tar.gz "$VSEARCH_URL"
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$VSEARCH_URL" vsearch.tar.gz
           echo "$VSEARCH_SHA256  vsearch.tar.gz" | sha256sum -c -
           tar xzf vsearch.tar.gz --warning=no-unknown-keyword
           sudo mv "vsearch-$VSEARCH_VERSION-linux-x86_64/bin/vsearch" /usr/local/bin/vsearch
@@ -135,25 +177,42 @@ jobs:
 
       - name: Install swarm
         run: |
-          curl -sSL -o swarm.tar.gz "$SWARM_URL"
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$SWARM_URL" swarm.tar.gz
           echo "$SWARM_SHA256  swarm.tar.gz" | sha256sum -c -
           tar xzf swarm.tar.gz --warning=no-unknown-keyword
           sudo mv "swarm-$SWARM_VERSION-linux-x86_64/bin/swarm" /usr/local/bin/swarm
           rm -rf swarm.tar.gz "swarm-$SWARM_VERSION-linux-x86_64"
           swarm --version
 
+      - name: Install multiqc
+        run: pip install "$MULTIQC_SPEC"
+
+      # FastQC ships as a Java launcher script; `fastqc --version` checks that Java
+      # is on PATH as well.
+      - name: Install fastqc
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$FASTQC_URL" fastqc.zip
+          echo "$FASTQC_SHA256  fastqc.zip" | sha256sum -c -
+          sudo unzip -q -d /opt fastqc.zip
+          rm -f fastqc.zip
+          sudo chmod +x /opt/FastQC/fastqc
+          sudo ln -sf /opt/FastQC/fastqc /usr/local/bin/fastqc
+          fastqc --version
+
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Build frontend
         working-directory: frontend
         run: |
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile --ignore-scripts
           bun run build
 
       - name: Frontend unit tests
@@ -180,13 +239,44 @@ jobs:
         env:
           CI_SKIP_TAXONOMY: "1"
           R_LIBS_SITE: /usr/local/lib/R/site-library:/usr/lib/R/site-library:/usr/lib/R/library
-        run: julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration --server
+        # A failure also posts annotations, which the checks API serves without the full
+        # log. Annotations are capped at 4096 bytes, so each failing assertion gets its own
+        # (up to 8), followed by the summary rows that report a failure or an error.
+        shell: bash
+        run: |
+          set -o pipefail
+          julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration --server 2>&1 | tee /tmp/julia-tests.log
+          status="${PIPESTATUS[0]}"
+          if [ "$status" -ne 0 ]; then
+            enc() { head -c 3500 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}'; }
+            awk '
+              /Test Summary:/ { left = 0 }
+              /(Test Failed at|Error During Test at)/ || (left == 0 && /Got exception outside of a @test/) { n++; left = 60 }
+              left > 0 { print > ("/tmp/julia-failure-" n ".txt"); left-- }
+            ' /tmp/julia-tests.log
+            shown=0
+            for f in $(ls /tmp/julia-failure-*.txt 2>/dev/null | sort -t- -k3 -n); do
+              shown=$((shown + 1))
+              [ "$shown" -gt 8 ] && break
+              echo "::error title=Julia test failure ${shown}::$(enc < "$f")"
+            done
+            awk '
+              /Test Summary:/ { print; p = index($0, "Pass"); pe = (p ? p + 3 : 0); t = index($0, "Total"); next }
+              pe && t && index($0, "|") && substr($0, pe + 1, t - pe - 1) ~ /[0-9]/ { print; next }
+              /ERROR:|Some tests did not pass/ { print }
+            ' /tmp/julia-tests.log | tail -n 60 > /tmp/julia-tests-summary.txt
+            echo "::error title=Julia tests failed (summary)::$(enc < /tmp/julia-tests-summary.txt)"
+            if [ "$shown" -eq 0 ]; then
+              echo "::error title=Julia tests failed (tail)::$(tail -c 3500 /tmp/julia-tests.log | enc)"
+            fi
+          fi
+          exit "$status"
 
       - name: Process coverage
-        uses: julia-actions/julia-processcoverage@v1
+        uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38  # v1.2.2
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v6.0.2
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
