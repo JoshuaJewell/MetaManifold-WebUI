@@ -435,16 +435,30 @@ canned(out::String, err::String = "", code::Int = 0) =
     ## Live probes. Gated, so that the suite passes on a machine with neither the
     # binaries nor the R packages installed.
     @testset "live probes of what is actually installed" begin
+        # On CI the tools ci.yml installs must be present. The phylogeny tools are
+        # not installed there.
+        ci_installed = ("cutadapt", "fastqc", "multiqc", "vsearch", "swarm", "cd_hit_est")
+        on_ci = get(ENV, "CI", "false") == "true"
+
         for (key, probe) in PV.TOOL_PROBES
-            bin = PV.default_bin_resolver(key)
-            if isnothing(Sys.which(bin))
-                @info "Provenance: skipping live probe of $key, which is not installed"
-                continue
+            # One testset per tool, so the summary names each tool and its result.
+            @testset "$key" begin
+                bin      = PV.default_bin_resolver(key)
+                resolved = Sys.which(bin)
+
+                if on_ci && key in ci_installed
+                    @test resolved !== nothing
+                end
+
+                if isnothing(resolved)
+                    @test_skip PV.probe_tool(probe)
+                else
+                    record = PV.probe_tool(probe)
+                    @test !isempty(record.version)
+                    @test isabspath(record.path)
+                    @test length(record.sha256) == 64
+                end
             end
-            record = PV.probe_tool(probe)
-            @test !isempty(record.version)
-            @test isabspath(record.path)
-            @test length(record.sha256) == 64
         end
 
         r_ready = try
