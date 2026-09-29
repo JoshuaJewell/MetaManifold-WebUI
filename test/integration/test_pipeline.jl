@@ -51,7 +51,7 @@
     if isdir(test_study_dir)
         for entry in readdir(test_study_dir; join=true)
             isdir(entry) || continue
-            for subdir in ("cutadapt", "dada2", "swarm", "vsearch", "merged")
+            for subdir in ("QC", "cutadapt", "dada2", "swarm", "vsearch", "merged")
                 d = joinpath(entry, subdir)
                 isdir(d) && rm(d; recursive=true)
             end
@@ -100,6 +100,20 @@
         if !isempty(errors)
             @warn "Integration test: run $(basename(project.dir)) skipped - validation failed"
             continue
+        end
+
+        # Stage 0: FastQC/MultiQC over the raw reads. No later stage reads its output,
+        # so it is checked here.
+        multiqc(project)
+        qc_dir = joinpath(project.dir, "QC")
+        @test isfile(joinpath(qc_dir, "multiqc_report.html"))
+        for logname in ("fastqc.log", "multiqc.log")
+            p = joinpath(qc_dir, "logs", logname)
+            @test isfile(p)
+            # A stage that dies after creating its log leaves it empty; the command
+            # marker is the provenance record.
+            @test filesize(p) > 0
+            @test any(l -> startswith(l, "[MetaManifold] cmd: "), readlines(p))
         end
 
         # Stage 1: cutadapt

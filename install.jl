@@ -1019,7 +1019,7 @@ end
 
 function build_frontend(bun::String)
     cd(FRONTEND_DIR) do
-        run(`$bun install --frozen-lockfile`)
+        run(`$bun install --frozen-lockfile --ignore-scripts`)
         run(`$bun run build`)
     end
 end

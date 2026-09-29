@@ -179,8 +179,44 @@ is_sha256(s) = s isa AbstractString && occursin(r"^[0-9a-f]{64}$", s)
         @test occursin("tool_versions.yml", runs)
         @test occursin("sha256sum -c", runs)
 
-        for tool in ("vsearch", "swarm")
+        for tool in ("vsearch", "swarm", "fastqc", "multiqc")
             @test !occursin(pins["tools"][tool]["version"], runs)
+        end
+
+        # Every tool the pipeline calls is installed. The check looks for each pin's
+        # variable where a step uses it, because the pin-export step names every tool.
+        for (tool, ref) in (("cutadapt", raw"$CUTADAPT_SPEC"),
+                            ("multiqc",  raw"$MULTIQC_SPEC"),
+                            ("fastqc",   raw"$FASTQC_URL"),
+                            ("vsearch",  raw"$VSEARCH_URL"),
+                            ("swarm",    raw"$SWARM_URL"))
+            @test occursin(ref, runs)
+        end
+
+        # config/ci/tools.yml resolves every tool by bare name.
+        for tool in ("vsearch", "swarm", "fastqc")
+            @test occursin("/usr/local/bin/$tool", runs)
+        end
+
+        # cd-hit is the one tool CI installs from apt without a pin.
+        @test occursin("apt-get install -y cd-hit", runs)
+
+        # Archive downloads go through fetch_pinned, which retries TLS failures and
+        # names the cause when a download still fails. Comments are stripped so the
+        # checks read the code.
+        helper = joinpath(REPO_ROOT, "scripts", "ci", "fetch_pinned.sh")
+        @test isfile(helper)
+        fetch_code = join([line for line in eachline(helper)
+                           if !startswith(strip(line), "#")], "\n")
+        @test occursin("--retry-all-errors", fetch_code)
+        @test occursin("::error::TLS verification failed", fetch_code)
+        @test occursin("tool_versions.yml", fetch_code)
+        @test !occursin("|| true", fetch_code)
+        @test !occursin("set +e", fetch_code)
+
+        @test occursin("source scripts/ci/fetch_pinned.sh", runs)
+        for ref in (raw"$VSEARCH_URL", raw"$SWARM_URL", raw"$FASTQC_URL")
+            @test occursin("fetch_pinned \"$ref\"", runs)
         end
     end
 end

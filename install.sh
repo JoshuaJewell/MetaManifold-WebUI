@@ -136,7 +136,7 @@ elif locate_julia; then
     persist_juliaup_path
 else
     echo "Julia not found. Installing via juliaup..."
-    if ! curl -fsSL https://install.julialang.org | sh -s -- --yes; then
+    if ! curl -fsSL --proto '=https' --proto-redir '=https' https://install.julialang.org | sh -s -- --yes; then
         echo ""
         echo "The juliaup installer exited non-zero - usually an existing juliaup"
         echo "install blocking a reinstall. Trying the existing installation..."
