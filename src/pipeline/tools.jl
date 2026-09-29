@@ -464,6 +464,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _run_killa
         raw_mtimes = if mode == "paired"
             sample_mtimes = Float64[]
             for entry in selected_entries
+                occursin(primary_pattern, entry.name) || continue
                 push!(sample_mtimes, mtime(entry.path))
                 mate_base = _mate_name(basename(entry.path), r1_suffix, r2_suffix)
                 mate_path = joinpath(dirname(entry.path), mate_base)

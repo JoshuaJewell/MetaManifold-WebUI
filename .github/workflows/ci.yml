@@ -244,7 +244,7 @@ jobs:
         # (up to 8), followed by the summary rows that report a failure or an error.
         shell: bash
         run: |
-          set -o pipefail
+          set +e
           julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration --server 2>&1 | tee /tmp/julia-tests.log
           status="${PIPESTATUS[0]}"
           if [ "$status" -ne 0 ]; then
