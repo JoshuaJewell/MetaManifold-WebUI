@@ -122,6 +122,22 @@ is_sha256(s) = s isa AbstractString && occursin(r"^[0-9a-f]{64}$", s)
         @test startswith(pins["runtimes"]["r"]["apt_version"], pins["runtimes"]["r"]["version"] * "-")
     end
 
+    @testset "Julia is bootstrapped from a pinned, checksummed archive" begin
+        julia = pins["runtimes"]["julia"]
+        @test sort(collect(keys(julia["archives"]))) == sort(EXPECTED_PLATFORMS)
+        for (platform, archive) in julia["archives"]
+            @test startswith(archive["url"], "https://")
+            @test occursin(julia["version"], archive["url"])
+            @test is_sha256(archive["sha256"])
+        end
+
+        # install.sh used to pipe a live installer into sh: no version, no checksum.
+        src = read(joinpath(REPO_ROOT, "install.sh"), String)
+        @test !occursin("install.julialang.org", src)
+        @test !occursin(r"\|\s*sh\b", src)
+        @test occursin("sha256", src)
+    end
+
     @testset "the installer refuses what it cannot verify" begin
         # install.jl guards its own main(), so loading it here resolves the pins and
         # defines the helpers without installing anything.

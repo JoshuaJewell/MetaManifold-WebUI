@@ -2,7 +2,7 @@
 #
 # Bootstrap installer for MetabarcodingPipeline
 #
-# Checks for Julia and R, installs Julia via juliaup if missing,
+# Checks for Julia and R, installs the pinned Julia release if Julia is missing,
 # then hands off to install.jl for all further dependency setup.
 #
 # Usage:
@@ -129,40 +129,131 @@ persist_juliaup_path() {
     echo ""
 }
 
-if command -v julia &>/dev/null; then
+# The pinned Julia distribution, unpacked by install_pinned_julia. start.sh
+# looks here too.
+PINNED_JULIA_DIR="bin/julia"
+PINS_FILE="config/defaults/tool_versions.yml"
+
+# Print one field ("url" or "sha256") of runtimes.julia.archives.<platform>.
+julia_archive_field() {
+    awk -v plat="$1" -v key="$2" '
+        /^runtimes:/            { r = 1; next }
+        r && /^[^ #]/           { r = 0 }
+        r && /^  julia:/        { j = 1; next }
+        j && /^  [^ ]/          { j = 0 }
+        j && $1 == plat ":"     { p = 1; next }
+        p && /^      [^ ]/      { p = 0 }
+        p && $1 == key ":"      { gsub(/"/, "", $2); print $2; exit }
+    ' "$PINS_FILE"
+}
+
+# Download the Julia release pinned in tool_versions.yml, check it against the
+# recorded sha256 before unpacking anything, and unpack it into
+# $PINNED_JULIA_DIR. This replaces piping a live installer into sh, which ran
+# whatever that URL served on the day with no checksum at all.
+install_pinned_julia() {
+    local arch platform url sha tmp actual
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64|amd64)  arch="x86_64"  ;;
+        aarch64|arm64) arch="aarch64" ;;
+    esac
+    case "$OS_TYPE" in
+        Linux) platform="linux-$arch" ;;
+        macOS) platform="macos-$arch" ;;
+    esac
+
+    url="$(julia_archive_field "$platform" url)"
+    sha="$(julia_archive_field "$platform" sha256)"
+    if [ -z "$url" ] || [ -z "$sha" ]; then
+        echo "ERROR: no pinned Julia archive for $platform in $PINS_FILE."
+        return 1
+    fi
+
+    mkdir -p bin
+    tmp="$(mktemp -d bin/.julia-download.XXXXXX)"
+    echo "Downloading $url"
+    if ! curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 \
+              -o "$tmp/julia.tar.gz" "$url"; then
+        rm -rf "$tmp"
+        echo "ERROR: download failed: $url"
+        return 1
+    fi
+
+    if command -v sha256sum &>/dev/null; then
+        actual="$(sha256sum "$tmp/julia.tar.gz" | awk '{print $1}')"
+    else
+        actual="$(shasum -a 256 "$tmp/julia.tar.gz" | awk '{print $1}')"
+    fi
+    if [ "$actual" != "$sha" ]; then
+        rm -rf "$tmp"
+        echo "ERROR: checksum mismatch for $url"
+        echo "  expected $sha"
+        echo "  got      $actual"
+        return 1
+    fi
+
+    mkdir "$tmp/julia"
+    tar -xzf "$tmp/julia.tar.gz" -C "$tmp/julia" --strip-components=1
+    if [ ! -x "$tmp/julia/bin/julia" ]; then
+        rm -rf "$tmp"
+        echo "ERROR: the archive did not contain bin/julia."
+        return 1
+    fi
+    rm -rf "$PINNED_JULIA_DIR"
+    mv "$tmp/julia" "$PINNED_JULIA_DIR"
+    rm -rf "$tmp"
+}
+
+# Precedence: a pinned release already in bin/julia, then julia on PATH, then
+# juliaup, and only then a fresh pinned install. Whichever is chosen must be
+# the pinned version; the check after the juliaup override below enforces that.
+if [ -x "$PINNED_JULIA_DIR/bin/julia" ]; then
+    PATH="$PWD/$PINNED_JULIA_DIR/bin:$PATH"
+    echo "Found Julia (pinned, in $PINNED_JULIA_DIR): $(julia --version)"
+elif command -v julia &>/dev/null; then
     echo "Found Julia: $(julia --version)"
 elif locate_julia; then
     echo "Found Julia (via juliaup, was not on PATH): $(julia --version)"
     persist_juliaup_path
 else
-    echo "Julia not found. Installing via juliaup..."
-    if ! curl -fsSL --proto '=https' --proto-redir '=https' https://install.julialang.org | sh -s -- --yes; then
-        echo ""
-        echo "The juliaup installer exited non-zero - usually an existing juliaup"
-        echo "install blocking a reinstall. Trying the existing installation..."
-    fi
-
-    if locate_julia; then
+    echo "Julia not found. Installing the pinned release into $PINNED_JULIA_DIR..."
+    if install_pinned_julia; then
+        PATH="$PWD/$PINNED_JULIA_DIR/bin:$PATH"
         echo "Julia available: $(julia --version)"
-        persist_juliaup_path
+        echo "start.sh finds it in $PINNED_JULIA_DIR; no shell profile change is needed."
     else
         echo ""
-        echo "ERROR: Julia is still not callable after attempting install."
-        echo "  Inspect:  juliaup status   ;   ls -la \"$JULIAUP_BIN\""
-        echo "  Or install manually: https://julialang.org/downloads/"
-        echo "  Then re-run: bash install.sh"
+        echo "ERROR: Julia could not be installed."
+        echo "  Install it manually (https://julialang.org/downloads/), or install"
+        echo "  juliaup, then re-run: bash install.sh"
         exit 1
     fi
 fi
 
 # Pin this directory to the Julia version the Manifest was resolved with.
-JULIA_PIN="$(awk '/^  julia:/{f=1; next} f && /version:/{gsub(/"/, "", $2); print $2; exit}' config/defaults/tool_versions.yml)"
+JULIA_PIN="$(awk '/^  julia:/{f=1; next} f && /version:/{gsub(/"/, "", $2); print $2; exit}' "$PINS_FILE")"
 if [ -n "$JULIA_PIN" ] && command -v juliaup &>/dev/null; then
     if juliaup add "$JULIA_PIN" >/dev/null 2>&1 || juliaup status 2>/dev/null | grep -q "$JULIA_PIN"; then
         juliaup override set "$JULIA_PIN" >/dev/null 2>&1 &&
             echo "Pinned Julia $JULIA_PIN for this directory (juliaup override)."
     else
-        echo "WARNING: could not install Julia $JULIA_PIN via juliaup; using $(julia --version)."
+        echo "WARNING: could not install Julia $JULIA_PIN via juliaup."
+    fi
+fi
+
+# Whatever was found, Manifest.toml was resolved with $JULIA_PIN. A julia of any
+# other version (a distro package, a stale bin/julia after the pin moved, a
+# juliaup that could not be overridden) is replaced here by the pinned release.
+JULIA_FOUND="$(julia --version 2>/dev/null | awk '{print $3}')"
+if [ -n "$JULIA_PIN" ] && [ "$JULIA_FOUND" != "$JULIA_PIN" ]; then
+    echo "Julia ${JULIA_FOUND:-(unknown)} does not match the pinned $JULIA_PIN."
+    echo "Installing the pinned release into $PINNED_JULIA_DIR..."
+    if install_pinned_julia; then
+        PATH="$PWD/$PINNED_JULIA_DIR/bin:$PATH"
+        echo "Using $(julia --version) from $PINNED_JULIA_DIR."
+    else
+        echo "WARNING: could not install Julia $JULIA_PIN; continuing with $JULIA_FOUND."
     fi
 fi
 echo ""
