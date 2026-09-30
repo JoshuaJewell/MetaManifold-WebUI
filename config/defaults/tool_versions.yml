@@ -39,6 +39,23 @@ schema_version: 1
 runtimes:
   julia:
     version: "1.12.5"
+    # install.sh unpacks the archive for this platform into bin/julia when no
+    # julia is found, in place of piping a live installer into sh. Checksums are
+    # from the release's julia-1.12.5.sha256 file on julialang-s3; the
+    # linux-x86_64 one was also recomputed from the downloaded bytes on 2026-09-30.
+    archives:
+      linux-x86_64:
+        url: "https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.5-linux-x86_64.tar.gz"
+        sha256: "41b84d727e4e96fbf3ed9e92fa195d773d247b9097f73fad688f8b699758bae7"
+      linux-aarch64:
+        url: "https://julialang-s3.julialang.org/bin/linux/aarch64/1.12/julia-1.12.5-linux-aarch64.tar.gz"
+        sha256: "2e5de844ea4462bfb08a5ba9fa5ae03532183cc0d9e724590e2c8df654f3e8e2"
+      macos-x86_64:
+        url: "https://julialang-s3.julialang.org/bin/mac/x64/1.12/julia-1.12.5-mac64.tar.gz"
+        sha256: "e4b707258ee32d46afdd2cc549552adcc74244f50307aa9fed09716efc6d15ad"
+      macos-aarch64:
+        url: "https://julialang-s3.julialang.org/bin/mac/aarch64/1.12/julia-1.12.5-macaarch64.tar.gz"
+        sha256: "1fc0e00e8bee5d29b351ebab30c795f18ab335dacc897f1624e70ea25188d405"
   r:
     version: "4.5.0"
     apt_version: "4.5.0-3.2404.0"

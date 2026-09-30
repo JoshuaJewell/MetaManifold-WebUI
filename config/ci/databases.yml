@@ -9,9 +9,13 @@ databases:
       uri: "https://github.com/pr2database/pr2database/releases/download/v5.1.1/pr2_version_5.1.1_SSU_dada2.fasta.gz"
       local: ~
       remote_path: ~
+      sha256: "0c8728abcbb2126eed2c7e587f820cbce39c138cdfdb51239bbf18621498462d"
+      size: 54833479
     vsearch:
       uri: "https://github.com/pr2database/pr2database/releases/download/v5.1.1/pr2_version_5.1.1_SSU_taxo_long.fasta.gz"
       local: ~
+      sha256: "b9cef85537b49bf54d1033ad38a6cce1875123fb9f7c7c8f442aadccd2bbb8f5"
+      size: 59640632
     levels:
       - Domain
       - Supergroup

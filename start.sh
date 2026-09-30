@@ -29,6 +29,12 @@ fi
 
 ## Backend
 
+# install.sh unpacks the pinned release into bin/julia when no julia of the
+# pinned version was available, so one there takes precedence.
+if [ -x bin/julia/bin/julia ]; then
+  PATH="$(pwd)/bin/julia/bin:$PATH"
+fi
+
 # Fall back to juliaup's shim dir if julia isn't already on PATH (e.g. a fresh
 # shell that never sourced ~/.juliaup/env after install.sh ran).
 if ! command -v julia >/dev/null 2>&1; then

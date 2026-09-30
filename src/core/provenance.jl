@@ -633,6 +633,19 @@ function strict_mode(config::AbstractDict)
     return get(section, "strict", true) === true
 end
 
+# FastQC is a Java application behind a Perl wrapper. Without a JRE the wrapper
+# prints "Can't exec java" to stderr and nothing to stdout, so the version probe
+# fails with an empty banner that never mentions Java. Name the real cause.
+function _diagnose_java(component::AbstractString, err::ProbeFailure,
+                        java_present::Function)
+    component == "fastqc" || return err
+    java_present() && return err
+    return ProbeFailure(err.component,
+        "no Java runtime on PATH. FastQC is a Java application and cannot run " *
+        "without one; install a JRE (11 or newer) and re-run install.sh, which " *
+        "prints the command for this system. ($(err.reason))")
+end
+
 """
     preflight(config; databases, strict, ...) -> CapturedEnvironment
 
@@ -658,7 +671,8 @@ function preflight(config::AbstractDict;
                    julia_prober::Function      = probe_julia,
                    r_prober::Function          = probe_r,
                    tool_prober::Function       = probe -> probe_tool(probe; bin_resolver, runner),
-                   database_prober::Function   = (name, specs) -> probe_database(name, specs))
+                   database_prober::Function   = (name, specs) -> probe_database(name, specs),
+                   java_present::Function      = () -> !isnothing(Sys.which("java")))
     julia    = nothing
     r        = nothing
     tools    = OrderedDict{String,ToolRecord}()
@@ -676,7 +690,8 @@ function preflight(config::AbstractDict;
             end
         catch err
             err isa ProbeFailure || rethrow()
-            strict && rethrow()
+            err = _diagnose_java(component, err, java_present)
+            strict && throw(err)
             push!(degraded, component)
             @warn "Provenance: '$component' could not be proved; this run is degraded" reason=err.reason
         end
