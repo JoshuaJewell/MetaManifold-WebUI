@@ -268,7 +268,7 @@ end
         #   1. the name must not interpolate a pin; and
         #   2. the job must not have a `strategy.matrix`.
         #
-        # MEASURED 2026-09-21 on PR #39: a job named exactly `Julia tests` with a 1x1
+        # MEASURED 2026-09-21 on hyperpolymath/MetaManifold-WebUI#39: a job named exactly `Julia tests` with a 1x1
         # matrix posted `Julia tests (1.12.5, ubuntu-24.04)`. GitHub appends the matrix
         # combination whenever the name does not already reference the matrix, so a 1x1
         # matrix is still a matrix and the version was still embedded. A guard asserting

@@ -27,7 +27,7 @@ jobs:
     # admin bypasses the rule, triggered by nothing more alarming than editing a version
     # number.
     #
-    # MEASURED on PR #39 (2026-09-21): this job, named exactly `Julia tests` but still
+    # MEASURED on hyperpolymath/MetaManifold-WebUI#39 (2026-09-21): this job, named exactly `Julia tests` but still
     # carrying a 1x1 `strategy.matrix`, posted `Julia tests (1.12.5, ubuntu-24.04)`.
     # GitHub appends the matrix combination whenever the name does not already reference
     # the matrix, so a 1x1 matrix is still a matrix and the pins were still embedded in
