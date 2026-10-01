@@ -95,7 +95,7 @@ function _workflow_detail(steps, dir, files, cfg, overrides, key)
     threads   = Phylo._threads(get(inherited, "threads", nothing), 4)
     remote = Dict(s.name => (t = try Phylo.remote_step_target(cfg, s.remote; threads) catch; nothing end;
                              isnothing(t) ? nothing : t.host) for s in steps)
-    qc = [s.name for s in steps if isfile(joinpath(dir, "qc", "$(s.name).json"))]
+    qc = [s.name for s in steps if s.name in Phylo.QC_STEPS && isfile(joinpath(dir, "qc", "$(s.name).json"))]
     (; status = Phylo.read_status(dir), state = _state(dir, key), settings, inherited, remote, qc)
 end
 
@@ -113,6 +113,7 @@ end
 
 function _qc_response(steps, dir, step)
     isnothing(_step_named(steps, step)) && return json_error(400, "invalid_step", "Unknown step '$step'")
+    step in Phylo.QC_STEPS || return json_error(400, "invalid_step", "QC covers the align and trim steps")
     path = joinpath(dir, "qc", "$step.json")
     isfile(path) || return json_error(404, "not_found", "No QC for $step yet")
     HTTP.Response(200, ["Content-Type" => "application/json"]; body = read(path))

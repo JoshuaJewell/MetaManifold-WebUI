@@ -14,6 +14,7 @@ merge_taxa:
   filters:
     - "bacteria_archaea.pr2.yml"
 analysis:
+  exclude_categories: []
   alpha:
     annotate_significance: true
     pairwise_brackets: true

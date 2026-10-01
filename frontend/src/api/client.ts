@@ -19,7 +19,7 @@ import type {
   DatabaseDocument, DatabaseSaveResult,
   TreeFileInfo, TreeFile, RunRef, ReadFunnelData, ReportItem, ReportKind,
   PlacementDoc, PlacementSummary, PlacementDetail, PlacementQueries, PhyloStep,
-  ReferenceTreeDoc, ReferenceTreeSummary, ReferenceTreeDetail, StepQC, AlignmentQC, TrimSettings,
+  ReferenceTreeDoc, ReferenceTreeSummary, ReferenceTreeDetail, AlignmentQC, TrimSettings,
 } from './types'
 
 import type { FigureDoc } from '../figure/types'
@@ -366,7 +366,7 @@ export const api = {
     saveView: (id: string, view: unknown) => put<{ saved: boolean }>(`/api/v1/reference-trees/${id}/tree/view`, view),
     run:     (id: string) => post<Job>(`/api/v1/reference-trees/${id}/run`),
     log:     (id: string, step: PhyloStep) => getText(`/api/v1/reference-trees/${id}/log/${step}`),
-    qc:      (id: string, step: PhyloStep) => get<StepQC>(`/api/v1/reference-trees/${id}/qc/${step}`),
+    qc:      (id: string, step: PhyloStep) => get<AlignmentQC>(`/api/v1/reference-trees/${id}/qc/${step}`),
     alignment: (id: string, which: 'raw' | 'trimmed') => getText(`/api/v1/reference-trees/${id}/alignment/${which}`),
     trimPreview: (id: string, trim: TrimSettings) => post<AlignmentQC>(`/api/v1/reference-trees/${id}/trim-preview`, trim),
   },
@@ -387,7 +387,7 @@ export const api = {
         `/api/v1/studies/${study}/placements/preview`, queries),
     run:     (study: string, id: string) => post<Job>(`/api/v1/studies/${study}/placements/${id}/run`),
     log:     (study: string, id: string, step: PhyloStep) => getText(`/api/v1/studies/${study}/placements/${id}/log/${step}`),
-    qc:      (study: string, id: string, step: PhyloStep) => get<StepQC>(`/api/v1/studies/${study}/placements/${id}/qc/${step}`),
+    qc:      (study: string, id: string, step: PhyloStep) => get<AlignmentQC>(`/api/v1/studies/${study}/placements/${id}/qc/${step}`),
     alignment: (study: string, id: string, which: 'raw' | 'trimmed') =>
       getText(`/api/v1/studies/${study}/placements/${id}/alignment/${which}`),
     trimPreview: (study: string, id: string, trim: TrimSettings) =>

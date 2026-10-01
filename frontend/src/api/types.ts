@@ -632,28 +632,6 @@ export interface AlignmentQC {
   per_sequence: { name: string; query: boolean; residues: number; kept_residues: number | null; span: [number, number] | null }[]
 }
 
-export interface TreeQC {
-  kind: 'tree'
-  model: string | null
-  model_selected: boolean
-  log_likelihood: number | null
-  sequences: number | null
-  sites: number | null
-  informative_sites: number | null
-  constant_sites: number | null
-  supports: number[]
-}
-
-export interface PlacementQC {
-  kind: 'placement'
-  placed: number
-  queries: { name: string; residues: number; trimmed_residues: number; placed: boolean; placements: number; best_lwr: number | null }[]
-}
-
-export interface AccumulateQC { kind: 'accumulate'; kept: number; dropped: string[] }
-
-export type StepQC = AlignmentQC | TreeQC | PlacementQC | AccumulateQC
-
 export interface ReadFunnelData {
   stages:  { key: string; label: string }[]
   samples: { sample: string; values: Record<string, number | null> }[]

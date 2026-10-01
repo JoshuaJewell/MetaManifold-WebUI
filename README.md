@@ -2,49 +2,64 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Julia 1.12](https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia)](https://julialang.org)
-[![R ≥ 4.0](https://img.shields.io/badge/R-%E2%89%A54.0-276DC3?logo=r)](https://www.r-project.org)
+[![R >= 4.0](https://img.shields.io/badge/R-%E2%89%A54.0-276DC3?logo=r)](https://www.r-project.org)
 [![CI](https://github.com/JoshuaJewell/MetaManifold-WebUI/actions/workflows/ci.yml/badge.svg)](https://github.com/JoshuaJewell/MetaManifold-WebUI/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/JoshuaJewell/MetaManifold-WebUI/graph/badge.svg?token=20F1VLF590)](https://codecov.io/gh/JoshuaJewell/MetaManifold-WebUI)
 
 MetaManifold wraps standard amplicon sequencing workflows into a single configurable Julia orchestrator: from raw paired-end Next Generation Sequencing reads through denoising, taxonomy assignment and taxonomic filtering, with interactive configuration and analysis in the browser.
 
 <p align="center">
-  <img src=".github/screenshots/hero.png" width="850" alt="A study's DADA2 analysis tab comparing richness between two runs, with paired samples joined">
+  <img src=".github/screenshots/hero.png" width="850" alt="A run page showing per-stage status, launch controls, run-level configuration and the read funnel">
 </p>
 
 ## Overview
 
-MetaManifold consists of a Julia backend (pipeline engine + REST API) and a TypeScript/React frontend. The pipeline runs FastQC, MultiQC, cutadapt, DADA2, SWARM, vsearch, and cd-hit-est under the hood, and places ASVs on reference trees with MAFFT, trimAl, IQ-TREE, RAxML and gappa; results are stored in per-run DuckDB databases and served to the frontend as interactive Plotly charts and filterable tables. Pipeline configuration is editable directly in the web UI at every cascade level (see [Configuration](#configuration)).
+MetaManifold consists of a Julia backend (pipeline engine + REST API) and a TypeScript/React frontend. The pipeline runs FastQC, MultiQC, cutadapt, DADA2, swarm, vsearch, and cd-hit-est under the hood, and places ASVs on reference trees with MAFFT, trimAl, IQ-TREE, RAxML and gappa; results are stored in per-run DuckDB databases and served to the frontend as interactive Plotly charts and filterable tables. Pipeline configuration is editable in the web UI at every cascade level (see [Configuration](#configuration)).
 
 **Pipeline stages**
 
 ```
 Raw FASTQs  (data/{study}/[{group}/]{run}/*.fastq.gz)
-      │
+      |
    cutadapt, primer trimming
-      │
-      ├────────────────────────────┐
-      │                            │
-   DADA2*, ASV;               SWARM*, OTU;
+      |
+      +----------------------------+
+      |                            |
+   DADA2*, ASV;               swarm*, OTU;
    filter & trim              merge pairs
    learn error rates          dereplicate
    denoise + merge            chimera filter
    length filter              cluster OTUs
-   chimera removal                 │
-   taxonomy assign*                │
-      │                            │
-   cd-hit-est*, demultiplex        │
-      │                            │
+   chimera removal                 |
+   taxonomy assign*                |
+      |                            |
+   cd-hit-est*, demultiplex        |
+      |                            |
    vsearch*                   vsearch, global alignment
-      │                            │
-      ├────────────────────────────┘
-      │
+      |                            |
+      +----------------------------+
+      |
    merge_taxa;
    join ASV tables*
    join counts-taxonomy
    apply filters
-      │
-   DuckDB results store
+      |
+   DuckDB results store          Reference sequences
+      |                                |
+      |                          reference tree*;
+      |                          MAFFT align
+      |                          trimAl trim
+      |                          IQ-TREE tree
+      |                                |
+      +---------------+----------------+
+                      |
+               placement*;
+               MAFFT add queries
+               trimAl trim
+               RAxML EPA place
+               gappa accumulate
+                      |
+               jplace trees
 ```
 *optional
 
@@ -60,7 +75,7 @@ Once a run completes, analysis is performed on request through the web UI, both 
 - NMDS ordination (Bray-Curtis, via R/vegan)
 - PERMANOVA, with PERMDISP to check for differences in dispersion (via R/vegan)
 
-Counts may be normalised before analysis (none, rarefaction to a fixed or auto-resolved depth, or SRS — scaling with ranked subsampling, which reaches the same depth by scaling rather than resampling and so retains more of the community structure), and contamination-flagged taxa may be included or excluded. Ordinations may additionally apply a Hellinger transform before the Bray-Curtis dissimilarity. Composition charts can be drawn as a grid faceted on any two of run, group and sub-group. All analysis charts are returned as Plotly JSON and rendered interactively in the browser.
+Counts may be normalised before analysis (none, rarefaction to a fixed or auto-resolved depth, or scaling with ranked subsampling (SRS), which reaches the depth by scaling counts and keeps more of the community structure), and contamination-flagged taxa may be included or excluded. Ordinations can also apply a Hellinger transform before the Bray-Curtis dissimilarity. Composition charts can be drawn as a grid faceted on any two of run, group and sub-group. All analysis charts are returned as Plotly JSON and rendered interactively in the browser.
 
 ## Prerequisites
 
@@ -78,26 +93,20 @@ cd MetaManifold-WebUI
 bash install.sh
 ```
 
-`install.sh` installs Julia (via juliaup) if missing, checks for R (and stops
-with install instructions if it is absent), then hands off to `install.jl`,
-which installs the Julia dependencies, locates or downloads each external tool
-(cutadapt, FastQC, MultiQC, vsearch, cd-hit-est, and the phylogeny tools MAFFT,
-trimAl, IQ-TREE, RAxML and gappa), and reproduces the R
+`install.sh` installs Julia (via juliaup) if missing, checks for R, then hands
+off to `install.jl`, which installs the Julia dependencies, locates or downloads
+each external tool (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est, and the
+phylogeny tools MAFFT, trimAl, IQ-TREE, RAxML and gappa), and reproduces the R
 environment from `renv.lock`. It ends with a summary listing every dependency as
-`OK`, `SKIPPED`, or `ACTION NEEDED`, so anything it could not finish itself is
-stated explicitly rather than surfacing later as a broken pipeline stage. Tool
-paths can be configured manually in `config/tools.yml`. MAFFT, IQ-TREE and RAxML
-can be skipped on a machine that sends those stages to a server (see
-[Threads and remote execution](#threads-and-remote-execution-top-level-of-pipelineyml));
-trimAl and gappa always run locally.
+`OK`, `SKIPPED`, or `ACTION NEEDED`. Tool paths can be set in
+`config/tools.yml`. MAFFT, IQ-TREE and RAxML can be skipped on a machine that
+sends those stages to a server (see
+[Threads and remote execution](#threads-and-remote-execution-top-level-of-pipelineyml)).
 
-`install.sh` does **not** install R itself, nor the system `-dev` headers the R
-stack compiles against (both need root). Missing R stops the install with a
-message telling you how to get it. If the build headers are incomplete the
-installer does not start `renv::restore()` (it would compile for minutes and
-then fail on the first package that needs one); instead the summary prints the
-single command that installs every missing one — run it and re-run `install.sh`
-to finish the R setup.
+Installing R and the system `-dev` headers the R packages compile against needs
+root. If R is missing, the installer stops and prints how to install it. If
+headers are missing, the summary prints the command that installs them; run it
+and rerun `install.sh`.
 
 To update:
 ```bash
@@ -110,7 +119,7 @@ The R-side dependencies (DADA2, vegan, and their transitive packages) are
 pinned with [`renv`](https://rstudio.github.io/renv/); `renv.lock` is the source
 of truth and the committed `.Rprofile` activates the project-local library on
 any `R`/`Rscript` invocation from the repository root. `install.sh` runs the
-restore for you; to redo it by hand (e.g. after adding the missing headers):
+restore; to run it by hand:
 
 ```bash
 Rscript -e 'renv::restore(prompt = FALSE)'
@@ -128,8 +137,8 @@ vsearch:
   path: "/home/user/software/vsearch"
 ```
 
-`config/defaults/tools.yml` contains the full config format. Work that runs on a
-server is configured with the `remote` block of `pipeline.yml`, not here.
+`config/defaults/tools.yml` contains the full config format. Stages that run on a
+server are configured in the `remote` block of `pipeline.yml`.
 
 ## Quick start
 
@@ -143,7 +152,7 @@ The installer builds the frontend into `web/dist`, and `install.sh --update` reb
 
 ### 3. Open http://localhost:8080
 
-The web UI lets you create studies, configure pipeline parameters, launch runs, and explore results interactively. All state lives in the filesystem under `data/` and `projects/`.
+The web UI lets you create studies, configure pipeline parameters, launch runs, and explore results. All state lives in the filesystem under `data/` and `projects/`.
 
 | Environment variable      | Default           | Description   |
 | ------------------------- | ----------------- | ------------- |
@@ -176,27 +185,23 @@ The browser interface is the primary way to drive MetaManifold. Beyond creating 
 
 ### Editing configuration
 
-Every pipeline setting can be edited in the UI without touching a YAML file. Configuration is presented as collapsible accordion sections (study design, primer trimming, DADA2 denoising and taxonomy, OTU clustering, analysis) and can be set at any level of the cascade: the instance-wide defaults, a study, a group, or an individual run. Edits at a finer level override coarser ones (see [Configuration](#configuration) for the cascade rules). When a setting changes, the affected pipeline stages are flagged as stale, so it is clear which outputs a re-run would regenerate; a tooltip lists exactly which keys changed and at which level.
+Every pipeline setting can be edited in the UI without touching a YAML file. Configuration is presented as collapsible accordion sections (study design, primer trimming, DADA2 denoising and taxonomy, OTU clustering, analysis) and can be set at any level of the cascade: the instance-wide defaults, a study, a group, or an individual run. Edits at a finer level override coarser ones (see [Configuration](#configuration) for the cascade rules). When a setting changes, the affected pipeline stages are flagged as stale, with a tooltip listing the changed keys and their level.
 
 ### Pipeline runs and outputs
 
 A run's page is the working surface for that run. It is where the run-level configuration above is edited, where the full pipeline or any individual stage (including the DADA2 substages) is launched, and where each stage's status is shown. Long-running jobs report progress live through a server-sent event stream, and the jobs panel lets you watch or cancel them. As stages complete, their outputs become available through the views that follow: quality reports, the results table and composition.
 
-<p align="center">
-  <img src=".github/screenshots/run-view.png" width="800" alt="A run page showing per-stage status, launch controls, and run-level configuration">
-</p>
-
 ### QC
 
-Raw-read QC (FastQC aggregated by MultiQC) and the DADA2 quality, denoising, merging, and taxonomy diagnostics are embedded in the UI, each with the relevant per-stage configuration alongside and a re-run control.
+Raw-read QC (FastQC aggregated by MultiQC) is embedded in each run's page with a rerun control. The DADA2 quality, denoising, merging and taxonomy diagnostics sit beside their stage settings.
 
 <p align="center">
-  <img src=".github/screenshots/qc.png" width="800" alt="DADA2 quality profiles before and after filtering, above the filter settings">
+  <img src=".github/screenshots/qc.png" width="800" alt="The MultiQC report embedded in a run's QC tab">
 </p>
 
 ### Results explorer
 
-Each run's merged taxonomy-and-count table, and any derived tables, can be browsed interactively. The table supports per-column filtering (text search, numeric range, include/exclude lists) and a global text filter, column sorting, configurable pagination, and column visibility toggles including taxonomy-source presets (VSEARCH-only, DADA2-only, or all) and a switch for the per-sample count columns. Sequences carry BLAST links, and OTU rows can be expanded to their constituent sequences. Frequently used filters can be saved as named presets and reapplied; filtered tables can be saved back into the run or exported to Excel (`.xlsx`).
+Each run's merged taxonomy-and-count table, and any derived tables, can be browsed. The table supports per-column filtering (text search, numeric range, include/exclude lists) and a global text filter, column sorting, configurable pagination, and column visibility toggles including taxonomy-source presets (VSEARCH-only, DADA2-only, or all) and a switch for the per-sample count columns. Sequences carry BLAST links, and OTU rows can be expanded to their constituent sequences. Frequently used filters can be saved as named presets and reapplied; filtered tables can be saved back into the run or exported as `.xlsx`.
 
 <p align="center">
   <img src=".github/screenshots/results-explorer.png" width="800" alt="Results explorer table with per-column filters and taxonomy-source column presets">
@@ -207,17 +212,11 @@ Each run's merged taxonomy-and-count table, and any derived tables, can be brows
 Reference trees (under SYSTEM) are built once from uploaded reference sequences
 and used by any study. A study's Trees tab places its ASVs on one of them: pick
 runs and, for pooled runs, subgroups, a results table, a rank and taxa, or upload
-a FASTA. Each step shows where it runs, its state, its log and its QC; trimming
-can be previewed before it is rerun. See
+a FASTA. Each step shows where it runs, its state and its log, and the align and
+trim steps show a QC view of the alignment. A finished placement adds the
+reference tree, the placement jplace and the accumulated jplace to the study's
+tree list. See
 [Configuring phylogenetic placement](#configuring-phylogenetic-placement-phylogeny-in-pipelineyml).
-
-<p align="center">
-  <img src=".github/screenshots/reference-tree.png" width="800" alt="A reference tree's settings and steps, with the trimAl QC showing column occupancy against the -gt threshold">
-</p>
-
-<p align="center">
-  <img src=".github/screenshots/placement.png" width="800" alt="A placement of one subgroup's ASVs, with each query's likelihood weight and whether gappa kept it">
-</p>
 
 ### Tree viewer
 
@@ -237,7 +236,7 @@ from the library page.
 The composition view classifies each ASV/OTU into a biological category and renders per-sample or pooled stacked bar charts. Category sets live in `config/composition.yml` (the bundled `default` set covers protozoa, helminths, fungi, host, plants, and invertebrates); each category references a named taxonomic filter from the `filters:` library in that same file. Both are editable from the Compositions page under SYSTEM in the sidebar. A category summary precedes the chart, and a quality filter can cap the number of unresolved taxonomic placeholders admitted.
 
 <p align="center">
-  <img src=".github/screenshots/composition.png" width="800" alt="Organism-category composition drawn as a grid of stacked bar charts, one panel per run and subgroup">
+  <img src=".github/screenshots/composition.png" width="800" alt="Organism-category composition of two runs as stacked bars">
 </p>
 
 ### Figures and report
@@ -248,8 +247,8 @@ sizes, and exports it as PDF, PNG or TIFF at a chosen resolution. The
 Publication Tables tab builds one table at a time: rows of taxa at a rank or of
 categories from a Compositions set, columns of runs, sub-groups or samples, and
 any of ASVs, reads and percentage per column, with an optional difference
-between two sub-groups. A table can be copied for Word or downloaded as .xlsx or
-CSV. Charts, figures, tables and trees can be added to the study's Report tab,
+between two sub-groups. A table can be copied for Word or downloaded as `.xlsx` or
+`.csv`. Charts, figures, tables and trees can be added to the study's Report tab,
 which downloads them together as one ZIP with a captions file.
 
 <p align="center">
@@ -258,9 +257,9 @@ which downloads them together as one ZIP with a captions file.
 
 ## Configuration
 
-Pipeline settings use a cascade: each level overrides the one above it, and any key you omit is inherited from the nearest ancestor. The fully merged result is written to `run_config.yml` at runtime; that is the single place to see exactly what was used for a run.
+Pipeline settings use a cascade: each level overrides the one above it, and any key you omit is inherited from the nearest ancestor. The merged result is written to each run's `run_config.yml`, which records the settings the run used.
 
-Settings can be edited in the web UI (per-study, per-group, or per-run) or as YAML files directly.
+Settings can be edited in the web UI (per-study, per-group, or per-run) or in the YAML files.
 
 | File | Purpose |
 |------|---------|
@@ -294,13 +293,13 @@ databases:
       local: ~
 ```
 
-Edit this on the Databases page under SYSTEM in the sidebar, or in the YAML directly. The page edits the shared cache directory (`dir`) and, per database, the dada2 and vsearch source URIs, a `local:` override for a file already on disk, `remote_path` (dada2 only) for a file already present on the remote taxonomy host, the ordered taxonomy `levels`, the `vsearch_format` parser selector, and the taxonomy `corrections`. Adding and removing a database is supported, not just retuning PR2. `vsearch_format` offers exactly `pr2` and `generic`: only the literal `pr2` selects pipe-separated parsing, and anything else is parsed generically.
+Edit this on the Databases page under SYSTEM in the sidebar, or in the YAML. The page edits the shared cache directory (`dir`) and, per database, the dada2 and vsearch source URIs, a `local:` override for a file already on disk, `remote_path` (dada2 only) for a file already present on the remote taxonomy host, the ordered taxonomy `levels`, the `vsearch_format` parser (`pr2` or `generic`), and the taxonomy `corrections`. Adding and removing a database is supported.
 
-Removing or renaming a database, or changing its `levels`, is allowed, but the save reports which studies it affects. The warning resolves the real config cascade, so it names the studies that inherit the database without naming it, not merely those that mention it explicitly.
+Removing or renaming a database, or changing its `levels`, reports the studies that use it, including those that inherit it through the cascade.
 
-Both formats of one database should come from the same reference release: the dual-classifier consensus compares DADA2 and VSEARCH labels for string equality, so references drawn from different releases score genuine agreements as disagreements. The editor warns on a version-token mismatch between the two URIs, but this is a filename heuristic and cannot warn for a database whose URIs carry no version.
+Both formats of one database should come from the same reference release, because the consensus of the two classifiers compares their labels as text. The editor warns when the version numbers in the two URIs differ.
 
-### Defining primer pairs `primers.yml`
+### Defining primer pairs (`config/primers.yml`)
 
 Maps primer names to sequences and defines which forward/reverse sequences constitute a pair:
 
@@ -321,11 +320,11 @@ Pairs:
       - Primer2R
 ```
 
-Store all primer pairs in here and reference whichever combinations you need per project. Shared primers across pairs (same forward primer in two pairs) are automatically deduplicated in the `cutadapt` invocation since otherwise it complains a bit. If you need duplicates, you must create the same sequence under a different name.
+Store all primer pairs in here and reference whichever combinations you need per project. A primer shared by two pairs is passed to cutadapt once; to pass it twice, add the same sequence under a second name.
 
-Edit this on the Primers page under SYSTEM in the sidebar, or in the YAML directly. The page adds and removes primers and composes pairs from them, validating each sequence against the IUPAC base set as you type. The whole document is validated before it lands on disk, so a pair naming a primer that does not exist is rejected and the file is left untouched.
+Edit this on the Primers page under SYSTEM in the sidebar, or in the YAML. The page adds and removes primers and composes pairs from them, checking each sequence against the IUPAC codes as you type. A pair naming a primer that does not exist is rejected on save.
 
-Pair names are referenced by `cutadapt.primer_pairs` in `pipeline.yml`. Removing or renaming a pair that a study still references is permitted, but the save reports which studies, groups, or runs named it, so the dangling reference is never silent. Renaming a primer carries its pairs with it automatically.
+Pair names are referenced by `cutadapt.primer_pairs` in `pipeline.yml`. Removing or renaming a pair reports the studies, groups and runs that use it. Renaming a primer updates the pairs that use it.
 
 ### Configuring cutadapt (`cutadapt:` in `pipeline.yml`)
 
@@ -348,14 +347,12 @@ cutadapt:
 
 ### Threads and remote execution (top level of `pipeline.yml`)
 
-Both settings sit at the top level, not under a stage, and neither participates
-in any stage hash: changing the thread count or the server never marks completed
-work stale, because neither can change a result.
+Both settings sit outside the stages. Changing either does not mark completed
+work stale.
 
 ```yaml
-# Worker threads for every DADA2 R stage - learn_errors, denoise,
-# chimera_removal and assign_taxonomy all read this one key.
-# true = every core, false = one, or a positive integer.
+# Worker threads for the DADA2 stages learn_errors, denoise, chimera_removal
+# and assign_taxonomy: true = every core, false = one, or a positive integer.
 r_threads: 4
 
 # DISCLAIMER: you are solely responsible for ensuring you are authorised to use
@@ -373,49 +370,34 @@ remote:
     raxml: "raxmlHPC-PTHREADS-SSE3"
 ```
 
-Each offloadable stage ships its own inputs and collects its own outputs, so the
-choice is per stage and the stages are independent - a run denoised locally can
-still have its chimeras removed on the server, and vice versa. What that costs
-differs sharply between them:
+Each stage listed in `remote.stages` uploads its own inputs and downloads its
+own outputs, so any combination of stages can run on the server:
 
-| Stage | Uploads | Notes |
+| Stage | Uploads | Returns |
 | --- | --- | --- |
-| `learn_errors` | only the leading reads the `dada2.dada.nbases` budget reaches | Returns `ckpt_errors.RData` and the error-rate plot |
-| `denoise` | filtered reads and `ckpt_errors.RData` | Heaviest stage; returns `ckpt_denoise.RData` |
-| `chimera_removal` | two checkpoints | Cheapest to offload - no read ever crosses |
-| `assign_taxonomy` | one checkpoint, and the database unless `remote_path` names a copy on the server | Set `dada2.remote_path` in `config/databases.yml` to skip the database transfer |
-| `phylogeny_align` | the reference FASTA | MAFFT for a reference tree |
-| `phylogeny_tree` | the trimmed reference alignment | IQ-TREE; usually the longest phylogeny step |
-| `phylogeny_add` | the queries and the trimmed reference alignment | MAFFT `--addfragments` for a placement |
-| `phylogeny_place` | the trimmed combined alignment and the reference tree | RAxML EPA |
+| `learn_errors` | the reads within the `dada2.dada.nbases` budget | `ckpt_errors.RData` and the error-rate plot |
+| `denoise` | filtered reads and `ckpt_errors.RData` | `ckpt_denoise.RData` |
+| `chimera_removal` | two checkpoints | a checkpoint |
+| `assign_taxonomy` | one checkpoint, and the database unless `dada2.remote_path` in `config/databases.yml` names a copy on the server | a checkpoint |
+| `phylogeny_align` | the reference FASTA | the reference alignment (MAFFT) |
+| `phylogeny_tree` | the trimmed reference alignment | the reference tree (IQ-TREE) |
+| `phylogeny_add` | the queries and the trimmed reference alignment | the combined alignment (MAFFT `--addfragments`) |
+| `phylogeny_place` | the trimmed combined alignment and the reference tree | the placement jplace (RAxML EPA) |
 
-Trimming (trimAl) and accumulation (gappa) always run on this machine, so trimAl
-and gappa must be installed locally. Reference trees belong to no study and read
-`remote` from `config/pipeline.yml`; placements read it through their study's
-cascade.
+trimAl and gappa run on this machine. Reference trees belong to no study and
+read `remote` from `config/pipeline.yml`; placements read it through their
+study's cascade.
 
-`filter_trim` is deliberately not offloadable and not threaded by `r_threads`:
-`dada2::filterAndTrim` honours `multithread` only by switching off its own
-OpenMP path and forking through `mcmapply`, which is the deadlock described at
-the top of `src/pipeline/dada2/dada2_functions.r`. It stays on OpenMP, which is
-already parallel. The other three thread through RcppParallel's in-process
-workers, so `r_threads` is safe for them inside the embedded R session.
+`filter_trim` runs on this machine with DADA2's own threading, so `r_threads`
+does not apply to it.
 
-`learn_errors` sends less than the others because it needs less: dada2
-dereplicates the files in the order given and stops as soon as the cumulative
-base count exceeds `nbases`, so only that prefix contributes to the error model
-and only that prefix is uploaded. The model that comes back is identical to the
-one a full upload would produce. The saving grows with the study, since the
-budget is fixed while the read set is not.
+Each stage invocation stages its files in its own directory on the server and
+removes it when the stage ends. Directories left by an interrupted stage are
+removed on a later connection once they are a week old.
 
-A staging directory is created per stage invocation and removed when the stage
-ends. If this machine dies mid-stage, a `trap` on the remote side removes it
-when sshd hangs up the session, and any directory older than a week is swept on
-the next connection.
-
-**Migrating from `dada2.taxonomy.multithread` / `dada2.taxonomy.remote`:** both
+**Migrating from `dada2.taxonomy.multithread` and `dada2.taxonomy.remote`:** both
 still work for `assign_taxonomy` and are deprecated. After moving them to the
-top level, run once so completed taxonomy work is not marked stale by the move:
+top level, run this once to keep completed taxonomy work current:
 
 ```
 julia --project=. -e 'include("scripts/migrate_r_threads.jl"); MigrateRThreads.run_migration("projects")'
@@ -461,8 +443,7 @@ dada2:
   taxonomy:
     database: pr2                # key into config/databases.yml
     min_boot: 0                  # minimum bootstrap confidence to retain (0-100)
-    # Taxonomy rank names are read from databases.yml (the `levels:` key under
-    # each database entry). Do not set them here.
+    # Rank names come from `levels:` in config/databases.yml.
 
   # Output filename prefixes (all written to dada2/Tables/):
   output:
@@ -479,14 +460,14 @@ dada2:
 | `asvs.fasta` / `asvs.csv` | ASV sequences with short identifiers (seq1, seq2, ...) |
 | `taxonomy.csv`            | Taxonomy assignments per ASV                           |
 | `taxonomy_bootstraps.csv` | Bootstrap confidence values per rank                   |
-| `taxonomy_combined.csv`   | Taxonomy ├ bootstrap columns combined                  |
-| `tax_counts.csv`          | Taxonomy ├ per-sample counts                           |
-| `asv_counts.csv`          | ASV sequences ├ per-sample counts (no taxonomy)        |
+| `taxonomy_combined.csv`   | Taxonomy + bootstrap columns combined                  |
+| `tax_counts.csv`          | Taxonomy + per-sample counts                           |
+| `asv_counts.csv`          | ASV sequences + per-sample counts (no taxonomy)        |
 | `pipeline_stats.csv`      | Read counts retained at each pipeline stage            |
 
 ### Configuring vsearch (`vsearch:` in `pipeline.yml`)
 
-Controls the alignment thresholds used when assigning taxonomy against the reference database. Per run, this provides the same configuration for both ASV and OTU pipeline if they are running parallel.
+Controls the alignment thresholds used when assigning taxonomy against the reference database. The same settings apply to ASVs and OTUs.
 
 ```yaml
 vsearch:
@@ -500,7 +481,7 @@ vsearch:
 
 ### Configuring cd-hit-est (`cdhit:` in `pipeline.yml`)
 
-Optional clustering step that collapses near-identical ASVs before vsearch taxonomy assignment. Used here for when using primers in multiplex, to reduce inflation from same sequences from different primers appearing different.
+Optional clustering step that collapses near-identical ASVs before vsearch taxonomy assignment. Use it with multiplexed primers, where one template amplified by different primers yields near-identical ASVs.
 
 ```yaml
 cdhit:
@@ -526,125 +507,37 @@ swarm:
 
 ### Configuring phylogenetic placement (`phylogeny:` in `pipeline.yml`)
 
-Placement is split into two workflows, each run as a job and each with its own
-QC.
-
-**Reference trees** are a library shared by every study (Reference trees, under
-SYSTEM in the sidebar). One is a set of reference sequences taken through:
-
-1. **align**: MAFFT, `mafft --maxiterate 1000 --localpair` by default.
-2. **trim**: trimAl on that alignment.
-3. **tree**: IQ-TREE, `iqtree -m MFP -b 100` by default.
-
-**Placements** belong to a study (its Trees tab). One picks a reference tree from
-the library and a set of queries, either ASVs chosen by run, subgroup, table,
-rank and taxon, or an uploaded FASTA. It runs:
-
-1. **align**: `mafft --auto --addfragments` adds the queries to the trimmed
-   reference alignment.
-2. **trim**: trimAl on the combined alignment.
-3. **place**: RAxML EPA (`raxmlHPC-PTHREADS-SSE3 -f v -G 0.2 -m GTRCATI`) places
-   each query on the reference tree.
-4. **accumulate**: `gappa edit accumulate --threshold 0.8`.
-
-When a placement finishes, the reference tree, the placement jplace and the
-accumulated jplace are added to the study's tree list. The viewer's Import from…
-can carry the reference tree's bootstrap support onto the jplace tree.
-
-A step reruns only when its inputs or its settings change, so changing a trim
-setting reruns trimming and what follows it and keeps the MAFFT alignment.
-Rebuilding a reference tree makes every placement on it rerun from its align
-step the next time it runs. Where a step runs and how many threads it uses do not
-count as a change.
-
-#### Trimming
-
-Both trim steps take the same settings. `method: manual` applies the thresholds;
-the other methods are trimAl's automated modes and ignore them.
-
-| Key | trimAl | Meaning |
-| --- | --- | --- |
-| `method` | `-gappyout`, `-strict`, `-strictplus`, `-automated1`, `-nogaps`, `-noallgaps` | Or `manual` |
-| `gap_threshold` | `-gt` | Keep columns with residues in at least this fraction of sequences |
-| `conservation` | `-cons` | Keep at least this percentage of columns whatever the thresholds |
-| `similarity_threshold` | `-st` | Minimum average similarity of a kept column |
-| `residue_overlap`, `sequence_overlap` | `-resoverlap`, `-seqoverlap` | Set together: remove sequences that overlap too few others |
-| `optional_args` | | Extra trimAl flags |
-
-Preview trimming, beside the trim settings, runs trimAl with the settings as
-they stand on the current alignment and shows the result without changing
-anything. Run the workflow to use them.
-
-#### QC
-
-Each step's QC opens from its row in the Run panel:
-
-- **align and trim**: sequences and columns, the columns trimming kept, the share
-  of each column holding a residue (references and queries apart in a
-  placement, with the kept columns shaded and the `-gt` line drawn), each
-  sequence's residues and the share trimming kept, the sequences trimming
-  removed, and a colour view of the whole alignment with trimmed columns faded.
-- **tree**: the model (and whether ModelFinder chose it), log-likelihood,
-  parsimony-informative sites and the distribution of bootstrap support.
-- **place and accumulate**: for each query, its length before and after trimming,
-  whether it was placed, its best likelihood weight ratio, how many branches it
-  was placed on, and whether gappa accumulate kept it.
-
-trimAl removes any sequence left with no residues, so a query trimmed away never
-reaches RAxML; the trim QC lists it.
-
-gappa accumulate walks the placement tree from the tips towards its root and
-assigns each query to the first branch whose clade holds at least the
-threshold share of the query's weight. A query whose weight is split between
-branches on either side of the root never reaches the threshold and is removed
-from the accumulated jplace; the placement QC marks it as dropped. The root is
-wherever the reference tree is rooted in the file, so which queries are dropped
-depends on that rooting as well as on the threshold.
-
-#### Settings
-
-`pipeline.yml` holds the defaults; a reference tree or placement can override any
-of its own keys from its page.
+Controls building reference trees (`reference`) and placing a study's sequences on them (`placement`). A reference tree or placement can override its own keys from its page.
 
 ```yaml
 phylogeny:
   threads: 4                  # MAFFT, IQ-TREE, RAxML and gappa on this machine
   reference:
-    align:
-      strategy: "localpair"   # auto, localpair, genafpair, globalpair or 6merpair
-      maxiterate: 1000        # 0 omits --maxiterate
-    trim:
+    align:                    # MAFFT
+      strategy: "localpair"   # auto | localpair | genafpair | globalpair | 6merpair
+      maxiterate: 1000        # --maxiterate; 0 omits it
+    trim:                     # trimAl
       method: "manual"
       gap_threshold: 0.3
-      conservation: ~
-      similarity_threshold: ~
-      residue_overlap: ~
-      sequence_overlap: ~
-    tree:
-      model: "MFP"
-      bootstrap: "standard"   # standard (-b) or ultrafast (-bb, 1000 replicates or more)
+    tree:                     # IQ-TREE
+      model: "MFP"            # -m; MFP selects a model with ModelFinder
+      bootstrap: "standard"   # standard (-b) | ultrafast (-bb, 1000 replicates or more)
       replicates: 100
   placement:
-    align:
-      strategy: "auto"        # with --addfragments
+    align:                    # MAFFT --addfragments onto the trimmed reference alignment
+      strategy: "auto"
       maxiterate: 0
-    trim:
+    trim:                     # trimAl
       method: "manual"
       gap_threshold: 0.01
-    place:
-      model: "GTRCATI"
-      heuristic: 0.2          # RAxML -G; ~ tries every branch
-    accumulate:
-      threshold: 0.8          # gappa --threshold, 0.5 to 1
+    place:                    # RAxML EPA
+      model: "GTRCATI"        # -m
+      heuristic: 0.2          # -G; ~ tries every branch
+    accumulate:               # gappa edit accumulate
+      threshold: 0.8          # --threshold, 0.5 to 1
 ```
 
-Every section also takes `optional_args`, appended verbatim to that step's
-command after the same check as the other stages' extra flags.
-
-A reference tree lives in `reference_trees/{id}/` and a placement in
-`projects/{study}/phylogeny/{id}/`, each with its FASTA, one directory per step,
-`logs/`, `qc/`, `status.json` and an `attestation.yml` recording each step's
-tool versions, paths and checksums, including those read on the server.
+Each step also takes `optional_args`, additional flags passed verbatim to its tool.
 
 ### Configuring merge_taxa (`merge_taxa:` in `pipeline.yml`)
 
@@ -660,7 +553,7 @@ Each entry names a filter in the `filters:` library of `config/composition.yml`.
 
 ### Configuring analysis (`analysis:` in `pipeline.yml`)
 
-Controls the defaults applied to the analysis charts (alpha diversity, taxa bar, NMDS, etc.). Per-chart choices such as the taxonomic rank, and relative/absolute abundance are selected interactively in the UI and are not config keys.
+Controls the defaults applied to the analysis charts (alpha diversity, taxa bar, NMDS, etc.). Per-chart choices such as the taxonomic rank and relative or absolute abundance are made in the UI.
 
 ```yaml
 analysis:
@@ -687,7 +580,7 @@ analysis:
 
 ### Configuring taxonomic filtering (`filters:` in `config/composition.yml`)
 
-Each named filter in the `filters:` library of `config/composition.yml` defines one biological group to extract from the merged table. A category set references these filters by name, and the same filters back the `merge_taxa.filters` stage, which produces one additional CSV per entry. Edit them on the Compositions page under SYSTEM in the sidebar, or in the YAML directly.
+Each named filter in the `filters:` library of `config/composition.yml` defines one biological group to extract from the merged table. A category set references these filters by name, and the same filters back the `merge_taxa.filters` stage, which produces one additional CSV per entry. Edit them on the Compositions page under SYSTEM in the sidebar, or in the YAML.
 
 Saved table-view presets are a separate concern and live in `config/presets/`; the Tables view reads and writes them.
 
@@ -749,7 +642,7 @@ remove_empty:             # remove rows where this column is blank or "NA"
 bash start.sh
 ```
 
-Open `http://localhost:8080`. The backend serves the frontend automatically.
+Open `http://localhost:8080`. The backend serves the frontend.
 
 ## Input data
 
@@ -768,63 +661,63 @@ All outputs for a given run live under `projects/{project_name}/{run}/`:
 
 ```
 projects/{project_name}/{run}/
-├── cutadapt/                    # Trimmed FASTQ pairs and logs
-│   └── logs/
-├── QC/
-│   ├── fastqc/                  # Per-file FastQC HTML reports
-│   ├── multiqc_report.html      # MultiQC summary across all samples
-│   └── logs/
-├── dada2/
-│   ├── Tables/
-│   │   ├── seqtab_nochim.csv    # ASV count table
-│   │   ├── asvs.fasta           # ASV sequences
-│   │   ├── asvs.csv             # ASV sequence index
-│   │   ├── taxonomy.csv         # Taxonomy assignments
-│   │   ├── taxonomy_bootstraps.csv
-│   │   ├── taxonomy_combined.csv
-│   │   ├── tax_counts.csv       # Taxonomy + per-sample counts
-│   │   ├── asv_counts.csv       # Sequences + per-sample counts
-│   │   └── pipeline_stats.csv
-│   ├── Figures/                 # Quality profile and error rate PDFs
-│   ├── Checkpoints/             # RData checkpoints for stage resumption
-│   └── Logs/                    # Per-stage R logs
-├── cdhit/
-│   ├── asvs.fasta               # Clustered ASV sequences
-│   └── asvs.fasta.clstr         # Cluster membership file
-├── swarm/
-│   ├── otus.fasta               # OTU representative sequences
-│   ├── otus.count_table.csv     # OTU count table (samples x OTUs)
-│   └── logs/
-├── vsearch/
-│   ├── taxonomy.tsv             # Top-hit taxonomy assignments (ASV or OTU)
-│   └── logs/
-└── merged/
-    ├── merged.csv               # Merged taxonomy + counts (all taxa)
-    ├── protist_filter.csv       # Filtered subset (one per merge_taxa.filters entry)
-    └── results.duckdb           # DuckDB database for API queries
+|-- cutadapt/                    # Trimmed FASTQ pairs and logs
+|   `-- logs/
+|-- QC/
+|   |-- fastqc/                  # Per-file FastQC HTML reports
+|   |-- multiqc_report.html      # MultiQC summary across all samples
+|   `-- logs/
+|-- dada2/
+|   |-- Tables/
+|   |   |-- seqtab_nochim.csv    # ASV count table
+|   |   |-- asvs.fasta           # ASV sequences
+|   |   |-- asvs.csv             # ASV sequence index
+|   |   |-- taxonomy.csv         # Taxonomy assignments
+|   |   |-- taxonomy_bootstraps.csv
+|   |   |-- taxonomy_combined.csv
+|   |   |-- tax_counts.csv       # Taxonomy + per-sample counts
+|   |   |-- asv_counts.csv       # Sequences + per-sample counts
+|   |   `-- pipeline_stats.csv
+|   |-- Figures/                 # Quality profile and error rate PDFs
+|   |-- Checkpoints/             # RData checkpoints for stage resumption
+|   `-- Logs/                    # Per-stage R logs
+|-- cdhit/
+|   |-- asvs.fasta               # Clustered ASV sequences
+|   `-- asvs.fasta.clstr         # Cluster membership file
+|-- swarm/
+|   |-- otus.fasta               # OTU representative sequences
+|   |-- otus.count_table.csv     # OTU count table (samples x OTUs)
+|   `-- logs/
+|-- vsearch/
+|   |-- taxonomy.tsv             # Top-hit taxonomy assignments (ASV or OTU)
+|   `-- logs/
+`-- merged/
+    |-- merged.csv               # Merged taxonomy + counts (all taxa)
+    |-- protist_filter.csv       # Filtered subset (one per merge_taxa.filters entry)
+    `-- results.duckdb           # DuckDB database for API queries
 ```
 
 Phylogeny outputs sit beside the runs and in the shared library:
 
 ```
 projects/{project_name}/
-├── trees/                       # Newick and jplace files for the tree viewer
-└── phylogeny/{id}/              # One placement
-    ├── placement.json           # Name, reference tree, queries, settings
-    ├── queries.fasta
-    ├── align/combined.aln.fasta # References plus queries (MAFFT --addfragments)
-    ├── trim/                    # combined.trim.fasta and the kept columns
-    ├── place/placement.jplace   # RAxML EPA, with RAxML's own files
-    ├── accumulate/accumulated.jplace
-    ├── qc/, logs/, status.json, attestation.yml
+|-- trees/                       # Newick and jplace files for the tree viewer
+`-- phylogeny/{id}/              # One placement
+    |-- placement.json           # Name, reference tree, queries, settings
+    |-- queries.fasta
+    |-- align/combined.aln.fasta # References plus queries (MAFFT --addfragments)
+    |-- trim/                    # combined.trim.fasta and the kept columns
+    |-- place/placement.jplace   # RAxML EPA, with RAxML's own files
+    |-- accumulate/accumulated.jplace
+    `-- qc/, logs/, status.json, attestation.yml
 
 reference_trees/{id}/            # One reference tree
-├── reference.json               # Name, description, settings
-├── references.fasta
-├── align/reference.aln.fasta
-├── trim/                        # reference.trim.fasta and the kept columns
-├── tree/reference.treefile      # With IQ-TREE's report, log and consensus tree
-└── qc/, logs/, status.json, attestation.yml
+|-- reference.json               # Name, description, settings
+|-- references.fasta
+|-- align/reference.aln.fasta
+|-- trim/                        # reference.trim.fasta and the kept columns
+|-- tree/reference.treefile      # With IQ-TREE's report, log and consensus tree
+`-- qc/, logs/, status.json, attestation.yml
 ```
 
 ## REST API
@@ -847,8 +740,8 @@ The server exposes a REST API under `/api/v1/`. Key endpoint groups:
 | Cross-run      | `POST /studies/{study}/analysis/{alpha,chart,chart-facet,nmds,permanova,venn,publication-tables}`             | Comparison, faceted charts, NMDS, PERMANOVA, taxon overlap and publication tables across runs |
 | Composition    | `POST .../runs/{run}/composition/summary`, `POST .../composition/{source}/query`, `POST .../composition/{source}/distinct/{column}` | Organism-composition summaries and tables for a run                             |
 | Composition library | `GET /composition`, `POST/DELETE /composition/{filters,sets}/{name}`, `GET /category-sets`, `POST/DELETE /category-sets/{name}` | Edit the filters and category sets in `config/composition.yml`               |
-| Reference trees | `GET/POST /reference-trees`, `GET/PUT/DELETE /reference-trees/{id}`, `GET/PUT .../fasta`, `POST .../run`, `GET .../{log,qc}/{step}`, `GET .../alignment/{raw,trimmed}`, `GET .../treefile`, `POST .../trim-preview` | Build and inspect the shared reference trees |
-| Placements     | `GET/POST /studies/{study}/placements`, `GET/PUT/DELETE .../placements/{id}`, `POST .../placements/preview`, `GET/PUT .../fasta/queries`, `POST .../run`, `GET .../{log,qc}/{step}`, `GET .../alignment/{raw,trimmed}`, `POST .../trim-preview` | Place a study's sequences on a reference tree |
+| Reference trees | `GET/POST /reference-trees`, `GET/PUT/DELETE /reference-trees/{id}`, `GET/PUT .../fasta`, `POST .../run`, `GET .../log/{step}`, `GET .../qc/{align,trim}`, `GET .../alignment/{raw,trimmed}`, `GET .../treefile`, `POST .../trim-preview` | Build and inspect the shared reference trees |
+| Placements     | `GET/POST /studies/{study}/placements`, `GET/PUT/DELETE .../placements/{id}`, `POST .../placements/preview`, `GET/PUT .../fasta/queries`, `POST .../run`, `GET .../log/{step}`, `GET .../qc/{align,trim}`, `GET .../alignment/{raw,trimmed}`, `POST .../trim-preview` | Place a study's sequences on a reference tree |
 | Trees          | `GET/POST /studies/{study}/trees`, `GET/DELETE /studies/{study}/trees/{file}`, `PUT /studies/{study}/trees/{file}/view` | Upload, read and delete Newick and jplace files; save each tree's view state          |
 | Filter presets | `GET/POST/DELETE /filter-presets`                                                                             | Save, list, delete reusable table filters                                                |
 | Databases      | `GET /databases`, `GET /databases/document`, `PUT /databases`, `POST /databases/{key}/download`               | List and download taxonomy databases; read and replace the whole databases document (validated before writing, returns advisory warnings) |
@@ -884,13 +777,13 @@ data/               Input FASTQs (user-managed)
 projects/           Pipeline outputs (generated)
 ```
 
-Each pipeline stage returns a typed result (`TrimmedReads`, `ASVResult`, `OTUResult`, `TaxonomyHits`, `MergedTables`) and skips automatically if outputs are already up to date (mtime-based for files, content-hash-based for configuration). Rerunning after a config change only re-executes the minimum necessary stages.
+Each pipeline stage returns a typed result (`TrimmedReads`, `ASVResult`, `OTUResult`, `TaxonomyHits`, `MergedTables`) and is skipped when its outputs are up to date (mtime-based for files, content-hash-based for configuration). Rerunning after a config change only re-executes the minimum necessary stages.
 
 ## Third-party tools
 
 This project orchestrates the following tools. Each is fetched from its upstream source by `install.sh` and is subject to its own licence; no third-party binaries are included in this repository.
 
-| Tool                                            | License | Source                  |
+| Tool                                            | Licence | Source                  |
 | -------------------------------------------------| ---------| -------------------------|
 | [cutadapt](https://github.com/marcelm/cutadapt) | MIT     | PyPI                    |
 | [FastQC](https://github.com/s-andrews/FastQC)   | GPL v3  | Babraham Bioinformatics |

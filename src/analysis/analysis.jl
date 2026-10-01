@@ -899,6 +899,12 @@ function _paired_line_traces(group_labels::Vector{String},
     traces
 end
 
+# True when some sample id appears in every group, so a paired test has data.
+function _has_sample_pairs(labels::Vector{String}, sample_ids::Vector{String})
+    sets = [Set(sample_ids[i] for i in eachindex(labels) if labels[i] == l) for l in unique(labels)]
+    !isempty(reduce(intersect, sets))
+end
+
 _no_significance() = (nothing, DataFrame(group1=String[], group2=String[], p=Float64[]))
 
 # Waits for the R runtime like the other R analyses. While a pipeline run holds
@@ -1132,9 +1138,10 @@ function alpha_boxplot(groups::AbstractVector{<:Tuple{String, Vector{String}, Ab
         end
         if length(unique(panel_labels)) >= 2 && significance_test == "kruskal_wallis"
             need_pairwise = pairwise_brackets
+            paired = paired_samples && _has_sample_pairs(panel_labels, panel_sample_ids)
             p_value, pairwise_df = _alpha_significance(panel_values, panel_labels, panel_sample_ids;
                                                        pairwise=need_pairwise,
-                                                       paired_samples=paired_samples)
+                                                       paired_samples=paired)
             if annotate_significance
             anns = get!(panel_annotations, panel_idx, Dict{String,Any}[])
             # Anchor to this panel's axis domain so the label remaps with its
@@ -1143,7 +1150,7 @@ function alpha_boxplot(groups::AbstractVector{<:Tuple{String, Vector{String}, Ab
                 "xref" => "$xax domain", "yref" => "$yax domain",
                 "x" => 0.98, "y" => 0.98,
                 "xanchor" => "right", "yanchor" => "top",
-                "text" => "$(paired_samples ? (length(unique(panel_labels)) == 2 ? "Paired Wilcoxon" : "Friedman") : "KW") $(_significance_stars(p_value))<br>$(_format_p_value(p_value))",
+                "text" => "$(paired ? (length(unique(panel_labels)) == 2 ? "Paired Wilcoxon" : "Friedman") : "KW") $(_significance_stars(p_value))<br>$(_format_p_value(p_value))",
                 "showarrow" => false,
                 "align" => "right",
             ))

@@ -132,7 +132,7 @@ end
         @test any(occursin("phylogeny.reference.tree.model", m) for m in msgs)
     end
 
-    @testset "QC reads alignments, trees and placements" begin
+    @testset "QC reads alignments" begin
         mktempdir() do d
             aln = joinpath(d, "a.fasta")
             write(aln, ">r1\nACGT-A\n>r2\nAC-T-A\n>q1\n--GT--\n>q2\n----C-\n")
@@ -148,15 +148,6 @@ end
             @test (q1["residues"], q1["kept_residues"], q1["span"], q1["query"]) == (2, 1, [2, 3], true)
             write(joinpath(d, "c.txt"), "#ColumnsMap\t0, 1, 3, 5\n")
             @test _PH.read_columns(joinpath(d, "c.txt")) == [0, 1, 3, 5]
-        end
-        @test _PH._supports("((a:1,b:1)95:0.1,(c:1,d:1)70/88:0.2,e:1)100;") == [95.0, 70.0, 100.0]
-        mktempdir() do d
-            jp = joinpath(d, "p.jplace")
-            write(jp, """{"version":3,"tree":"((a:1{0},b:1{1}):1{2},c:1{3});","fields":["edge_num","likelihood","like_weight_ratio","distal_length","pendant_length"],
-                "placements":[{"p":[[0,-10,0.7,0.1,0.1],[1,-11,0.3,0.1,0.1]],"n":["q1"]},{"p":[[3,-9,1.0,0.1,0.1]],"nm":[["q2",1]]}]}""")
-            q = _PH._jplace_queries(jp)
-            @test q["q1"] == Dict("placements" => 2, "best_lwr" => 0.7, "edge" => 0)
-            @test q["q2"]["edge"] == 3
         end
     end
 
@@ -194,6 +185,7 @@ end
             @test d.inherited.reference.trim.method == "manual"
             @test d.state == "new"
             @test _ph_request("GET", "$lib/$ref/qc/align").status == 404
+            @test _ph_request("GET", "$lib/$ref/qc/tree").status == 400
             @test _ph_request("GET", "$lib/$ref/tree").status == 404
             mkpath(joinpath(tmp, "reference_trees", ref, "tree"))
             write(joinpath(tmp, "reference_trees", ref, "tree", "reference.treefile"), "((a:1,b:1)90:1,c:1,d:1);")
@@ -264,9 +256,7 @@ end
                 trimqc = JSON3.read(read(joinpath(rdir, "qc", "trim.json"), String))
                 @test trimqc.sequences == 8
                 @test !isempty(trimqc.kept_columns)
-                treeqc = JSON3.read(read(joinpath(rdir, "qc", "tree.json"), String))
-                @test !isnothing(treeqc.model)
-                @test length(treeqc.supports) >= 4
+                @test !isfile(joinpath(rdir, "qc", "tree.json"))
 
                 preview = _PH.trim_preview(_PH.REFERENCE_STEPS, rdir, rfiles, Dict("method" => "gappyout"))
                 @test preview["sequences"] == 8
@@ -274,8 +264,8 @@ end
 
                 _PH.check_placement(pfiles)
                 _PH.run_workflow(_PH.PLACEMENT_STEPS, pdir, pfiles, cfg)
-                plqc = JSON3.read(read(joinpath(pdir, "qc", "place.json"), String))
-                @test plqc.placed == 2
+                @test isfile(joinpath(pdir, "qc", "trim.json"))
+                @test !isfile(joinpath(pdir, "qc", "place.json"))
                 @test isfile(pfiles["accumulated.jplace"])
 
                 # A new trim reruns trim and what follows it, and leaves the MAFFT alignment alone.
