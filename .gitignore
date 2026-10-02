@@ -332,3 +332,6 @@ LocalPreferences.toml
 
 # Development server log (dev/dev.sh)
 dev/server.log
+
+# Agda interface files (proofs/agda)
+proofs/agda/_build/
