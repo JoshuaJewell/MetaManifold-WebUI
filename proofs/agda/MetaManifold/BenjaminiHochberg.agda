@@ -4,27 +4,43 @@
 -- The Benjamini–Hochberg step-up adjustment, over exact rationals, with the
 -- properties a reader of a q-value table relies on proved rather than tested.
 --
--- `bhAdjust` below mirrors `bh_adjust` in `src/analysis/estimation.jl` step for
--- step:
+-- `bhAdjust` below models `bh_adjust` in `src/analysis/differential.jl`
+-- (branch feat/differential-abundance-nb, commit 6c3e8b2):
 --
 --   Julia                                        here
 --   ─────────────────────────────────────────    ──────────────────────────────
---   n = length(pvalues)                          m = length ps
---   order = sortperm(pvalues)   (stable)         order = sort (indexFrom 0 ps),
---                                                  lexicographic on (p, index),
---                                                  which is what a stable sort
---                                                  by p produces
---   sorted = pvalues[order]                      sortedP = map proj₁ order
---   running = Inf                                `minInf`: a value with nothing
---   for i in n:-1:1                                after it is its own running
---     running = min(running, sorted[i]*n/i)        minimum (min(Inf, x) = x)
---     adjusted[i] = min(running, 1)              stepUp = map (_⊓ 1ℚ) ∘ running
---   for (rank, idx) in enumerate(order)          restore: position idx of the
---     out[idx] = adjusted[rank]                    output reads the adjusted
---                                                  value whose key has index idx
+--   n = length(p)                                m = length ps
+--   order = sortperm(p; rev=true)                order = sort (indexFrom 0 ps),
+--                                                  ascending, lexicographic on
+--                                                  (p, index)
+--   running = 1.0                                running m j: the running
+--   for (k, idx) in enumerate(order)               minimum, listed in ascending
+--     rank = n - k + 1                             rank order; `minInf` starts
+--     running = min(running, n/rank * p[idx])      it from the largest rank
+--     out[idx] = min(running, 1.0)               stepUp = map (_⊓ 1ℚ) ∘ running
+--                                                restore: output position idx
+--                                                  reads the value whose key
+--                                                  has index idx
 --
--- Julia's ranks are one-based (`i`); here they are zero-based (`j = i - 1`),
--- so Julia's `n / i` is `rankFactor m j = m / (j + 1)` from the Prelude.
+-- Two differences.  The first is proved harmless; the second follows from a
+-- proved lemma by a short argument about the Julia code, which is not itself
+-- formalised:
+--
+--   * Julia seeds `running` with 1.0, so its running value at rank i is
+--     min(1, min_{j ≥ i} n/j · p_(j)) and the final clamp is idempotent.
+--     The model seeds with the first scaled value and clamps afterwards.
+--     `stepUp-envelope` proves the model's values equal that same envelope,
+--     so the two compute the same list.
+--   * Tie-breaking.  Julia walks a stable DESCENDING sort, so of two equal
+--     p-values the earlier input index gets the HIGHER rank; the model's
+--     ascending (p, index) sort gives it the lower rank.  The sorted list of
+--     p-values is the same either way, and tied p-values receive equal
+--     adjusted values whatever their order (`bh-monotone` applied in both
+--     directions), so which tied index reads which tied slot cannot change
+--     the output.
+--
+-- Julia's ranks are one-based; here they are zero-based (`j = rank - 1`),
+-- so Julia's `n / rank` is `rankFactor m j = m / (j + 1)` from the Prelude.
 --
 -- Julia rejects any p-value outside [0, 1] (and any non-finite value) with an
 -- ArgumentError before it computes anything.  Over ℚ there is nothing
@@ -123,7 +139,7 @@ monotone-in-family-size M M′ j n d M≤M′ {{np}} =
 Valid : ℚ → Set
 Valid p = 0ℚ ≤ p × p ≤ 1ℚ
 
--- Julia's `sorted[i] * n / i` at zero-based rank j.
+-- Julia's `n / rank * p[idx]` at zero-based rank j = rank - 1.
 scaled : ℕ → ℕ → ℚ → ℚ
 scaled m j p = p * rankFactor m j
 
@@ -144,20 +160,21 @@ scaled≃bhScale m j p@record{} = ℚᵘₚ.≃-trans (ℚₚ.toℚᵘ-homo-* p 
            (trans (sym (ℕₚ.+-assoc j d (d ℕ.* j)))
                   (cong ((j ℕ.+ d) ℕ.+_) (ℕₚ.*-comm d j)))
 
--- Julia's `running = Inf; running = min(running, x)`: the first value folded
--- in (the largest rank) is its own running minimum.
+-- The running minimum seeded with the first value folded in (the largest
+-- rank).  Julia seeds with 1.0 instead; `stepUp-envelope` shows the two agree
+-- once clamped.
 minInf : ℚ → List ℚ → ℚ
 minInf x []      = x
 minInf x (r ∷ _) = r ⊓ x
 
--- The running minima of Julia's backwards loop, listed in rank order, for a
+-- The running minima of Julia's loop over ranks n, n-1, ..., listed in rank order, for a
 -- sorted list whose first element sits at zero-based rank j.
 running : ℕ → ℕ → List ℚ → List ℚ
 running m j []       = []
 running m j (p ∷ ps) =
   minInf (scaled m j p) (running m (suc j) ps) ∷ running m (suc j) ps
 
--- `adjusted[i] = min(running, 1.0)`.
+-- Julia's `min(running, 1.0)`.
 stepUp : ℕ → List ℚ → List ℚ
 stepUp m ps = map (_⊓ 1ℚ) (running m 0 ps)
 
@@ -166,15 +183,15 @@ indexFrom : ℕ → List ℚ → List (ℚ × ℕ)
 indexFrom k []       = []
 indexFrom k (p ∷ ps) = (p , k) ∷ indexFrom (suc k) ps
 
--- Julia's `sortperm` is stable, i.e. it sorts by p and breaks ties by index:
--- the lexicographic order on (p, index).
+-- Ascending order on (p, index).  Julia sorts descending (stably); the
+-- tie order differs and is harmless (see the header).
 keyOrder : DecTotalOrder _ _ _
 keyOrder = Lex.×-decTotalOrder ℚₚ.≤-decTotalOrder ℕₚ.≤-decTotalOrder
 
 open import Data.List.Sort.MergeSort keyOrder using (sort; sort-↭; sort-↗)
 
--- `out[idx] = adjusted[rank]` read from the other side: the value at output
--- position i is the adjusted value of the (first, and in fact only) sorted
+-- `out[idx] = min(running, 1.0)` read from the other side: the value at output
+-- position i is the adjusted value of the first sorted
 -- entry whose index is i.  The `0ℚ` default is never reached (`restore-spec`),
 -- as Julia's `undef` slots are never left unwritten.
 restore : List ((ℚ × ℕ) × ℚ) → ℕ → ℚ
@@ -479,7 +496,7 @@ module _ (ps : List ℚ) where
 
   -- Every (p, adjusted) pair of the output is a (p_(k), envelope_k) pair of
   -- the sorted stage.  This is the whole content of Julia's scatter-back
-  -- `out[order[rank]] = adjusted[rank]` that the theorems need.
+  -- `out[idx] = ...` that the theorems need.
   bh-output-is-envelope : ∀ {x} → x ∈ zip ps (bhAdjust ps) → x ∈ Z m 0 sortedP
   bh-output-is-envelope {x} x∈ = subst (x ∈_) zip-sorted-adjusted x∈Zs
     where

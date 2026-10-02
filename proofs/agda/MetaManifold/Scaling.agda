@@ -2,37 +2,47 @@
 -- SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 --
 -- Library-size scaling (TSS) and median-of-ratios (RLE) over exact rationals:
--- the parts of `src/analysis/scaling.jl` that are statements about rational
--- arithmetic, proved; the parts that are not, named.
+-- the parts of `tss_factors`, `rle_factors` and `_median` in
+-- `src/analysis/differential.jl` (branch feat/differential-abundance-nb,
+-- commit 6c3e8b2) that are statements about rational arithmetic, proved; the
+-- parts that are not, named.
 --
 -- What is NOT modelled, and why:
 --
---   * Geometric means, `exp` and `log`.  Julia centres every factor vector by
---     its geometric mean and turns factors into offsets with `log`; RLE divides
---     each count by the feature's geometric mean.  None of these is a rational
---     function, so none can be computed over ℚ.  Wherever Julia divides by a
---     geometric mean, the theorems below take the divisor as an ARBITRARY
---     positive rational `g`.  Every result therefore holds for the real
---     geometric mean as soon as it is positive (it is: a geometric mean of
---     positive numbers is positive), but that last step is a fact about the
---     reals, not a theorem here.
+--   * Geometric means, `exp` and `log`.  Julia centres each factor vector by
+--     its geometric mean (`_geomean`), RLE divides each count by its taxon's
+--     geometric mean, and the model uses `log` of the factors as offsets.
+--     None of these is a rational function, and a geometric mean of
+--     rationals is in general irrational, so none can be computed over ℚ.
+--     Wherever Julia divides by a geometric mean, the theorems below divide
+--     by an ARBITRARY positive rational `g`.  The same algebra holds over the
+--     reals for any positive divisor, but that transfer is an argument, not a
+--     theorem here.  In particular the scale invariance D1 tests
+--     (`tss_factors(7.5 .* fixture) ≈ f`) is a property of the geometric
+--     mean and is not proved.
 --   * Floating point.  Julia computes in Float64; these are exact statements.
---     `_require_positive` can fire in floating point (underflow to 0.0) where
---     the exact quantity is positive; it is not modelled.
+--     A refusal can fire in floating point (underflow to 0.0) where the exact
+--     quantity is positive; that is not modelled.
+--
+-- D1's `tss_factors` computes library sizes (row sums of the samples x taxa
+-- matrix) and centres them; it never forms proportions.  The proportion
+-- theorems below are the relative-abundance reading of TSS asked for in the
+-- D2 brief, and hold for any row with a positive total.
 --
 -- Theorems (names as in docs/formal/agda-bh-scaling-proofs.md):
 --
---   total-positive        a column of non-negative counts with at least one
---                         positive count has a positive total (so TSS refuses
---                         exactly the all-zero columns)
---   proportions-sum-to-1  the relative-abundance transform sums to 1
+--   total-positive        a row of non-negative counts with at least one
+--                         positive count has a positive total (so TSS's
+--                         `l > 0` refusal fires exactly on all-zero rows)
+--   proportions-sum-to-1  a row's proportions sum to 1
 --   proportions-bounded   every proportion lies in [0, 1]
 --   centre-positive       dividing by any positive g keeps every factor positive
 --   centre-monotone       ... and keeps their order
 --   ratio-positive        a positive count over a positive normaliser is positive
---   median-positive       the median of a non-empty list of positive ratios is
---                         positive (so RLE's `_require_positive` cannot fire in
---                         exact arithmetic once a usable feature exists)
+--   median-positive       the median (as `_median` takes it) of a non-empty list
+--                         of positive ratios is positive, so once one taxon has
+--                         reads in every sample, every RLE factor is positive in
+--                         exact arithmetic
 
 {-# OPTIONS --safe --without-K #-}
 
@@ -57,7 +67,7 @@ open import Data.List.Sort.MergeSort ℚₚ.≤-decTotalOrder using (sort; sort-
 ------------------------------------------------------------------------
 -- Shared arithmetic
 
--- The column total: Julia's `sum(counts[:, j])`.
+-- A sample's library size: Julia's `vec(sum(counts; dims=2))`, one row.
 sum : List ℚ → ℚ
 sum = foldr _+_ 0ℚ
 
@@ -108,27 +118,27 @@ private
   sum-scale r (x ∷ xs) =
     trans (cong (x * r +_) (sum-scale r xs)) (sym (ℚₚ.*-distribʳ-+ r x (sum xs)))
 
--- A column of non-negative counts with at least one positive count has a
--- positive total.  So `_require_positive(totals, "tss", …)` refuses exactly
--- the columns whose counts are all zero.
+-- A row of non-negative counts with at least one positive count has a
+-- positive total.  So `tss_factors`'s `l > 0` refusal fires exactly on the
+-- rows whose counts are all zero (`validate_counts` guarantees non-negative).
 total-positive : ∀ xs → All (0ℚ ≤_) xs → Any (0ℚ <_) xs → 0ℚ < sum xs
 total-positive (x ∷ xs) (_   ∷ nn) (here 0<x)  =
   subst (_< x + sum xs) 0+0 (ℚₚ.+-mono-<-≤ 0<x (sum-nonNeg xs nn))
 total-positive (x ∷ xs) (0≤x ∷ nn) (there any) =
   subst (_< x + sum xs) 0+0 (ℚₚ.+-mono-≤-< 0≤x (total-positive xs nn any))
 
--- The relative-abundance (TSS proportion) transform of one column.
+-- The relative-abundance (TSS proportion) transform of one row.
 proportions : (xs : List ℚ) → .{{Positive (sum xs)}} → List ℚ
 proportions xs = map (_* inv (sum xs)) xs
 
--- The proportions of a column sum to one.
+-- The proportions of a row sum to one.
 proportions-sum-to-1 : ∀ xs .{{_ : Positive (sum xs)}} →
   sum (proportions xs) ≡ 1ℚ
 proportions-sum-to-1 xs =
   trans (sum-scale (inv (sum xs)) xs)
         (ℚₚ.*-inverseʳ (sum xs) {{ℚₚ.pos⇒nonZero (sum xs)}})
 
--- Every proportion of a column of non-negative counts lies in [0, 1].
+-- Every proportion of a row of non-negative counts lies in [0, 1].
 proportions-bounded : ∀ xs .{{_ : Positive (sum xs)}} → All (0ℚ ≤_) xs →
   All (λ p → 0ℚ ≤ p × p ≤ 1ℚ) (proportions xs)
 proportions-bounded xs nn = go xs nn (below-sum xs nn)
@@ -186,10 +196,11 @@ at d k       []       = d
 at d zero    (y ∷ ys) = y
 at d (suc k) (y ∷ ys) = at d k ys
 
--- The middle of a sorted list, as `Statistics.median` takes it: the element
--- at (one-based) position (n+1)/2 for odd n, the mean of the elements at
--- n/2 and n/2+1 for even n.  Both are at zero-based k = ⌊(n-1)/2⌋ (and k+1).
--- The defaults (the list's own head) are never read for a non-empty list.
+-- The middle of a sorted list, as D1's `_median` takes it: with m = n ÷ 2,
+-- `s[m + 1]` for odd n and `(s[m] + s[m + 1]) / 2` for even n (one-based).
+-- Both are at zero-based k = ⌊(n-1)/2⌋ (and k+1).  `at` falls back to the
+-- list's own head past the end; for these k it is not reached (not proved
+-- here; positivity does not depend on it).
 middle : List ℚ → ℚ
 middle []         = 0ℚ
 middle (y ∷ ys)   =
@@ -199,7 +210,7 @@ middle (y ∷ ys)   =
   n = suc (length ys)
   k = ⌊ length ys /2⌋   -- ⌊(n-1)/2⌋
 
--- Julia's `Statistics.median`: sort, then take the middle.
+-- D1's `_median`: sort, then take the middle.
 median : List ℚ → ℚ
 median xs = middle (sort xs)
 
@@ -222,10 +233,10 @@ private
                               (at-All y (suc k) (y ∷ ys) py ps)
     where k = ⌊ length ys /2⌋
 
--- The median of a non-empty list of positive ratios is positive.  Hence RLE's
--- `_require_positive(ratios, …)` cannot fire in exact arithmetic once at
--- least one feature is positive in every sample (Julia refuses the case with
--- no such feature separately, before computing any median).
+-- The median of a non-empty list of positive ratios is positive.  Hence every RLE
+-- factor is positive in exact arithmetic once one taxon has reads in every
+-- sample (`rle_factors` refuses the case with no such taxon before computing
+-- any median).
 median-positive : ∀ xs → 0 ℕ.< length xs → All (0ℚ <_) xs → 0ℚ < median xs
 median-positive xs 0<n ps =
   middle-positive (sort xs)
