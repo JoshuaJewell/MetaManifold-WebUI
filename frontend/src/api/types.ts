@@ -366,6 +366,47 @@ export interface VennRequest {
   source?: AnnotationSource
 }
 
+/** Exactly two conditions; the first is the reference. */
+export interface DifferentialRequest {
+  runs: ComparisonRunSpec[]
+  table: string
+  rank: string
+  aggregate?: boolean
+}
+
+/** `ok` and `boundary` rows carry statistics; `failed` and `filtered` rows say why not. */
+export type DifferentialStatus = 'ok' | 'boundary' | 'failed' | 'filtered'
+
+export interface DifferentialRow {
+  taxon: string
+  status: DifferentialStatus
+  note: string
+  /** Natural-log fold change, contrast over reference. */
+  estimate: number | null
+  log2_fold_change: number | null
+  standard_error: number | null
+  statistic: number | null
+  pvalue: number | null
+  /** Benjamini-Hochberg adjusted; null outside the tested family. */
+  padj: number | null
+  dispersion_theta: number | null
+  prevalence: number
+}
+
+export interface DifferentialResult {
+  status: 'ok' | 'partial'
+  method: string
+  rank: string
+  table: string
+  groups: { reference: string; contrast: string }
+  n_samples: Record<string, number>
+  size_factors: { sample: string; group: string; factor: number }[]
+  config: { offset: 'tss' | 'rle'; min_prevalence: number }
+  diagnostics: { n_taxa: number; n_tested: number; n_failed: number; n_boundary: number; n_filtered: number }
+  rows: DifferentialRow[]
+  figure: unknown
+}
+
 export interface CategorySetSaveRequest {
   base:         string
   colours:      Record<string, string>

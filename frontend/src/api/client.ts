@@ -14,6 +14,7 @@ import type {
   CategorySet, CategorySetSaveRequest, CompositionBuildResult,
   CompositionSummaryRequest,
   VennRequest, VennResult,
+  DifferentialRequest, DifferentialResult,
   CompositionFilter, CompositionSet, CompositionLibraryDoc,
   PrimerDocument, PrimerSaveResult,
   DatabaseDocument, DatabaseSaveResult,
@@ -253,6 +254,8 @@ export const api = {
     capabilities:  () => get<{ r_available: boolean }>('/api/v1/capabilities'),
     venn:          (study: string, body: VennRequest) =>
                      post<VennResult>(`/api/v1/studies/${study}/analysis/venn`, body),
+    differential:  (study: string, body: DifferentialRequest) =>
+                     post<DifferentialResult>(`/api/v1/studies/${study}/analysis/differential`, body),
     publicationTable: (study: string, body: PublicationTableRequest) =>
                      post<{ table: PublicationTable }>(`/api/v1/studies/${study}/analysis/publication-tables`, body),
     /** The formatted .xlsx of the table, as a blob. */
