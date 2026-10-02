@@ -11,3 +11,4 @@ module MetaManifold.All where
 
 import MetaManifold.Prelude
 import MetaManifold.BenjaminiHochberg
+import MetaManifold.Scaling
