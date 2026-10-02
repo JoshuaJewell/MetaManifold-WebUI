@@ -29,7 +29,7 @@
 -- theorems below are the relative-abundance reading of TSS asked for in the
 -- D2 brief, and hold for any row with a positive total.
 --
--- Theorems (names as in docs/formal/agda-bh-scaling-proofs.md):
+-- Theorems (names as in proofs/agda/README.md):
 --
 --   total-positive        a row of non-negative counts with at least one
 --                         positive count has a positive total (so TSS's
