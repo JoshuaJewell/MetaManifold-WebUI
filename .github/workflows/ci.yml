@@ -282,3 +282,45 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: JoshuaJewell/MetaManifold-WebUI
           fail_ci_if_error: false
+
+  # Machine-checked proofs of the Benjamini-Hochberg adjustment and the TSS/RLE
+  # scaling algebra (proofs/agda, docs/formal/agda-bh-scaling-proofs.md).
+  # Agda publishes no 2.6.4.3 binary, and agda-stdlib 2.1 requires Agda 2.6.4.x,
+  # so the pair comes from Debian trixie, which packages exactly that pair with
+  # pre-built library interfaces. The image is pinned by digest and the two
+  # packages by revision, so a rebuild in the archive fails loudly here instead
+  # of silently changing the checker. These pins live here rather than in
+  # config/defaults/tool_versions.yml because no other job and no installer
+  # reads them.
+  agda:
+    name: Agda proofs
+    runs-on: ubuntu-24.04
+    container: debian:trixie-20250929-slim@sha256:1caf1c703c8f7e15dcf2e7769b35000c764e6f50e4d7401c355fb0248f3ddfdb
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install Agda and the standard library
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends agda-bin=2.6.4.3-1+b2 agda-stdlib=2.1-4
+          agda --version | grep -qx 'Agda version 2.6.4.3'
+          grep -qx 'name: standard-library-2.1' /usr/share/agda-stdlib/standard-library.agda-lib
+
+      # Runs before the type-check: --safe already refuses postulates, but the
+      # audit also refuses holes, check-disabling pragmas and flags, and any
+      # module that MetaManifold/All.agda does not import (an unimported module
+      # is never type-checked at all).
+      - name: Axiom audit
+        run: bash proofs/tests/axiom-audit.sh
+
+      - name: Type-check
+        env:
+          AGDA_DIR: /tmp/agda-dir
+        run: |
+          mkdir -p "$AGDA_DIR"
+          echo /usr/share/agda-stdlib/standard-library.agda-lib > "$AGDA_DIR/libraries"
+          cd proofs/agda
+          agda MetaManifold/All.agda
