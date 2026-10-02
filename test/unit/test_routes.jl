@@ -365,7 +365,7 @@ _saved_root = SV.ServerState._root[]
         # An empty list applies to no surface (the exclusion becomes inert).
         @test SV._parse_apply_to(String[]; set="s", category="c") == Set{String}()
         # The known-surface vocabulary is exactly these four.
-        @test SV._EXCLUSION_SURFACES == Set(["diversity", "taxa", "composition", "venn"])
+        @test SV._EXCLUSION_SURFACES == Set(["diversity", "taxa", "composition", "venn", "differential"])
     end
 
     ## CRITICAL 1 regression guard: an exclusion spec against a library-defined

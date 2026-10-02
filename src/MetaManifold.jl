@@ -29,6 +29,7 @@ include("pipeline/phylogeny.jl")
 # Analysis
 include("analysis/diversity.jl")
 include("analysis/analysis.jl")
+include("analysis/differential.jl")
 
 # Web server
 include("server/server.jl")

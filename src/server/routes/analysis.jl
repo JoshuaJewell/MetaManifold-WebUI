@@ -386,8 +386,9 @@ end
 ## Category-based figure exclusion
 # The chart surfaces an exclusion may apply to. "diversity" covers alpha, NMDS
 # and PERMANOVA; "taxa" is the rank-tagged chart; "composition" is the
-# category-tagged chart; "venn" the presence/absence sets.
-const _EXCLUSION_SURFACES = Set(["diversity", "taxa", "composition", "venn"])
+# category-tagged chart; "venn" the presence/absence sets; "differential" the
+# per-taxon differential abundance test.
+const _EXCLUSION_SURFACES = Set(["diversity", "taxa", "composition", "venn", "differential"])
 
 # Resolve the configured `analysis.exclude_categories` for a run into a vector of
 # (set, category, surfaces) specs. Each names a composition category set and the
@@ -1187,4 +1188,108 @@ end
     sets = [(; name=labels[i], taxa=conditions[i].taxa) for i in eachindex(conditions)]
 
     json(Dict("sets" => sets, "rank" => rank))
+end
+
+## Differential abundance between two conditions
+"""
+    _differential_config(study) -> DifferentialConfig
+
+The study's `analysis.differential` settings, resolved through the config
+cascade.
+"""
+function _differential_config(study::String)
+    resolved = _resolved_run_config(study, nothing, nothing, nothing)
+    val(k, d) = something(get(get(resolved, k, (; value=d)), :value, d), d)
+    DifferentialConfig(String(val("analysis.differential.offset", "tss")),
+                       Float64(val("analysis.differential.min_prevalence", 0.0)))
+end
+
+"""
+    _differential(study, body) -> HTTP.Response
+
+Run a differential abundance test between exactly two conditions (runs or
+pooled-run sub-groups) and return the per-taxon table with a volcano plot. The
+first condition is the reference, so a positive estimate means more abundant in
+the second. Every refusal is an explicit JSON error.
+"""
+function _differential(study::String, body)
+    study in _study_names() || return json_error(404, "study_not_found",
+                                                     "Study '$study' not found")
+    runs_spec = get(body, :runs, [])
+    table     = string(get(body, :table, "merged"))
+    rank      = string(get(body, :rank,  "Genus"))
+    params    = _body_filter_params(body)
+    aggregate = Bool(get(body, :aggregate, false))
+
+    specs = _expand_comparison_run_specs(study, runs_spec; aggregate)
+    length(specs) == 2 || return json_error(400, "two_conditions_required",
+        "Differential abundance compares exactly 2 conditions; the selection gives $(length(specs))")
+
+    config = try
+        _differential_config(study)
+    catch e
+        e isa ArgumentError || rethrow()
+        return json_error(400, "invalid_config", sprint(showerror, e))
+    end
+
+    conditions = NamedTuple[]
+    effective_ranks = String[]
+    for spec in specs
+        label = something(spec.prefix, spec.run)
+        resolved = _resolve_run_duckdb(study, spec)
+        isnothing(resolved) && return json_error(404, "results_not_found",
+            "No results database for '$label'")
+        problem = _with_resolved_results_table(resolved, table) do con, columns
+            levels = taxonomy_levels(con, table)
+            isempty(levels) && return "table '$table' of '$label' has no taxonomy columns"
+            effective_rank = rank in levels ? rank : last(levels)
+            rank_col = _rank_column(columns, effective_rank)
+            isnothing(rank_col) && return "rank '$effective_rank' is not a column of '$label'"
+            scols = _filter_by_prefix(sample_columns(con, table), resolved.prefix)
+            isempty(scols) && return "'$label' has no sample columns"
+            exclude_conditions = _exclusion_conditions(study, resolved.run, resolved.group, columns;
+                                                       surface="differential")
+            where_clause, where_params = _analysis_where_clause(params, columns; exclude_conditions)
+            scols = _retain_sample_columns(con, table, scols, params, where_clause, where_params)
+            isempty(scols) && return "every sample of '$label' was removed by the read-count bounds"
+            df = aggregate_by_taxon(con, table, scols, rank_col, where_clause, where_params)
+            push!(conditions, (; group=resolved.group, run=resolved.run,
+                                  prefix=resolved.prefix, scols, df))
+            push!(effective_ranks, effective_rank)
+            nothing
+        end
+        isnothing(problem) || return json_error(400, "condition_unusable", problem)
+    end
+    length(conditions) == 2 || return json_error(404, "results_not_found",
+        "Results table '$table' is missing for at least one condition")
+    length(unique(effective_ranks)) == 1 || return json_error(400, "rank_mismatch",
+        "The two conditions resolved to different ranks: $(join(effective_ranks, ", "))")
+
+    labels = _venn_condition_labels(conditions)
+    labels[1] == labels[2] && return json_error(400, "identical_conditions",
+        "Both conditions are '$(labels[1])'; choose two different runs or sub-groups")
+    run_data = Tuple{String, Vector{String}, DataFrame}[
+        (labels[i], conditions[i].scols, conditions[i].df) for i in 1:2]
+    mat, samples, taxa, groups = combined_counts_across_runs(run_data)
+
+    result = try
+        differential_abundance(mat, samples, taxa, groups;
+                               reference=labels[1], contrast=labels[2], config)
+    catch e
+        e isa ArgumentError    && return json_error(400, "invalid_input", sprint(showerror, e))
+        e isa ScalingRefusal   && return json_error(422, "scaling_refused", sprint(showerror, e))
+        e isa MASSUnavailable  && return json_error(503, "r_unavailable", sprint(showerror, e))
+        e isa ErrorException   && return json_error(422, "no_taxon_fitted", e.msg)
+        rethrow()
+    end
+    result["rank"] = first(effective_ranks)
+    result["table"] = table
+    result["figure"] = volcano_chart(result)
+    HTTP.Response(200, ["Content-Type" => "application/json"],
+                  body=JSON3.write(result))
+end
+
+## Cross-run differential abundance (negative binomial + BH)
+@post "/api/v1/studies/{study}/analysis/differential" function(req, study::String)
+    _differential(study, JSON3.read(String(req.body)))
 end
