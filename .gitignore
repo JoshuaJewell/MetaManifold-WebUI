@@ -250,6 +250,8 @@ vignettes/*.pdf
 ## Documentation kept local except published release notes
 docs/*
 !docs/release-notes/
+# The theorem-to-code map for proofs/agda is published with the proofs it describes.
+!docs/formal/
 
 # translation temp files
 
