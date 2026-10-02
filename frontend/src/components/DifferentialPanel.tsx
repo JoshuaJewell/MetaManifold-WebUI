@@ -10,7 +10,7 @@ import type { AnalysisOption } from './annotationShared'
 import { AnalysisChart } from './AnalysisChart'
 import { AddToReport } from './AddToReport'
 import { saveBlob } from '../utils/download'
-import { differentialCsv, formatStat } from './differentialTable'
+import { differentialCsv, effectValue, formatStat } from './differentialTable'
 
 const cell = { padding: '3px 10px', textAlign: 'right' } as const
 const head = { padding: '4px 10px', textAlign: 'right' } as const
@@ -21,10 +21,10 @@ function csvBlob(result: DifferentialResult): Blob {
 }
 
 /**
- * Differential abundance between exactly two runs or sub-groups: a
- * negative-binomial model per taxon at the chosen rank, with BH-adjusted
- * p-values, shown as a volcano plot and a table that can be downloaded or
- * added to the report. The first selected condition is the reference.
+ * Differential abundance between exactly two runs or sub-groups: a model per
+ * taxon at the chosen rank (negative-binomial GLM or CLR linear model, as
+ * configured), with BH-adjusted p-values, shown as a volcano plot and a table
+ * that can be downloaded or added to the report. The first selected condition is the reference.
  */
 export function DifferentialPanel({ study, runs, option, aggregate }: {
   study: string
@@ -96,7 +96,7 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
         )}
         {runs.length === 2 && (
           <span style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)' }}>
-            Reference: {runs[0].prefix ?? runs[0].run}; positive fold changes mean more abundant in {runs[1].prefix ?? runs[1].run}.
+            Reference: {runs[0].prefix ?? runs[0].run}; a positive effect means more abundant in {runs[1].prefix ?? runs[1].run}.
           </span>
         )}
       </div>
@@ -109,6 +109,11 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
             {result.diagnostics.n_boundary > 0 && `, ${result.diagnostics.n_boundary} at a dispersion boundary`}
             {result.diagnostics.n_filtered > 0 && `, ${result.diagnostics.n_filtered} below the prevalence threshold`}
             . Samples: {Object.entries(result.n_samples).map(([g, n]) => `${g} ${n}`).join(', ')}.
+            {result.diagnostics.zero_replacement && (() => {
+              const z = result.diagnostics.zero_replacement
+              return ` ${z.zeros_replaced} zeros replaced (delta ${z.delta}); replaced values hold at most ` +
+                `${(100 * z.max_imputed_fraction).toPrecision(2)}% of any sample, and are not measurements.`
+            })()}
           </p>
 
           <AnalysisChart study={study} figure={result.figure} />
@@ -126,8 +131,8 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
               <thead>
                 <tr style={{ borderBottom: '2px solid var(--color-border)' }}>
                   <th style={{ ...head, textAlign: 'left' }}>{result.rank}</th>
-                  <th style={head}>log2 FC</th>
-                  <th style={head}>Estimate (ln)</th>
+                  <th style={head}>{result.effect.label}</th>
+                  {result.config.method === 'nb_glm' && <th style={head}>Estimate (ln)</th>}
                   <th style={head}>SE</th>
                   <th style={head}>p</th>
                   <th style={head}>padj (BH)</th>
@@ -138,8 +143,8 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
                 {result.rows.map(r => (
                   <tr key={r.taxon} style={{ borderBottom: '1px solid var(--color-border)' }}>
                     <td style={{ ...cell, textAlign: 'left' }}>{r.taxon}</td>
-                    <td style={cell}>{formatStat(r.log2_fold_change)}</td>
-                    <td style={cell}>{formatStat(r.estimate)}</td>
+                    <td style={cell}>{formatStat(effectValue(result, r))}</td>
+                    {result.config.method === 'nb_glm' && <td style={cell}>{formatStat(r.estimate)}</td>}
                     <td style={cell}>{formatStat(r.standard_error)}</td>
                     <td style={cell}>{formatStat(r.pvalue)}</td>
                     <td style={cell}>{formatStat(r.padj)}</td>

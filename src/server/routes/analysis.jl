@@ -1201,7 +1201,9 @@ function _differential_config(study::String)
     resolved = _resolved_run_config(study, nothing, nothing, nothing)
     val(k, d) = something(get(get(resolved, k, (; value=d)), :value, d), d)
     DifferentialConfig(String(val("analysis.differential.offset", "tss")),
-                       Float64(val("analysis.differential.min_prevalence", 0.0)))
+                       Float64(val("analysis.differential.min_prevalence", 0.0));
+                       method=String(val("analysis.differential.method", "nb_glm")),
+                       replacement_delta=Float64(val("analysis.differential.replacement_delta", 0.65)))
 end
 
 """
