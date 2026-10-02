@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 import { describe, expect, test } from 'bun:test'
 import type { DifferentialResult } from '../api/types'
-import { csvField, differentialCsv, formatStat } from './differentialTable'
+import { configLine, csvField, differentialCsv, effectValue, formatStat } from './differentialTable'
 
 const result: DifferentialResult = {
   status: 'partial',
@@ -11,8 +11,9 @@ const result: DifferentialResult = {
   table: 'merged',
   groups: { reference: 'run_A', contrast: 'run_B' },
   n_samples: { run_A: 2, run_B: 2 },
+  effect: { key: 'log2_fold_change', label: 'log2 fold change' },
   size_factors: [],
-  config: { offset: 'tss', min_prevalence: 0 },
+  config: { method: 'nb_glm', offset: 'tss', min_prevalence: 0 },
   diagnostics: { n_taxa: 2, n_tested: 1, n_failed: 1, n_boundary: 0, n_filtered: 0 },
   rows: [
     { taxon: 'Bacteroides', status: 'ok', note: '', estimate: 1.3862943611198906,
@@ -50,5 +51,26 @@ describe('formatStat', () => {
     expect(formatStat(0)).toBe('0')
     expect(formatStat(0.04321)).toBe('0.0432')
     expect(formatStat(2.9e-8)).toBe('2.90e-8')
+  })
+})
+
+describe('clr_lm results', () => {
+  const clr: DifferentialResult = {
+    ...result,
+    method: 'CLR LM',
+    effect: { key: 'estimate', label: 'CLR difference' },
+    config: { method: 'clr_lm', min_prevalence: 0, replacement_delta: 0.65 },
+    rows: [{ ...result.rows[0], estimate: -0.75, log2_fold_change: null, dispersion_theta: null }],
+  }
+
+  test('the effect comes from the field the result names, not log2_fold_change', () => {
+    expect(effectValue(clr, clr.rows[0])).toBe(-0.75)
+    expect(effectValue(result, result.rows[0])).toBe(2)
+  })
+
+  test('the settings line names the delta and says the estimate is not a fold change', () => {
+    expect(configLine(clr)).toBe('method clr_lm, replacement_delta 0.65, min_prevalence 0; estimate is a CLR difference, not a fold change')
+    expect(configLine(result)).toBe('method nb_glm, offset tss, min_prevalence 0')
+    expect(differentialCsv(clr).split('\r\n')[2]).toBe(`# ${configLine(clr)}`)
   })
 })

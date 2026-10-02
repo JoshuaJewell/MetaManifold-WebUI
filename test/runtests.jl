@@ -32,6 +32,7 @@ const UNIT_FILES = [
     "test_publication_tables.jl",
     "test_heatmap.jl",
     "test_trees.jl",
+    "test_zero_replacement.jl",
     "test_report_funnel.jl",
     "test_phylogeny.jl",
     "test_composition.jl",
