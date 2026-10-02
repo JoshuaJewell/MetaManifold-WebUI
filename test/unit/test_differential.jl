@@ -163,6 +163,13 @@ end
         @test_throws ArgumentError DifferentialConfig("css")
         @test_throws ArgumentError DifferentialConfig("tss", 1.5)
         @test_throws ArgumentError DifferentialConfig("tss", NaN)
+        @test DifferentialConfig().method == "nb_glm"
+        @test DifferentialConfig().replacement_delta == 0.65
+        @test DifferentialConfig(; method="clr_lm", replacement_delta=0.3).replacement_delta == 0.3
+        @test_throws ArgumentError DifferentialConfig(; method="ancombc")
+        for d in (0, 1, -0.5, NaN)
+            @test_throws ArgumentError DifferentialConfig(; method="clr_lm", replacement_delta=d)
+        end
     end
 
     @testset "Input validation" begin
@@ -304,6 +311,114 @@ end
         @test isnothing(SV._config_value_error("analysis.differential.offset", "rle"))
         @test !isnothing(SV._config_value_error("analysis.differential.offset", "css"))
         @test isnothing(SV._config_value_error("analysis.differential.min_prevalence", 0.1))
+        @test isnothing(SV._config_value_error("analysis.differential.method", "clr_lm"))
+        @test !isnothing(SV._config_value_error("analysis.differential.method", "ancombc"))
+    end
+
+    @testset "CLR transform" begin
+        @test clr_transform([1.0 exp(1) exp(2)]) ≈ [-1.0 0.0 1.0]
+        z = clr_transform([1.0 2 3 4; 5 1 1 9; 0.5 0.25 8 2])
+        @test all(abs.(sum(z; dims=2)) .< 1e-12)
+        # Scale invariance: a sample's CLR does not depend on its library size.
+        @test clr_transform([10.0 20 30 40]) ≈ clr_transform([1.0 2 3 4])
+        @test_throws ArgumentError clr_transform([0.0 1 2])
+        @test_throws ArgumentError clr_transform([NaN 1 2])
+    end
+
+    clr_config = DifferentialConfig(; method="clr_lm")
+
+    @testset "CLR linear model: estimate is the difference of group mean CLRs" begin
+        if !HAVE_R
+            @test_skip false
+        else
+            res = differential_abundance(effect, effect_samples, effect_taxa, effect_groups;
+                                         reference="A", contrast="B", config=clr_config)
+            @test res["effect"] == Dict("key" => "estimate", "label" => "CLR difference")
+            @test isempty(res["size_factors"])
+            @test res["config"]["method"] == "clr_lm" && !haskey(res["config"], "offset")
+            @test res["diagnostics"]["zero_replacement"]["zeros_replaced"] == 0
+            # Known answer, independent of R: with a two-level factor, the lm
+            # coefficient is mean(B) - mean(A) of each taxon's CLR.
+            z = clr_transform(Float64.(effect))
+            a = effect_groups .== "A"; b = .!a
+            expected = vec(sum(z[b, :]; dims=1)) ./ count(b) .- vec(sum(z[a, :]; dims=1)) ./ count(a)
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            for (j, t) in enumerate(effect_taxa)
+                @test byt[t]["status"] == "ok"
+                @test byt[t]["estimate"] ≈ expected[j] rtol=1e-8
+                @test isnothing(byt[t]["log2_fold_change"]) && isnothing(byt[t]["dispersion_theta"])
+                @test 0 <= byt[t]["pvalue"] <= 1 && !isnothing(byt[t]["padj"])
+            end
+            @test byt["t_up"]["estimate"] > 0 && byt["t_down"]["estimate"] < 0
+            @test byt["t_up"]["padj"] < 0.05 && byt["t_down"]["padj"] < 0.05
+            @testset "matches a direct stats::lm call" begin
+                y = z[:, 1]; g = effect_groups
+                direct = rcopy(R"""
+                    fit <- summary(stats::lm($y ~ factor($g, levels = c("A", "B"))))
+                    unname(fit$coefficients[2, c(1, 2, 4)])
+                """)
+                @test byt["t_up"]["estimate"] ≈ direct[1] rtol=1e-10
+                @test byt["t_up"]["standard_error"] ≈ direct[2] rtol=1e-10
+                @test byt["t_up"]["pvalue"] ≈ direct[3] rtol=1e-8
+            end
+        end
+    end
+
+    @testset "CLR: zeros, unobserved taxa and prevalence" begin
+        if !HAVE_R
+            @test_skip false
+        else
+            # Five samples x four taxa: 'ghost' has no reads anywhere, 'rare'
+            # one read in one sample, 'p' and 'q' are always present.
+            x = [10 20 0 0; 12 18 0 0; 11 19 3 0; 30 8 0 0; 28 9 0 0; 33 7 0 0]
+            s = ["s$i" for i in 1:6]
+            taxa = ["p", "q", "rare", "ghost"]
+            g = ["A", "A", "A", "B", "B", "B"]
+            res = differential_abundance(x, s, taxa, g; reference="A", contrast="B",
+                                         config=DifferentialConfig("tss", 0.5; method="clr_lm"))
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            @test byt["ghost"]["status"] == "filtered"
+            @test occursin("not part of the composition", byt["ghost"]["note"])
+            # 'rare' is in the composition (it shapes the CLR of every sample)
+            # but is below the prevalence threshold, so it is not tested.
+            @test byt["rare"]["status"] == "filtered"
+            @test occursin("min_prevalence", byt["rare"]["note"])
+            @test byt["p"]["status"] == "ok" && byt["q"]["status"] == "ok"
+            zr = res["diagnostics"]["zero_replacement"]
+            @test zr["n_taxa_in_composition"] == 3 && zr["n_taxa_unobserved"] == 1
+            @test zr["zeros_replaced"] == 5
+            @test 0 < zr["max_imputed_fraction"] < 1
+
+            # The composition the fit saw includes 'rare', replaced: the estimate
+            # for 'p' is computed on the 3-taxon CLR, not on p and q alone.
+            obs = Float64.(x[:, 1:3])
+            z = clr_transform(MetaManifold.ZeroReplacement.multiplicative_replacement(obs).counts)
+            a = g .== "A"
+            want = sum(z[.!a, 1]) / 3 - sum(z[a, 1]) / 3
+            @test byt["p"]["estimate"] ≈ want rtol=1e-8
+
+            @test_throws ArgumentError differential_abundance(x[:, [1, 4]], s, ["p", "ghost"], g;
+                reference="A", contrast="B", config=clr_config)
+        end
+    end
+
+    @testset "CLR: constant log-ratios are refused with their reason" begin
+        if !HAVE_R
+            @test_skip false
+        else
+            # p and q in the same 1:1 ratio everywhere: both CLRs are constant
+            # (zero), so neither can be fitted and the whole test is refused.
+            e = try
+                differential_abundance([5 5; 7 7; 9 9; 4 4], ["a", "b", "c", "d"], ["p", "q"],
+                                       ["A", "A", "B", "B"]; reference="A", contrast="B", config=clr_config)
+                nothing
+            catch err
+                err
+            end
+            @test e isa ErrorException
+            @test occursin("no taxon could be fitted", e.msg)
+            @test occursin("constant", e.msg)
+        end
     end
 
     @testset "Route: two runs through the in-process router" begin
@@ -343,6 +458,37 @@ end
 
             r = _da_post("noSuchStudy", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")]))
             @test r.status == 404
+        end
+    end
+
+    @testset "Route: clr_lm selected by the study config" begin
+        _da_fixture() do
+            root = MetaManifold.Server.ServerState._root[]
+            write(joinpath(root, "data", "studyD", "pipeline.yml"),
+                  "analysis:\n  differential:\n    method: clr_lm\n    replacement_delta: 0.5\n")
+            r = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
+                                        "table" => "merged", "rank" => "Genus"))
+            body = JSON3.read(String(r.body))
+            if !HAVE_R
+                @test_skip r.status == 200
+            else
+                @test r.status == 200
+                @test body.effect.key == "estimate" && body.effect.label == "CLR difference"
+                @test body.config.method == "clr_lm" && body.config.replacement_delta == 0.5
+                @test isempty(body.size_factors)
+                @test body.diagnostics.zero_replacement.zeros_replaced == 0
+                byt = Dict(String(x.taxon) => x for x in body.rows)
+                @test byt["Up"].estimate > 0 && byt["Down"].estimate < 0
+                @test all(x -> x.log2_fold_change === nothing, body.rows)
+                @test occursin("CLR difference", body.figure.layout.xaxis.title)
+            end
+
+            write(joinpath(root, "data", "studyD", "pipeline.yml"),
+                  "analysis:\n  differential:\n    method: clr_lm\n    replacement_delta: 1.5\n")
+            r = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
+                                        "table" => "merged", "rank" => "Genus"))
+            @test r.status == 400
+            @test JSON3.read(String(r.body)).error == "invalid_config"
         end
     end
 end

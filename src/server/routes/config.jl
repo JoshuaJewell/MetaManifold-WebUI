@@ -106,6 +106,7 @@ const _ENUM_VALUES = Dict(
     "tagging.source"                 => ("VSEARCH", "DADA2"),
     "analysis.alpha.normalisation"   => ("none", "rarefy", "srs"),
     "analysis.beta.normalisation"    => ("hellinger", "none", "rarefy", "srs"),
+    "analysis.differential.method"   => Differential.METHODS,
     "analysis.differential.offset"   => Differential.OFFSET_METHODS,
     "phylogeny.reference.align.strategy" => Validation.PHYLOGENY_ALIGN_STRATEGIES,
     "phylogeny.placement.align.strategy" => Validation.PHYLOGENY_ALIGN_STRATEGIES,
