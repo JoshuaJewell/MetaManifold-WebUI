@@ -47,7 +47,7 @@
 -- non-finite, so that guard becomes the hypothesis `All Valid ps` on every
 -- theorem: the theorems speak about exactly the inputs Julia accepts.
 --
--- Theorems (names as in docs/formal/agda-bh-scaling-proofs.md):
+-- Theorems (names as in proofs/agda/README.md):
 --
 --   bh-length          the output has one entry per input
 --   bh-nonneg          R-BH-1   every adjusted value is ≥ 0

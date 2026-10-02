@@ -284,7 +284,7 @@ jobs:
           fail_ci_if_error: false
 
   # Machine-checked proofs of the Benjamini-Hochberg adjustment and the TSS/RLE
-  # scaling algebra (proofs/agda, docs/formal/agda-bh-scaling-proofs.md).
+  # scaling algebra (proofs/agda, proofs/agda/README.md).
   # Agda publishes no 2.6.4.3 binary, and agda-stdlib 2.1 requires Agda 2.6.4.x,
   # so the pair comes from Debian trixie, which packages exactly that pair with
   # pre-built library interfaces. The image is pinned by digest and the two
