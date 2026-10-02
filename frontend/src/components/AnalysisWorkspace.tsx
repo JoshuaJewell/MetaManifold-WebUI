@@ -7,17 +7,19 @@ import { useSharedResultsTables } from './annotationShared'
 import { DiversityPanel } from './DiversityPanel'
 import { TaxaCompositionChart } from './TaxaCompositionChart'
 import { VennPanel } from './VennPanel'
+import { DifferentialPanel } from './DifferentialPanel'
 import { PublicationTablesPanel } from './PublicationTablesPanel'
 import { FigureBuilder } from '../figure/FigureBuilder'
 import { useTabParam } from '../hooks/useTabParam'
 import styles from './AnalysisWorkspace.module.css'
 
-const TABS = ['diversity', 'composition', 'overlap', 'tables', 'figures'] as const
+const TABS = ['diversity', 'composition', 'overlap', 'differential', 'tables', 'figures'] as const
 type AnalysisTab = (typeof TABS)[number]
 const TAB_LABELS: Record<AnalysisTab, string> = {
   diversity:   'Diversity',
   composition: 'Composition',
   overlap:     'Taxon Overlap',
+  differential: 'Differential Abundance',
   tables:      'Publication Tables',
   figures:     'Figures',
 }
@@ -27,7 +29,8 @@ const specKey = (r: ComparisonRunSpec) => `${r.group ?? ''}|${r.run}|${r.prefix 
 /**
  * One home for cross-run analysis: a scope bar (which runs/sub-groups, which
  * results table, whether sub-groups are pooled) shared by every tab, then tabs
- * for diversity, composition, taxon overlap and publication tables.
+ * for diversity, composition, taxon overlap, differential abundance and
+ * publication tables.
  *
  * Tabs mount on first visit and stay mounted, so computed charts survive
  * switching between them.
@@ -94,9 +97,9 @@ export function AnalysisWorkspace({ study, runs: baseRuns, source, perRun }: {
     return [...m.entries()]
   }, [runs])
 
-  const usesDataset = tab === 'diversity' || tab === 'overlap'
+  const usesDataset = tab === 'diversity' || tab === 'overlap' || tab === 'differential'
   const usesScope = tab !== 'figures'
-  const usesAggregate = tab === 'diversity' || tab === 'composition'
+  const usesAggregate = tab === 'diversity' || tab === 'composition' || tab === 'differential'
 
   return (
     <AnalysisSourceContext.Provider value={source}>
@@ -187,6 +190,13 @@ export function AnalysisWorkspace({ study, runs: baseRuns, source, perRun }: {
             {selectedRuns.length >= 2
               ? <VennPanel study={study} runs={selectedRuns} option={selected} />
               : <p className="empty-state">Select at least two runs or sub-groups to compare taxon overlap.</p>}
+          </div>
+        )}
+        {visited.has('differential') && (
+          <div hidden={tab !== 'differential'}>
+            {effectiveRuns.length === 2
+              ? <DifferentialPanel study={study} runs={effectiveRuns} option={selected} aggregate={aggregate} />
+              : <p className="empty-state">Select exactly two runs or sub-groups to test differential abundance; the first is the reference.</p>}
           </div>
         )}
         {visited.has('tables') && (
