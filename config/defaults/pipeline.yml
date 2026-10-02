@@ -304,12 +304,13 @@ analysis:
   # config/composition.yml).
   # apply_to lists the chart surfaces the exclusion acts on: diversity (alpha,
   # NMDS, PERMANOVA), taxa (rank-tagged chart), composition (category-tagged
-  # chart), venn. Omit apply_to to act on all surfaces. Composition is left out
-  # here so the composition chart still shows the full make-up.
+  # chart), venn, differential (differential abundance). Omit apply_to to act on
+  # all surfaces. Composition is left out here so the composition chart still
+  # shows the full make-up.
   exclude_categories:
     - set: contamination
       category: Contaminant
-      apply_to: [diversity, taxa, venn]
+      apply_to: [diversity, taxa, venn, differential]
   # Alpha diversity: richness, Shannon and Simpson per sample.
   alpha:
     # How counts are normalised first: none, rarefy or srs. none uses the raw
@@ -342,3 +343,14 @@ analysis:
     normalisation: hellinger
     # Reads per sample for rarefy or srs; 0 uses the smallest non-empty sample.
     depth: 0
+  # Differential abundance: a negative-binomial model per taxon (MASS::glm.nb)
+  # comparing two conditions on the raw read counts, with Benjamini-Hochberg
+  # adjusted p-values.
+  differential:
+    # How library size enters each model, as a log offset: tss (total reads per
+    # sample) or rle (median-of-ratios over the taxa present in every sample).
+    # rle is refused when no taxon is present in every sample.
+    offset: tss
+    # Fraction of samples, 0 to 1, in which a taxon must have reads to be
+    # tested. Taxa below it are listed as filtered, without a p-value.
+    min_prevalence: 0.0

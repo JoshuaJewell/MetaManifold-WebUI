@@ -49,6 +49,7 @@ const UNIT_FILES = [
     "test_migrate_composition.jl",
     "test_sample_reads.jl",
     "test_determinism.jl",
+    "test_differential.jl",
 ]
 
 # The files named on the command line ("test_routes.jl", "routes" or

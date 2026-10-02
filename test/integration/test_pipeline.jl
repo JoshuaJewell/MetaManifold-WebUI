@@ -10,6 +10,7 @@
 # Coverage:
 #   - All pipeline stages through merge_taxa (both runs)
 #   - DuckDB results loading and query helpers
+#   - The differential abundance route on the two runs
 #
 # Requirements:
 #   - External tools installed (cutadapt, vsearch, swarm, cd-hit-est)
@@ -202,6 +203,35 @@
             levels = Analysis.taxonomy_levels(con, "merged")
             @test !isempty(levels)
             @test "Domain" in levels
+        end
+    end
+
+    ## Differential abundance route on the two runs. run_A has 2 samples and
+    # run_B 1, so this checks only that the route answers with a well-formed
+    # result or an explicit error, never that anything is significant.
+    if all(i -> isassigned(merged_results, i) && !isnothing(merged_results[i]), eachindex(merged_results))
+        @testset "Differential abundance route (run_A vs run_B)" begin
+            SV = MetaManifold.Server
+            old_root = SV.ServerState._root[]
+            try
+                SV.ServerState.set_root!(PROJECT_ROOT)
+                body = JSON3.read(JSON3.write(Dict(
+                    "runs" => [Dict("run" => "run_A"), Dict("run" => "run_B")],
+                    "table" => "merged", "rank" => "Genus")))
+                r = SV._differential(PROJECT_NAME, body)
+                out = JSON3.read(String(r.body))
+                if r.status == 200
+                    @test haskey(out, :rows) && haskey(out, :figure) && haskey(out, :diagnostics)
+                    @test out.n_samples.run_A == 2 && out.n_samples.run_B == 1
+                    @test all(x -> x.status in ("ok", "boundary", "failed", "filtered"), out.rows)
+                else
+                    @test r.status in (400, 404, 422, 503)
+                    @test haskey(out, :error) && haskey(out, :message)
+                    @info "Differential route on MiSeq_SOP answered $(r.status) $(out.error): $(out.message)"
+                end
+            finally
+                SV.ServerState._root[] = old_root
+            end
         end
     end
 

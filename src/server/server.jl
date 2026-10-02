@@ -18,7 +18,7 @@ module Server
     using ..Databases, ..DuckDBStore, ..Validation
     using ..Tools, ..TaxonomyTableTools, ..ProjectSetup
     using ..DADA2, ..OTUPipeline
-    using ..DiversityMetrics, ..Analysis
+    using ..DiversityMetrics, ..Analysis, ..Differential
 
     ## EPIPE log filter
     # HTTP.jl logs every broken-pipe error from SSE streams as @error
