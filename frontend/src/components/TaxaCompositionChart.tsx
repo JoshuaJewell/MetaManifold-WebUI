@@ -1,6 +1,6 @@
 // (c) 2026 Joshua Benjamin Jewell. All rights reserved.
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { useAnalysisSource } from './analysisSource'
 import { errorMessage } from '../api/errorMessage'
@@ -78,6 +78,8 @@ export function TaxaCompositionChart({
   //## Chart state
   const [figure, setFigure] = useState<unknown>(null)
   const [loading, setLoading] = useState(false)
+  // Only the response to the latest request, for the current inputs, is shown.
+  const request = useRef(0)
 
   //## Derived flags
   const isCrossRun = runs !== undefined && runs.length > 0
@@ -102,9 +104,11 @@ export function TaxaCompositionChart({
   useEffect(() => {
     if (tag !== 'rank') return
     if (!refRun) { setRanks([]); return }
+    let cancelled = false
     api.analysis
       .ranks(study, refRun, { table: effectiveTable, group: refGroup ?? undefined })
       .then(result => {
+        if (cancelled) return
         setRanks(result)
         setRank(current =>
           current && result.includes(current)
@@ -112,7 +116,8 @@ export function TaxaCompositionChart({
             : result[result.length - 1] ?? null
         )
       })
-      .catch(() => setRanks([]))
+      .catch(() => { if (!cancelled) setRanks([]) })
+    return () => { cancelled = true }
   }, [study, refRun, refGroup, tag, effectiveTable])
 
   //## Fetch category sets when tag='category'
@@ -131,7 +136,22 @@ export function TaxaCompositionChart({
   const gridRows =
     (figure as { layout?: { grid?: { rows?: number } } } | null)?.layout?.grid?.rows ?? 1
 
+  // Everything a request is built from. A figure answers the inputs it was
+  // computed from, so new inputs discard it, along with any request still in
+  // flight for the old ones. Keyed on content so a new-but-equal `runs` array
+  // does not clear the chart.
+  const inputsKey = JSON.stringify([
+    study, run, group, runs, effectiveTable, source, tag, rank, catSet, topN,
+    relative, mode, keepEmpty, isFaceted, facetRows, facetCols, subgroup,
+  ])
+  useEffect(() => {
+    request.current++
+    setFigure(null)
+    setLoading(false)
+  }, [inputsKey])
+
   //## Compute handler
+  /** Build the chart for the current inputs and show it, unless the inputs changed meanwhile. */
   const handleShow = async () => {
     const value = tag === 'rank' ? rank : catSet
     if (!value) return
@@ -140,6 +160,7 @@ export function TaxaCompositionChart({
       toast.error('No run specified')
       return
     }
+    const req = ++request.current
     setLoading(true)
     try {
       const body = {
@@ -151,27 +172,31 @@ export function TaxaCompositionChart({
         keep_empty: keepEmpty,
         ...(tag === 'rank' ? { top_n: topN } : {}),
       }
+      let fig: unknown
       if (isFaceted) {
-        setFigure(await api.analysis.chartFacet(study, {
+        fig = await api.analysis.chartFacet(study, {
           ...body,
           runs: runs!,
           rows: facetRows,
           cols: facetCols,
-        }))
+        })
       } else if (isCrossRun) {
-        setFigure(await api.analysis.chartCompare(study, {
+        fig = await api.analysis.chartCompare(study, {
           ...body,
           subgroup: subgroup ?? null,
           runs: runs!,
-        }))
+        })
       } else {
-        setFigure(await api.analysis.chart(study, run!,
-          { ...body, subgroup: subgroup ?? null, ...(source ? { source } : {}) }, group))
+        fig = await api.analysis.chart(study, run!,
+          { ...body, subgroup: subgroup ?? null, ...(source ? { source } : {}) }, group)
       }
+      if (req === request.current) setFigure(fig)
     } catch (err) {
+      if (req !== request.current) return
+      setFigure(null)
       toast.error(`Chart failed: ${errorMessage(err)}`)
     } finally {
-      setLoading(false)
+      if (req === request.current) setLoading(false)
     }
   }
 

@@ -8,11 +8,12 @@ import { api } from '../api/client'
 import { errorMessage } from '../api/errorMessage'
 import { useToast } from './Toast'
 import type { ComparisonRunSpec, VennResult } from '../api/types'
-import { uniqueRuns } from '../api/types'
+import { sharedRanks } from './sharedRanks'
 import type { AnalysisOption } from './annotationShared'
 
 type Mode = 'euler' | 'upset'
 
+/** Taxon overlap between the selected runs at one shared rank, as an Euler or UpSet diagram. */
 export function VennPanel({ study, runs, option }: {
   study: string
   runs: ComparisonRunSpec[]
@@ -25,6 +26,9 @@ export function VennPanel({ study, runs, option }: {
   const [result, setResult] = useState<VennResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [ranksReady, setRanksReady] = useState(false)
+  const [ranksError, setRanksError] = useState<string | null>(null)
+  // Only the response to the latest request, for the current inputs, is shown.
+  const request = useRef(0)
   const box = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(580)
 
@@ -38,35 +42,43 @@ export function VennPanel({ study, runs, option }: {
 
   // Discover the intersection of taxonomy ranks available across all selected runs.
   useEffect(() => {
+    setRanksError(null)
     if (!option || runs.length === 0) { setRanks([]); setRank(''); setRanksReady(false); return }
     let cancelled = false
     setRanksReady(false)
-    Promise.all(
-      uniqueRuns(runs).map(r =>
-        api.analysis.ranks(study, r.run, {
-          table: option.table,
-          group: r.group,
-          ...(r.source ? { source: r.source } : {}),
-        }).catch(() => [] as string[])
-      )
-    ).then(results => {
+    sharedRanks(runs, r => api.analysis.ranks(study, r.run, {
+      table: option.table,
+      group: r.group,
+      ...(r.source ? { source: r.source } : {}),
+    })).then(intersection => {
       if (cancelled) return
-      const intersection = results.reduce<string[]>((acc, cur) =>
-        acc.filter(r => cur.includes(r)),
-        results[0] ?? []
-      )
       setRanks(intersection)
       setRanksReady(true)
       // Default to the deepest (last) shared rank.
       setRank(current =>
         intersection.includes(current) ? current : (intersection[intersection.length - 1] ?? '')
       )
+    }).catch(err => {
+      if (cancelled) return
+      setRanks([])
+      setRank('')
+      setRanksError(errorMessage(err))
     })
     return () => { cancelled = true }
   }, [study, runs, option])
 
+  // A diagram answers the inputs it was computed from; new inputs discard it,
+  // along with any request still in flight for the old ones.
+  useEffect(() => {
+    request.current++
+    setResult(null)
+    setLoading(false)
+  }, [study, runs, option?.table, rank])
+
+  /** Compute the overlap for the current inputs and show it, unless the inputs changed meanwhile. */
   const runVenn = async () => {
     if (!option || !rank) return
+    const req = ++request.current
     setLoading(true)
     try {
       const res = await api.analysis.venn(study, {
@@ -74,11 +86,13 @@ export function VennPanel({ study, runs, option }: {
         table: option.table,
         rank,
       })
-      setResult(res)
+      if (req === request.current) setResult(res)
     } catch (err) {
+      if (req !== request.current) return
+      setResult(null)
       toast.error(`Taxon overlap failed: ${errorMessage(err)}`)
     } finally {
-      setLoading(false)
+      if (req === request.current) setLoading(false)
     }
   }
 
@@ -110,6 +124,9 @@ export function VennPanel({ study, runs, option }: {
         )}
         {ranksReady && ranks.length === 0 && (
           <span style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)' }}>No taxonomy rank shared by the selected runs.</span>
+        )}
+        {ranksError && (
+          <span className="error-msg" style={{ margin: 0 }}>Could not read the taxonomy ranks: {ranksError}</span>
         )}
 
         <div style={{ display: 'flex', gap: 4 }} role="group" aria-label="Diagram type">

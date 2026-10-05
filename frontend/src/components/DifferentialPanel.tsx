@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { errorMessage } from '../api/errorMessage'
 import { useToast } from './Toast'
 import type { ComparisonRunSpec, DifferentialResult } from '../api/types'
-import { uniqueRuns } from '../api/types'
+import { sharedRanks } from './sharedRanks'
 import type { AnalysisOption } from './annotationShared'
 import { AnalysisChart } from './AnalysisChart'
 import { AddToReport } from './AddToReport'
@@ -36,42 +36,58 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
   const [ranks, setRanks] = useState<string[]>([])
   const [rank, setRank] = useState<string>('')
   const [ranksReady, setRanksReady] = useState(false)
+  const [ranksError, setRanksError] = useState<string | null>(null)
   const [result, setResult] = useState<DifferentialResult | null>(null)
   const [loading, setLoading] = useState(false)
+  // Only the response to the latest request, for the current inputs, is shown.
+  const request = useRef(0)
 
   // The ranks shared by every selected run.
   useEffect(() => {
+    setRanksError(null)
     if (!option || runs.length === 0) { setRanks([]); setRank(''); setRanksReady(false); return }
     let cancelled = false
     setRanksReady(false)
-    Promise.all(
-      uniqueRuns(runs).map(r =>
-        api.analysis.ranks(study, r.run, {
-          table: option.table,
-          group: r.group,
-          ...(r.source ? { source: r.source } : {}),
-        }).catch(() => [] as string[])
-      )
-    ).then(results => {
+    sharedRanks(runs, r => api.analysis.ranks(study, r.run, {
+      table: option.table,
+      group: r.group,
+      ...(r.source ? { source: r.source } : {}),
+    })).then(shared => {
       if (cancelled) return
-      const shared = results.reduce<string[]>((acc, cur) => acc.filter(r => cur.includes(r)), results[0] ?? [])
       setRanks(shared)
       setRanksReady(true)
       setRank(current => shared.includes(current) ? current : (shared[shared.length - 1] ?? ''))
+    }).catch(err => {
+      if (cancelled) return
+      setRanks([])
+      setRank('')
+      setRanksError(errorMessage(err))
     })
     return () => { cancelled = true }
   }, [study, runs, option])
 
+  // A result answers the inputs it was computed from; new inputs discard it,
+  // along with any request still in flight for the old ones.
+  useEffect(() => {
+    request.current++
+    setResult(null)
+    setLoading(false)
+  }, [study, runs, option?.table, rank, aggregate])
+
+  /** Fit the model for the current inputs and show it, unless the inputs changed meanwhile. */
   const run = async () => {
     if (!option || !rank) return
+    const req = ++request.current
     setLoading(true)
     try {
-      setResult(await api.analysis.differential(study, { runs, table: option.table, rank, aggregate }))
+      const res = await api.analysis.differential(study, { runs, table: option.table, rank, aggregate })
+      if (req === request.current) setResult(res)
     } catch (err) {
+      if (req !== request.current) return
       setResult(null)
       toast.error(`Differential abundance failed: ${errorMessage(err)}`)
     } finally {
-      setLoading(false)
+      if (req === request.current) setLoading(false)
     }
   }
 
@@ -93,6 +109,9 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
         )}
         {ranksReady && ranks.length === 0 && (
           <span style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)' }}>No taxonomy rank shared by the selected runs.</span>
+        )}
+        {ranksError && (
+          <span className="error-msg" style={{ margin: 0 }}>Could not read the taxonomy ranks: {ranksError}</span>
         )}
         {runs.length === 2 && (
           <span style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)' }}>
