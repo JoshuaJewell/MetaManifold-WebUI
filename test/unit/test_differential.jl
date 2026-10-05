@@ -280,6 +280,41 @@ end
         end
     end
 
+    @testset "A taxon absent from one group is refused, not reported as p≈1" begin
+        if !HAVE_MASS
+            @test_skip false
+        else
+            # 'only_b' has no reads in any A sample: complete separation.
+            only_b = vcat(fill(0, 12), [50, 80, 120, 30, 60, 90, 40, 70, 110, 55, 65, 85])
+            counts = hcat(effect, only_b)
+            taxa = vcat(effect_taxa, ["only_b"])
+            res = differential_abundance(counts, effect_samples, taxa, effect_groups;
+                                         reference="A", contrast="B")
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            s = byt["only_b"]
+            @test s["status"] == "failed"
+            @test occursin("'A'", s["note"]) && occursin("complete separation", s["note"])
+            @test all(isnothing, (s["estimate"], s["standard_error"], s["pvalue"], s["padj"]))
+            # The BH family is the three other taxa only.
+            @test res["diagnostics"]["n_tested"] == 3
+            @test [byt[t]["padj"] for t in effect_taxa] ≈
+                  bh_adjust([byt[t]["pvalue"] for t in effect_taxa])
+
+            # Control: the direct fit converges and reports p near 1, which is
+            # the value the check above keeps out of the results.
+            off = log.(tss_factors(counts, effect_samples))
+            g = effect_groups
+            direct = rcopy(R"""
+                local({
+                  fit <- MASS::glm.nb($only_b ~ factor($g, levels = c("A", "B")) + offset($off),
+                                      control = glm.control(maxit = 100))
+                  c(as.numeric(fit$converged), summary(fit)$coefficients[2, 4])
+                })
+            """)
+            @test direct[1] == 1 && direct[2] > 0.9
+        end
+    end
+
     @testset "No fittable taxon is an explicit error" begin
         if !HAVE_MASS
             @test_skip false
