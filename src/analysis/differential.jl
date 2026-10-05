@@ -212,6 +212,18 @@ for (da_j in seq_len(da_n)) {
     da_result[da_j, "note"] <- "the counts are constant across samples: there is nothing to estimate"
     next
   }
+  # Complete separation: with no reads in every sample of one group the group
+  # coefficient runs off to infinity, its standard error with it, and the Wald
+  # p-value collapses towards 1 although the fit reports convergence. That p is
+  # not evidence of no difference, so the taxon is refused with its reason.
+  da_absent <- levels(da_g)[vapply(levels(da_g), function(l) all(da_y[da_g == l] == 0), logical(1))]
+  if (length(da_absent) > 0L) {
+    da_result[da_j, "status"] <- "failed"
+    da_result[da_j, "note"] <- paste0("no reads in any '", da_absent[[1]], "' sample (complete ",
+                                      "separation): the fold change is unbounded and the Wald test ",
+                                      "is undefined, so no p-value is reported")
+    next
+  }
   da_warns <- character(0)
   da_fit <- tryCatch(
     withCallingHandlers(
@@ -298,7 +310,7 @@ function fit_nb(counts::AbstractMatrix{<:Integer}, groups::AbstractVector{<:Abst
             RCall.reval("rm(list = intersect(ls(), c('da_counts', 'da_group', 'da_levels', " *
                         "'da_offset', 'da_theta_upper', 'da_theta_lower', 'da_g', 'da_term', " *
                         "'da_n', 'da_result', 'da_j', 'da_y', 'da_warns', 'da_fit', 'da_co', " *
-                        "'da_row', 'da_theta'))); invisible(gc())")
+                        "'da_row', 'da_theta', 'da_absent'))); invisible(gc())")
         end
     end
     DataFrame(status    = String.(raw.status),
