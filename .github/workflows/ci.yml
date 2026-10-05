@@ -139,7 +139,7 @@ jobs:
           sudo chmod 777 "$RENV_PATHS_CACHE"
           sudo env R_CLI_DYNAMIC=false TERM=dumb Rscript --no-init-file -e 'install.packages(c("renv", "BiocManager"), repos="https://cloud.r-project.org", lib=.Library)'
           sudo env RENV_PATHS_CACHE="$RENV_PATHS_CACHE" R_CLI_DYNAMIC=false TERM=dumb Rscript --no-init-file -e 'renv::restore(project=".", library=.Library, prompt=FALSE)'
-          Rscript --no-init-file -e 'for (pkg in c("dada2","Biostrings","ShortRead","vegan","dplyr","MASS")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
+          Rscript --no-init-file -e 'for (pkg in c("dada2","Biostrings","ShortRead","vegan","dplyr","MASS","zCompositions")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
 
       # Saved on failure too, since the packages built before a failure are the ones
       # the next attempt should reuse. Root writes the cache, so it is made readable first.
@@ -230,7 +230,7 @@ jobs:
           julia --project=. -e '
             using RCall
             R"cat(.libPaths(), sep=\"\n\")"
-            for pkg in ["dada2", "dplyr", "vegan", "tibble", "MASS"]
+            for pkg in ["dada2", "dplyr", "vegan", "tibble", "MASS", "zCompositions"]
               R"if (!require($pkg, character.only=TRUE, quietly=TRUE)) stop($pkg, \" not found\")"
             end
           '

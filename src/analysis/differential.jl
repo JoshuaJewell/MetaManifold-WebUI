@@ -7,9 +7,10 @@
 #
 # - nb_glm: a negative-binomial GLM per taxon (MASS::glm.nb) on the observed
 #   integer read counts, with a library-size offset. There are no pseudocounts.
-# - clr_lm: a Gaussian linear model per taxon (stats::lm) on centred log-ratios,
-#   after multiplicative replacement of the zeros (`ZeroReplacement`). The
-#   estimate is a difference in CLR units, not a fold change.
+# - clr_lm: Welch's two-sample t-test per taxon (stats::t.test) on centred
+#   log-ratios, over the taxa that pass `min_prevalence`, after their zeros are
+#   replaced by zCompositions::cmultRepl (Bayesian-multiplicative, for counts).
+#   The estimate is a difference in CLR units, not a fold change.
 #
 # Count matrices here are samples x taxa, as everywhere else in `Analysis`.
 # Anything that is not a non-negative integer count is refused rather than
@@ -20,11 +21,10 @@ module Differential
 using DataFrames, RCall
 using ..RRuntime: with_r_lock
 using ..Analysis: _palette_hex, R_WAIT_SECONDS
-using ..ZeroReplacement: DEFAULT_DELTA, multiplicative_replacement
-
-export DifferentialConfig, ScalingRefusal, MASSUnavailable, OFFSET_METHODS, METHODS,
-       tss_factors, rle_factors, size_factors, bh_adjust, validate_counts,
-       clr_transform, fit_nb, fit_lm, differential_abundance, volcano_chart
+export DifferentialConfig, ScalingRefusal, MASSUnavailable, ZCompositionsUnavailable,
+       OFFSET_METHODS, METHODS, tss_factors, rle_factors, size_factors, bh_adjust,
+       validate_counts, replace_zeros, clr_transform, fit_nb, fit_welch,
+       differential_abundance, volcano_chart
 
 # Methods accepted under `analysis.differential.method`.
 const METHODS = ("nb_glm", "clr_lm")
@@ -38,6 +38,9 @@ const OFFSET_METHODS = ("tss", "rle")
 const THETA_UPPER = 1e7
 const THETA_LOWER = 1e-8
 
+# zCompositions::cmultRepl's default `frac`, as in Martín-Fernández et al. (2003).
+const DEFAULT_DELTA = 0.65
+
 """
     DifferentialConfig(offset="tss", min_prevalence=0.0; method="nb_glm",
                        replacement_delta=0.65)
@@ -45,11 +48,12 @@ const THETA_LOWER = 1e-8
 Settings for one differential abundance analysis, read from
 `analysis.differential` in the pipeline config. `method` is `"nb_glm"` or
 `"clr_lm"`. `offset` names the size factor method (`"tss"` or `"rle"`) and is
-used by `nb_glm` only: a library-size offset has no meaning for a Gaussian
-model of log-ratios, which are already free of library size.
+used by `nb_glm` only: a library-size offset has no meaning for a test on
+log-ratios, which are already free of library size.
 `min_prevalence` is the fraction of samples, in [0, 1], in which a taxon must
 have at least one read to be tested. `replacement_delta`, in (0, 1), is the
-fraction of a taxon's detection limit given to a replaced zero by `clr_lm`.
+`frac` passed to `zCompositions::cmultRepl` by `clr_lm`: an imputed proportion
+above its taxon's smallest observed proportion is lowered to this fraction of it.
 """
 struct DifferentialConfig
     method            :: String
@@ -98,6 +102,18 @@ struct MASSUnavailable <: Exception end
 Base.showerror(io::IO, ::MASSUnavailable) = print(io,
     "the R package MASS is not available, so negative-binomial models cannot be " *
     "fitted; install R with its recommended packages (MASS ships with them)")
+
+"""
+    ZCompositionsUnavailable()
+
+Raised when the R package zCompositions, which provides `cmultRepl`, cannot be
+loaded.
+"""
+struct ZCompositionsUnavailable <: Exception end
+
+Base.showerror(io::IO, ::ZCompositionsUnavailable) = print(io,
+    "the R package zCompositions is not available, so zeros cannot be replaced for " *
+    "clr_lm; restore the R library from renv.lock (Rscript -e 'renv::restore()')")
 
 """
     _geomean(x) -> Float64
@@ -346,11 +362,107 @@ function clr_transform(x::AbstractMatrix{<:Real})
     l .- sum(l; dims=2) ./ size(l, 2)
 end
 
-# The per-taxon Gaussian fit loop, with the same `da_` naming and statuses as
-# `_FIT_R` but no `boundary`: an lm has no dispersion parameter to run to a bound.
-const _FIT_LM_R = raw"""
+# zCompositions::cmultRepl on the taxa that will be tested. z.warning = 1 turns
+# off its own sparsity screen, and z.delete = FALSE stops it from dropping a
+# row or column: either would silently change the taxa or misalign the samples
+# with their groups. Which taxa are sparse enough to leave out is decided by
+# `min_prevalence` before this runs. Errors and warnings are captured, not raised.
+const _REPLACE_R = raw"""
+da_warns <- character(0)
+da_out <- tryCatch(
+  withCallingHandlers(
+    as.matrix(zCompositions::cmultRepl(da_counts, label = 0, method = "GBM", output = "prop",
+                                       frac = da_frac, z.warning = 1, z.delete = FALSE,
+                                       suppress.print = TRUE)),
+    warning = function(w) {
+      da_warns <<- c(da_warns, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }),
+  error = function(e) conditionMessage(e))
+"""
+
+"""
+    replace_zeros(counts; frac=DEFAULT_DELTA, samples, taxa) -> NamedTuple
+
+Replace the zeros of the samples x taxa read-count matrix `counts` with
+`zCompositions::cmultRepl(counts, label = 0, method = "GBM", output = "prop",
+frac = frac)`, the geometric Bayesian-multiplicative replacement for count
+data. Returns `(proportions, zeros_replaced, imputed_mass, warnings)`:
+`proportions` has the same shape as `counts`, each row summing to 1 with no
+zero left; `imputed_mass` is the share of each sample's total held by replaced
+values; `warnings` is whatever R warned.
+
+The caller chooses the taxa: everything passed in is replaced and kept, none is
+dropped. Throws `ArgumentError` when there are fewer than 2 taxa, when a taxon
+has reads in fewer than 2 samples (the GBM prior is then undefined), when a
+sample has no reads, or when cmultRepl refuses or returns a value that is not a
+positive proportion; the messages name the taxon or sample and point at
+`min_prevalence`. Throws `ZCompositionsUnavailable` when zCompositions cannot
+be loaded and `RBusyError` when the R runtime stays busy.
+"""
+function replace_zeros(counts::AbstractMatrix{<:Real};
+                       frac::Real=DEFAULT_DELTA,
+                       samples::AbstractVector{<:AbstractString}=["sample $i" for i in axes(counts, 1)],
+                       taxa::AbstractVector{<:AbstractString}=["taxon $j" for j in axes(counts, 2)])
+    size(counts) == (length(samples), length(taxa)) || throw(ArgumentError(
+        "the table is $(size(counts)) but there are $(length(samples)) samples and $(length(taxa)) taxa"))
+    size(counts, 2) >= 2 || throw(ArgumentError(
+        "the centred log-ratio needs at least 2 taxa; there are $(size(counts, 2))"))
+    n = size(counts, 1)
+    sparse = [j for j in axes(counts, 2) if count(>(0), view(counts, :, j)) < 2]
+    isempty(sparse) || throw(ArgumentError(
+        "$(length(sparse)) taxa have reads in fewer than 2 samples, so cmultRepl's " *
+        "Bayesian-multiplicative prior cannot be estimated for them (" *
+        join(("'$(taxa[j])'" for j in first(sparse, 5)), ", ") *
+        (length(sparse) > 5 ? ", ..." : "") * "); raise analysis.differential.min_prevalence " *
+        "to at least $(round(2 / n; digits=3)) so that only taxa seen in 2 or more samples are tested"))
+    for i in axes(counts, 1)
+        sum(view(counts, i, :)) > 0 || throw(ArgumentError(
+            "sample '$(samples[i])' has no reads in the $(size(counts, 2)) taxa that pass " *
+            "min_prevalence, so it has no composition to transform"))
+    end
+
+    zero_mask = counts .== 0
+    n_zero = count(zero_mask)
+    out, warns = with_r_lock(; timeout=R_WAIT_SECONDS[]) do
+        RCall.rcopy(RCall.reval("requireNamespace('zCompositions', quietly = TRUE)")) ||
+            throw(ZCompositionsUnavailable())
+        # cmultRepl stops when there is no zero to replace; the closure of the
+        # data is then the whole answer.
+        n_zero == 0 && return (Float64.(counts) ./ sum(counts; dims=2), String[])
+        RCall.globalEnv[:da_counts] = Matrix{Float64}(counts)
+        RCall.globalEnv[:da_frac] = Float64(frac)
+        try
+            RCall.reval(_REPLACE_R)
+            res = RCall.rcopy(RCall.reval("da_out"))
+            res isa AbstractString && throw(ArgumentError(
+                "zCompositions::cmultRepl refused the table: $res. Raising " *
+                "analysis.differential.min_prevalence leaves fewer, better-observed taxa"))
+            (Matrix{Float64}(res), String.(RCall.rcopy(Vector{String}, RCall.reval("da_warns"))))
+        finally
+            RCall.reval("rm(list = intersect(ls(), c('da_counts', 'da_frac', 'da_out', 'da_warns'))); " *
+                        "invisible(gc())")
+        end
+    end
+    size(out) == size(counts) || error(
+        "cmultRepl returned a $(size(out)) table for $(size(counts)) input; a row or column was dropped")
+    for i in axes(out, 1)
+        row = view(out, i, :)
+        if !all(v -> isfinite(v) && v > 0, row) || abs(sum(row) - 1) > 1e-8
+            throw(ArgumentError(
+                "zero replacement left sample '$(samples[i])' without a valid composition: " *
+                "its $(count(view(zero_mask, i, :))) replaced zeros would take the whole sample. " *
+                "Raise analysis.differential.min_prevalence so fewer rare taxa are tested"))
+        end
+    end
+    mass = [sum(out[i, j] for j in axes(out, 2) if zero_mask[i, j]; init=0.0) for i in axes(out, 1)]
+    (proportions=out, zeros_replaced=n_zero, imputed_mass=mass, warnings=unique(warns))
+end
+
+# The per-taxon Welch t-test loop, with the same `da_` naming and statuses as
+# `_FIT_R` but no `boundary`: a t-test has no dispersion parameter to run to a bound.
+const _FIT_WELCH_R = raw"""
 da_g <- factor(da_group, levels = da_levels)
-da_term <- paste0("da_g", da_levels[2])
 da_n <- ncol(da_values)
 da_result <- data.frame(status = rep("ok", da_n), note = rep("", da_n),
                         estimate = rep(NA_real_, da_n), se = rep(NA_real_, da_n),
@@ -364,32 +476,28 @@ for (da_j in seq_len(da_n)) {
     next
   }
   da_warns <- character(0)
-  da_co <- tryCatch(
+  da_tt <- tryCatch(
     withCallingHandlers(
-      summary(stats::lm(da_y ~ da_g))[["coefficients"]],
+      stats::t.test(da_y[da_g == da_levels[2]], da_y[da_g == da_levels[1]], var.equal = FALSE),
       warning = function(w) {
         da_warns <<- c(da_warns, conditionMessage(w))
         invokeRestart("muffleWarning")
       }),
     error = function(e) e)
-  if (inherits(da_co, "error")) {
+  if (inherits(da_tt, "error")) {
     da_result[da_j, "status"] <- "failed"
-    da_result[da_j, "note"] <- paste("lm stopped with an error:", conditionMessage(da_co))
+    da_result[da_j, "note"] <- paste("t.test stopped with an error:", conditionMessage(da_tt))
     next
   }
-  if (!(da_term %in% rownames(da_co))) {
-    da_result[da_j, "status"] <- "failed"
-    da_result[da_j, "note"] <- "the group coefficient is not estimable (aliased)"
-    next
-  }
-  da_row <- da_co[da_term, ]
+  da_row <- c(unname(da_tt[["estimate"]][1] - da_tt[["estimate"]][2]), unname(da_tt[["stderr"]]),
+              unname(da_tt[["statistic"]]), da_tt[["p.value"]])
   if (!all(is.finite(da_row)) || da_row[[2]] <= 0 || da_row[[4]] < 0 || da_row[[4]] > 1) {
     da_result[da_j, "status"] <- "failed"
-    da_result[da_j, "note"] <- paste(c("the fit returned a non-finite or zero standard error, so there is no test (the residual variance is zero)",
+    da_result[da_j, "note"] <- paste(c("the test returned a non-finite or zero standard error, so there is no test (both groups have zero variance)",
                                        unique(da_warns)), collapse = "; ")
     next
   }
-  da_result[da_j, c("estimate", "se", "statistic", "pvalue")] <- unname(da_row[1:4])
+  da_result[da_j, c("estimate", "se", "statistic", "pvalue")] <- da_row
   if (length(da_warns) > 0L) {
     da_result[da_j, "note"] <- paste("R warned:", paste(unique(da_warns), collapse = "; "))
   }
@@ -397,18 +505,19 @@ for (da_j in seq_len(da_n)) {
 """
 
 """
-    fit_lm(values, groups; levels) -> DataFrame
+    fit_welch(values, groups; levels) -> DataFrame
 
-Fit `stats::lm(y ~ group)` to each column of the samples x taxa matrix
-`values` (for `clr_lm`, centred log-ratios). `levels` is
-`(reference, contrast)`, so the estimate is the mean of `contrast` minus the
-mean of `reference`, and the test is the two-sample t-test with pooled
-variance. Returns one row per taxon with `status` (`ok` or `failed`), `note`,
-`estimate`, `se`, `statistic` (t) and `pvalue`; a failed taxon has `nothing`
-for every statistic. Throws `RBusyError` when the R runtime stays busy.
+Welch's two-sample t-test, `stats::t.test(contrast, reference, var.equal =
+FALSE)`, on each column of the samples x taxa matrix `values` (for `clr_lm`,
+centred log-ratios). `levels` is `(reference, contrast)`, so the estimate is
+the mean of `contrast` minus the mean of `reference`; the variances of the two
+groups are not assumed equal, since the groups often differ in size. Returns
+one row per taxon with `status` (`ok` or `failed`), `note`, `estimate`, `se`,
+`statistic` (Welch's t) and `pvalue`; a failed taxon has `nothing` for every
+statistic. Throws `RBusyError` when the R runtime stays busy.
 """
-function fit_lm(values::AbstractMatrix{<:Real}, groups::AbstractVector{<:AbstractString};
-                levels::NTuple{2,String})
+function fit_welch(values::AbstractMatrix{<:Real}, groups::AbstractVector{<:AbstractString};
+                   levels::NTuple{2,String})
     size(values, 1) == length(groups) || throw(ArgumentError(
         "values have $(size(values, 1)) samples and groups $(length(groups))"))
     raw = with_r_lock(; timeout=R_WAIT_SECONDS[]) do
@@ -416,12 +525,12 @@ function fit_lm(values::AbstractMatrix{<:Real}, groups::AbstractVector{<:Abstrac
         RCall.globalEnv[:da_group] = String.(groups)
         RCall.globalEnv[:da_levels] = collect(levels)
         try
-            RCall.reval(_FIT_LM_R)
+            RCall.reval(_FIT_WELCH_R)
             DataFrame(RCall.rcopy(RCall.reval("da_result")))
         finally
             RCall.reval("rm(list = intersect(ls(), c('da_values', 'da_group', 'da_levels', " *
-                        "'da_g', 'da_term', 'da_n', 'da_result', 'da_j', 'da_y', 'da_warns', " *
-                        "'da_co', 'da_row'))); invisible(gc())")
+                        "'da_g', 'da_n', 'da_result', 'da_j', 'da_y', 'da_warns', 'da_tt', " *
+                        "'da_row'))); invisible(gc())")
         end
     end
     DataFrame(status    = String.(raw.status),
@@ -456,18 +565,18 @@ labelled `reference` in `groups`, by `config.method`.
 enter each negative-binomial model as `log(factor)`; the estimate is a
 natural-log fold change.
 
-`clr_lm`, in this order: (1) taxa with no reads in any of the samples are set
-aside, because a taxon never observed has no detection limit and is not part of
-the composition; (2) the zeros of the remaining taxa are replaced
-multiplicatively with `config.replacement_delta`; (3) each sample is
-transformed to centred log-ratios over all of those taxa; (4) only then is
-`min_prevalence` applied, choosing which taxa are tested. Filtering before the
-transform would change every sample's geometric mean and so every other
-taxon's value. The estimate is the difference in mean CLR, contrast minus
-reference: a difference in centred-log-ratio units, not a fold change, and it
-is relative to the geometric mean of the observed taxa. Replaced zeros are not
-measurements, so a taxon with many zeros carries an estimate that depends on
-`replacement_delta`.
+`clr_lm`, in this order: (1) `min_prevalence` chooses the taxa, and taxa with
+no reads in any sample are always left out; (2) the zeros of those taxa only
+are replaced by `zCompositions::cmultRepl` (GBM, `frac =
+config.replacement_delta`), so the rare taxa that are not tested contribute no
+imputed values; (3) each sample is transformed to centred log-ratios over the
+same taxa; (4) each taxon is tested by Welch's t-test. Replacing zeros across
+every observed taxon first would let imputed values for rare taxa take over
+the samples of a sparse table. The estimate is the difference in mean CLR,
+contrast minus reference: a difference in centred-log-ratio units, not a fold
+change, relative to the geometric mean of the tested taxa. Replaced zeros are
+not measurements; `diagnostics.zero_replacement` reports their share of each
+sample. Each group needs at least 2 samples.
 
 For both methods, taxa present in fewer than `config.min_prevalence` of the
 samples are reported as `filtered` and not fitted, and the Benjamini-Hochberg
@@ -477,8 +586,8 @@ effect size and its label.
 
 Throws `ArgumentError` for unusable input (including a zero replacement that
 cannot be made), `ScalingRefusal` when the offset cannot be computed,
-`MASSUnavailable` when MASS is missing, and an `ErrorException` when no taxon
-could be fitted at all.
+`MASSUnavailable` or `ZCompositionsUnavailable` when the R package a method
+needs is missing, and an `ErrorException` when no taxon could be fitted at all.
 """
 function differential_abundance(counts::AbstractMatrix{<:Real},
                                 samples::AbstractVector{<:AbstractString},
@@ -536,31 +645,30 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
         config_echo = Dict{String,Any}("method" => config.method, "offset" => config.offset,
                                        "min_prevalence" => config.min_prevalence)
     else
-        observed = findall(>(0), present)
-        for j in setdiff(axes(counts, 2), observed)
-            rows[j]["note"] = "no reads in any sample of either group, so it has no " *
-                              "detection limit and is not part of the composition"
+        (n_ref >= 2 && n_con >= 2) || throw(ArgumentError(
+            "Welch's t-test needs at least 2 samples in each group to estimate its variance; " *
+            "'$reference' has $n_ref and '$contrast' has $n_con"))
+        for j in findall(==(0), present)
+            rows[j]["note"] = "no reads in any sample of either group, so it is not part of the composition"
         end
-        length(observed) >= 2 || throw(ArgumentError(
-            "the centred log-ratio needs at least 2 taxa with reads; there are $(length(observed))"))
-        replaced = multiplicative_replacement(counts[:, observed];
-                                              delta=config.replacement_delta,
-                                              samples, taxa=taxa[observed])
-        clr = clr_transform(replaced.counts)
-        tested = findall(k -> prevalence[observed[k]] >= config.min_prevalence, eachindex(observed))
-        fits = isempty(tested) ? nothing : fit_lm(clr[:, tested], groups; levels)
-        if !isnothing(fits)
-            for (k, c) in enumerate(tested)
-                f = fits[k, :]
-                merge!(rows[observed[c]], Dict{String,Any}(
-                    "status" => f.status, "note" => f.note, "estimate" => f.estimate,
-                    "standard_error" => f.se, "statistic" => f.statistic,
-                    "pvalue" => f.pvalue))
-            end
+        tested = findall(j -> present[j] > 0 && prevalence[j] >= config.min_prevalence, axes(counts, 2))
+        length(tested) >= 2 || throw(ArgumentError(
+            "the centred log-ratio needs at least 2 taxa with reads at or above " *
+            "analysis.differential.min_prevalence = $(config.min_prevalence); there are $(length(tested))"))
+        replaced = replace_zeros(counts[:, tested]; frac=config.replacement_delta,
+                                 samples, taxa=taxa[tested])
+        clr = clr_transform(replaced.proportions)
+        fits = fit_welch(clr, groups; levels)
+        for (k, j) in enumerate(tested)
+            f = fits[k, :]
+            merge!(rows[j], Dict{String,Any}(
+                "status" => f.status, "note" => f.note, "estimate" => f.estimate,
+                "standard_error" => f.se, "statistic" => f.statistic,
+                "pvalue" => f.pvalue))
         end
-        method_text = "Gaussian linear model per taxon (stats::lm) on centred log-ratios, after " *
-                      "multiplicative replacement of zeros (delta = $(config.replacement_delta) of " *
-                      "each taxon's smallest observed count); t test of the group coefficient; " *
+        method_text = "Welch's two-sample t-test per taxon (stats::t.test, var.equal = FALSE) on " *
+                      "centred log-ratios over the taxa passing min_prevalence, after their zeros " *
+                      "were replaced by zCompositions::cmultRepl (GBM, frac = $(config.replacement_delta)); " *
                       "Benjamini-Hochberg adjustment over the fitted taxa. Estimates are " *
                       "differences in CLR units, not fold changes, and replaced zeros are not measurements"
         effect = Dict("key" => "estimate", "label" => "CLR difference")
@@ -568,11 +676,15 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
         config_echo = Dict{String,Any}("method" => config.method,
                                        "min_prevalence" => config.min_prevalence,
                                        "replacement_delta" => config.replacement_delta)
+        sorted_mass = sort(replaced.imputed_mass)
         diagnostics["zero_replacement"] = Dict{String,Any}(
-            "delta" => replaced.delta, "zeros_replaced" => replaced.zeros_replaced,
-            "n_taxa_in_composition" => length(observed),
-            "n_taxa_unobserved" => length(taxa) - length(observed),
-            "max_imputed_fraction" => maximum(replaced.imputed_mass))
+            "method" => "zCompositions::cmultRepl (GBM)",
+            "delta" => config.replacement_delta, "zeros_replaced" => replaced.zeros_replaced,
+            "n_taxa_in_composition" => length(tested),
+            "n_taxa_unobserved" => count(==(0), present),
+            "median_imputed_fraction" => _median(sorted_mass),
+            "max_imputed_fraction" => last(sorted_mass),
+            "warnings" => replaced.warnings)
     end
 
     family = findall(r -> r["status"] in ("ok", "boundary") && !isnothing(r["pvalue"]), rows)

@@ -1281,6 +1281,7 @@ function _differential(study::String, body)
         e isa ArgumentError    && return json_error(400, "invalid_input", sprint(showerror, e))
         e isa ScalingRefusal   && return json_error(422, "scaling_refused", sprint(showerror, e))
         e isa MASSUnavailable  && return json_error(503, "r_unavailable", sprint(showerror, e))
+        e isa ZCompositionsUnavailable && return json_error(503, "r_unavailable", sprint(showerror, e))
         e isa ErrorException   && return json_error(422, "no_taxon_fitted", e.msg)
         rethrow()
     end
