@@ -7,7 +7,7 @@
 #
 # - nb_glm: a negative-binomial GLM per taxon (MASS::glm.nb) on the observed
 #   integer read counts, with a library-size offset. There are no pseudocounts.
-# - clr_lm: Welch's two-sample t-test per taxon (stats::t.test) on centred
+# - clr_welch: Welch's two-sample t-test per taxon (stats::t.test) on centred
 #   log-ratios, over the taxa that pass `min_prevalence`, after their zeros are
 #   replaced by zCompositions::cmultRepl (Bayesian-multiplicative, for counts).
 #   The estimate is a difference in CLR units, not a fold change.
@@ -27,7 +27,7 @@ export DifferentialConfig, ScalingRefusal, MASSUnavailable, ZCompositionsUnavail
        differential_abundance, volcano_chart
 
 # Methods accepted under `analysis.differential.method`.
-const METHODS = ("nb_glm", "clr_lm")
+const METHODS = ("nb_glm", "clr_welch")
 
 # Offset (size factor) methods accepted under `analysis.differential.offset`.
 const OFFSET_METHODS = ("tss", "rle")
@@ -47,12 +47,12 @@ const DEFAULT_DELTA = 0.65
 
 Settings for one differential abundance analysis, read from
 `analysis.differential` in the pipeline config. `method` is `"nb_glm"` or
-`"clr_lm"`. `offset` names the size factor method (`"tss"` or `"rle"`) and is
+`"clr_welch"`. `offset` names the size factor method (`"tss"` or `"rle"`) and is
 used by `nb_glm` only: a library-size offset has no meaning for a test on
 log-ratios, which are already free of library size.
 `min_prevalence` is the fraction of samples, in [0, 1], in which a taxon must
 have at least one read to be tested. `replacement_delta`, in (0, 1), is the
-`frac` passed to `zCompositions::cmultRepl` by `clr_lm`: an imputed proportion
+`frac` passed to `zCompositions::cmultRepl` by `clr_welch`: an imputed proportion
 above its taxon's smallest observed proportion is lowered to this fraction of it.
 """
 struct DifferentialConfig
@@ -113,7 +113,7 @@ struct ZCompositionsUnavailable <: Exception end
 
 Base.showerror(io::IO, ::ZCompositionsUnavailable) = print(io,
     "the R package zCompositions is not available, so zeros cannot be replaced for " *
-    "clr_lm; restore the R library from renv.lock (Rscript -e 'renv::restore()')")
+    "clr_welch; restore the R library from renv.lock (Rscript -e 'renv::restore()')")
 
 """
     _geomean(x) -> Float64
@@ -508,7 +508,7 @@ for (da_j in seq_len(da_n)) {
     fit_welch(values, groups; levels) -> DataFrame
 
 Welch's two-sample t-test, `stats::t.test(contrast, reference, var.equal =
-FALSE)`, on each column of the samples x taxa matrix `values` (for `clr_lm`,
+FALSE)`, on each column of the samples x taxa matrix `values` (for `clr_welch`,
 centred log-ratios). `levels` is `(reference, contrast)`, so the estimate is
 the mean of `contrast` minus the mean of `reference`; the variances of the two
 groups are not assumed equal, since the groups often differ in size. Returns
@@ -565,7 +565,7 @@ labelled `reference` in `groups`, by `config.method`.
 enter each negative-binomial model as `log(factor)`; the estimate is a
 natural-log fold change.
 
-`clr_lm`, in this order: (1) `min_prevalence` chooses the taxa, and taxa with
+`clr_welch`, in this order: (1) `min_prevalence` chooses the taxa, and taxa with
 no reads in any sample are always left out; (2) the zeros of those taxa only
 are replaced by `zCompositions::cmultRepl` (GBM, `frac =
 config.replacement_delta`), so the rare taxa that are not tested contribute no

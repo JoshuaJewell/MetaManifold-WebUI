@@ -3,7 +3,7 @@
 #
 # Differential abundance: Benjamini-Hochberg, TSS/RLE size factors, input
 # validation, the negative-binomial fit checked against a direct MASS::glm.nb
-# call, and clr_lm checked against direct zCompositions::cmultRepl and Welch
+# call, and clr_welch checked against direct zCompositions::cmultRepl and Welch
 # t.test calls. Tests needing R, MASS or zCompositions skip loudly when absent.
 
 using MetaManifold
@@ -30,7 +30,7 @@ const HAVE_R = _r_has("stats")
 const HAVE_MASS = HAVE_R && _r_has("MASS")
 HAVE_MASS || @info "R or MASS unavailable - the negative-binomial fit tests are SKIPPED"
 const HAVE_ZCOMP = HAVE_R && _r_has("zCompositions")
-HAVE_ZCOMP || @info "R or zCompositions unavailable - the clr_lm tests are SKIPPED"
+HAVE_ZCOMP || @info "R or zCompositions unavailable - the clr_welch tests are SKIPPED"
 
 # Rows per run: Up is split over two ASVs so the route must pool them by genus.
 const _DA_ROWS = Dict(
@@ -168,10 +168,12 @@ end
         @test_throws ArgumentError DifferentialConfig("tss", NaN)
         @test DifferentialConfig().method == "nb_glm"
         @test DifferentialConfig().replacement_delta == 0.65
-        @test DifferentialConfig(; method="clr_lm", replacement_delta=0.3).replacement_delta == 0.3
+        @test DifferentialConfig(; method="clr_welch", replacement_delta=0.3).replacement_delta == 0.3
         @test_throws ArgumentError DifferentialConfig(; method="ancombc")
+        # The pre-review name, never released, is not accepted.
+        @test_throws ArgumentError DifferentialConfig(; method="clr_lm")
         for d in (0, 1, -0.5, NaN)
-            @test_throws ArgumentError DifferentialConfig(; method="clr_lm", replacement_delta=d)
+            @test_throws ArgumentError DifferentialConfig(; method="clr_welch", replacement_delta=d)
         end
     end
 
@@ -314,7 +316,7 @@ end
         @test isnothing(SV._config_value_error("analysis.differential.offset", "rle"))
         @test !isnothing(SV._config_value_error("analysis.differential.offset", "css"))
         @test isnothing(SV._config_value_error("analysis.differential.min_prevalence", 0.1))
-        @test isnothing(SV._config_value_error("analysis.differential.method", "clr_lm"))
+        @test isnothing(SV._config_value_error("analysis.differential.method", "clr_welch"))
         @test !isnothing(SV._config_value_error("analysis.differential.method", "ancombc"))
     end
 
@@ -328,7 +330,7 @@ end
         @test_throws ArgumentError clr_transform([NaN 1 2])
     end
 
-    clr_config = DifferentialConfig(; method="clr_lm")
+    clr_config = DifferentialConfig(; method="clr_welch")
 
     @testset "CLR + Welch: estimate is the difference of group mean CLRs" begin
         if !HAVE_ZCOMP
@@ -338,7 +340,7 @@ end
                                          reference="A", contrast="B", config=clr_config)
             @test res["effect"] == Dict("key" => "estimate", "label" => "CLR difference")
             @test isempty(res["size_factors"])
-            @test res["config"]["method"] == "clr_lm" && !haskey(res["config"], "offset")
+            @test res["config"]["method"] == "clr_welch" && !haskey(res["config"], "offset")
             @test res["diagnostics"]["zero_replacement"]["zeros_replaced"] == 0
             @test occursin("Welch", res["method"]) && occursin("cmultRepl", res["method"])
             # Known answer, independent of R: the estimate is mean(B) - mean(A)
@@ -432,7 +434,7 @@ end
             taxa = ["p", "q", "r", "rare", "ghost"]
             g = ["A", "A", "A", "B", "B", "B"]
             res = differential_abundance(x, s, taxa, g; reference="A", contrast="B",
-                                         config=DifferentialConfig("tss", 0.5; method="clr_lm"))
+                                         config=DifferentialConfig("tss", 0.5; method="clr_welch"))
             byt = Dict(r["taxon"] => r for r in res["rows"])
             @test byt["ghost"]["status"] == "filtered"
             @test occursin("not part of the composition", byt["ghost"]["note"])
@@ -504,7 +506,7 @@ end
 
             # min_prevalence = 0.1 keeps taxa seen in 3 or more of 24 samples.
             res = differential_abundance(counts, samples, taxa, grp; reference="A", contrast="B",
-                                         config=DifferentialConfig("tss", 0.1; method="clr_lm"))
+                                         config=DifferentialConfig("tss", 0.1; method="clr_welch"))
             byt = Dict(r["taxon"] => r for r in res["rows"])
             d = res["diagnostics"]
             @test d["n_tested"] == 11 && d["n_filtered"] == 200 && d["n_failed"] == 0
@@ -587,11 +589,11 @@ end
         end
     end
 
-    @testset "Route: clr_lm selected by the study config" begin
+    @testset "Route: clr_welch selected by the study config" begin
         _da_fixture() do
             root = MetaManifold.Server.ServerState._root[]
             write(joinpath(root, "data", "studyD", "pipeline.yml"),
-                  "analysis:\n  differential:\n    method: clr_lm\n    replacement_delta: 0.5\n")
+                  "analysis:\n  differential:\n    method: clr_welch\n    replacement_delta: 0.5\n")
             r = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
                                         "table" => "merged", "rank" => "Genus"))
             body = JSON3.read(String(r.body))
@@ -601,7 +603,7 @@ end
             else
                 @test r.status == 200
                 @test body.effect.key == "estimate" && body.effect.label == "CLR difference"
-                @test body.config.method == "clr_lm" && body.config.replacement_delta == 0.5
+                @test body.config.method == "clr_welch" && body.config.replacement_delta == 0.5
                 @test isempty(body.size_factors)
                 @test body.diagnostics.zero_replacement.zeros_replaced == 0
                 @test body.diagnostics.zero_replacement.median_imputed_fraction == 0
@@ -612,7 +614,7 @@ end
             end
 
             write(joinpath(root, "data", "studyD", "pipeline.yml"),
-                  "analysis:\n  differential:\n    method: clr_lm\n    replacement_delta: 1.5\n")
+                  "analysis:\n  differential:\n    method: clr_welch\n    replacement_delta: 1.5\n")
             r = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
                                         "table" => "merged", "rank" => "Genus"))
             @test r.status == 400

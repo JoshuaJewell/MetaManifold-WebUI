@@ -54,12 +54,12 @@ describe('formatStat', () => {
   })
 })
 
-describe('clr_lm results', () => {
+describe('clr_welch results', () => {
   const clr: DifferentialResult = {
     ...result,
-    method: 'CLR LM',
+    method: 'CLR Welch',
     effect: { key: 'estimate', label: 'CLR difference' },
-    config: { method: 'clr_lm', min_prevalence: 0, replacement_delta: 0.65 },
+    config: { method: 'clr_welch', min_prevalence: 0, replacement_delta: 0.65 },
     rows: [{ ...result.rows[0], estimate: -0.75, log2_fold_change: null, dispersion_theta: null }],
   }
 
@@ -69,7 +69,7 @@ describe('clr_lm results', () => {
   })
 
   test('the settings line names the delta and says the estimate is not a fold change', () => {
-    expect(configLine(clr)).toBe('method clr_lm, replacement_delta 0.65, min_prevalence 0; estimate is a CLR difference, not a fold change')
+    expect(configLine(clr)).toBe('method clr_welch, replacement_delta 0.65, min_prevalence 0; estimate is a CLR difference, not a fold change')
     expect(configLine(result)).toBe('method nb_glm, offset tss, min_prevalence 0')
     expect(differentialCsv(clr).split('\r\n')[2]).toBe(`# ${configLine(clr)}`)
   })
