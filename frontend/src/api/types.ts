@@ -382,14 +382,14 @@ export interface DifferentialRow {
   status: DifferentialStatus
   note: string
   /**
-   * nb_glm: natural-log fold change, contrast over reference. clr_lm: mean
+   * nb_glm: natural-log fold change, contrast over reference. clr_welch: mean
    * CLR of contrast minus mean CLR of reference, which is not a fold change.
    */
   estimate: number | null
-  /** nb_glm only; null for clr_lm. */
+  /** nb_glm only; null for clr_welch. */
   log2_fold_change: number | null
   standard_error: number | null
-  /** z (nb_glm) or Welch's t (clr_lm). */
+  /** z (nb_glm) or Welch's t (clr_welch). */
   statistic: number | null
   pvalue: number | null
   /** Benjamini-Hochberg adjusted; null outside the tested family. */
@@ -399,7 +399,7 @@ export interface DifferentialRow {
   prevalence: number
 }
 
-export type DifferentialMethod = 'nb_glm' | 'clr_lm'
+export type DifferentialMethod = 'nb_glm' | 'clr_welch'
 
 /** Which row field holds the effect size, and what to call it. */
 export interface DifferentialEffect {
@@ -415,19 +415,19 @@ export interface DifferentialResult {
   groups: { reference: string; contrast: string }
   n_samples: Record<string, number>
   effect: DifferentialEffect
-  /** Empty for clr_lm, which takes no library-size offset. */
+  /** Empty for clr_welch, which takes no library-size offset. */
   size_factors: { sample: string; group: string; factor: number }[]
   config: {
     method: DifferentialMethod
     min_prevalence: number
     /** nb_glm only. */
     offset?: 'tss' | 'rle'
-    /** clr_lm only. */
+    /** clr_welch only. */
     replacement_delta?: number
   }
   diagnostics: {
     n_taxa: number; n_tested: number; n_failed: number; n_boundary: number; n_filtered: number
-    /** clr_lm only. */
+    /** clr_welch only. */
     zero_replacement?: {
       method: string; delta: number; zeros_replaced: number; n_taxa_in_composition: number
       n_taxa_unobserved: number; median_imputed_fraction: number; max_imputed_fraction: number

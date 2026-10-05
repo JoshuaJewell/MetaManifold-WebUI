@@ -41,13 +41,13 @@ export function formatStat(value: number | null): string {
 
 /**
  * The settings line of the CSV: the method and the parameters it used. The
- * offset belongs to nb_glm and the replacement delta to clr_lm, so each line
+ * offset belongs to nb_glm and the replacement delta to clr_welch, so each line
  * names only its own method's parameters.
  */
 export function configLine(result: DifferentialResult): string {
   const c = result.config
-  return c.method === 'clr_lm'
-    ? `method clr_lm, replacement_delta ${c.replacement_delta}, min_prevalence ${c.min_prevalence}; estimate is a CLR difference, not a fold change`
+  return c.method === 'clr_welch'
+    ? `method clr_welch, replacement_delta ${c.replacement_delta}, min_prevalence ${c.min_prevalence}; estimate is a CLR difference, not a fold change`
     : `method nb_glm, offset ${c.offset}, min_prevalence ${c.min_prevalence}`
 }
 
