@@ -111,8 +111,9 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
             . Samples: {Object.entries(result.n_samples).map(([g, n]) => `${g} ${n}`).join(', ')}.
             {result.diagnostics.zero_replacement && (() => {
               const z = result.diagnostics.zero_replacement
-              return ` ${z.zeros_replaced} zeros replaced (delta ${z.delta}); replaced values hold at most ` +
-                `${(100 * z.max_imputed_fraction).toPrecision(2)}% of any sample, and are not measurements.`
+              return ` ${z.zeros_replaced} zeros replaced by ${z.method} over ${z.n_taxa_in_composition} taxa; ` +
+                `replaced values hold ${(100 * z.median_imputed_fraction).toPrecision(2)}% of the median sample ` +
+                `and at most ${(100 * z.max_imputed_fraction).toPrecision(2)}% of any, and are not measurements.`
             })()}
           </p>
 

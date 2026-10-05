@@ -389,7 +389,7 @@ export interface DifferentialRow {
   /** nb_glm only; null for clr_lm. */
   log2_fold_change: number | null
   standard_error: number | null
-  /** z (nb_glm) or t (clr_lm). */
+  /** z (nb_glm) or Welch's t (clr_lm). */
   statistic: number | null
   pvalue: number | null
   /** Benjamini-Hochberg adjusted; null outside the tested family. */
@@ -429,8 +429,9 @@ export interface DifferentialResult {
     n_taxa: number; n_tested: number; n_failed: number; n_boundary: number; n_filtered: number
     /** clr_lm only. */
     zero_replacement?: {
-      delta: number; zeros_replaced: number; n_taxa_in_composition: number
-      n_taxa_unobserved: number; max_imputed_fraction: number
+      method: string; delta: number; zeros_replaced: number; n_taxa_in_composition: number
+      n_taxa_unobserved: number; median_imputed_fraction: number; max_imputed_fraction: number
+      warnings: string[]
     }
   }
   rows: DifferentialRow[]
