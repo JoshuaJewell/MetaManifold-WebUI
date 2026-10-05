@@ -159,6 +159,7 @@ The web UI lets you create studies, configure pipeline parameters, launch runs, 
 | `JULIA_METAMANIFOLD_PORT` | `8080`            | Server port   |
 | `JULIA_METAMANIFOLD_ROOT` | working directory | Project root  |
 | `JULIA_THREADS`           | `8`               | Julia threads |
+| `JULIA_METAMANIFOLD_ALLOWED_ORIGINS` | none | Extra browser origins allowed to call the API, comma-separated (the server's own origin and the Vite dev server at `localhost:5173` are always allowed) |
 
 Or run the Julia server directly:
 

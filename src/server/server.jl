@@ -207,8 +207,47 @@ module Server
     ## CORS middleware (needed when the frontend is served from a different origin)
     # Loopback binds also check Host, so a DNS-rebinding page cannot read the API.
     const _bound_host = Ref("127.0.0.1")
+    const _bound_port = Ref(8080)
     _is_loopback(h::AbstractString) = lowercase(h) in ("localhost", "127.0.0.1", "::1", "[::1]")
 
+    # The Vite dev server (frontend/vite.config.ts, default port) proxies /api and
+    # /files here without rewriting Origin, so its pages arrive with this origin.
+    const _DEV_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
+
+    "An origin in the form `_allowed_origins` holds: lowercase, no trailing slash."
+    _normalise_origin(o::AbstractString) = rstrip(lowercase(strip(o)), '/')
+
+    """
+        _allowed_origins() -> Set{String}
+
+    The browser origins allowed to call the API cross-origin: the origin this
+    server is served from (its bound port, spelled with `localhost` and
+    `127.0.0.1`, plus the bound host itself when it is a specific name), the Vite
+    dev server, and any listed comma-separated in
+    `JULIA_METAMANIFOLD_ALLOWED_ORIGINS`. Every other origin is refused, including
+    other ports and schemes on localhost.
+    """
+    function _allowed_origins()
+        port = _bound_port[]
+        host = lowercase(_bound_host[])
+        hosts = Set(["localhost", "127.0.0.1"])
+        host in ("0.0.0.0", "::", "[::]") ||
+            push!(hosts, occursin(':', host) && !startswith(host, "[") ? "[$host]" : host)
+        allowed = Set(["http://$h:$port" for h in hosts])
+        union!(allowed, _DEV_ORIGINS)
+        for o in split(get(ENV, "JULIA_METAMANIFOLD_ALLOWED_ORIGINS", ""), ',')
+            isempty(strip(o)) || push!(allowed, _normalise_origin(o))
+        end
+        allowed
+    end
+
+    """
+        _cors_middleware(next)
+
+    Refuse requests whose Host is not loopback on a loopback bind, and requests
+    carrying an `Origin` outside `_allowed_origins()`. Allowed origins get CORS
+    headers and preflight answers; requests with no `Origin` pass unchanged.
+    """
     function _cors_middleware(next)
         function(req::HTTP.Request)
             if _is_loopback(_bound_host[])
@@ -221,11 +260,8 @@ module Server
                 # Same-origin request - no CORS headers needed
                 return next(req)
             end
-            # Only allow localhost origins
-            origin_url = try HTTP.URIs.URI(origin) catch; nothing end
-            if isnothing(origin_url) || !(lowercase(origin_url.host) in ("localhost", "127.0.0.1", "::1"))
-                return HTTP.Response(403, "Forbidden: non-localhost origin")
-            end
+            _normalise_origin(origin) in _allowed_origins() ||
+                return HTTP.Response(403, "Forbidden: origin not allowed")
             cors_headers = [
                 "Access-Control-Allow-Origin"  => origin,
                 "Access-Control-Allow-Methods" => "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -252,7 +288,13 @@ module Server
         ".csv"  => "text/csv",  ".json" => "application/json",
     )
 
-    # Static file serving middleware (Oxygen middleware signature: handler -> req -> response)
+    """
+        _file_middleware(next)
+
+    Serve run outputs under `/files/{study}/runs/...` from the projects tree and
+    the frontend build for every other non-API path, passing `/api/` requests on.
+    Run files are sent with `nosniff`; report uploads also get `_UPLOAD_CSP`.
+    """
     function _file_middleware(next)
         function(req::HTTP.Request)
             uri = first(split(req.target, '?'; limit=2))
@@ -269,7 +311,13 @@ module Server
                     return HTTP.Response(403, "Forbidden")
                 ext  = last(splitext(full))
                 mime = get(_mime_map, ext, "application/octet-stream")
-                return HTTP.Response(200, ["Content-Type" => mime]; body=read(full))
+                # Report items are uploaded bytes, reachable here as well as
+                # through the report route: serve them as inert as that route does.
+                study_report = joinpath(projects, HTTP.URIs.unescapeuri(m[1]), "report")
+                uploaded = startswith(full, study_report * Base.Filesystem.path_separator)
+                headers = ["Content-Type" => mime, "X-Content-Type-Options" => "nosniff"]
+                uploaded && push!(headers, "Content-Security-Policy" => _UPLOAD_CSP)
+                return HTTP.Response(200, headers; body=read(full))
             end
 
             # Pass API requests through to Oxygen
@@ -342,10 +390,17 @@ module Server
     end
 
     ## Entry point
+    const _MIDDLEWARE = [_bad_request_middleware, _r_busy_middleware, _cors_middleware,
+                         _analysis_source_middleware, _file_middleware]
+    # Oxygen's docs (/docs, /docs/schema) and metrics sit outside the middleware
+    # above, so they would bypass the Host and Origin checks; nothing uses them.
+    const _SERVE_OPTIONS = (access_log=nothing, show_errors=false, docs=false, metrics=false)
+
     function start(; root=pwd(), host="127.0.0.1", port=8080, listen::Bool=true)
         global_logger(_SuppressEpipe(global_logger()))
         ServerState.set_root!(root)
         _bound_host[] = host
+        _bound_port[] = port
         @info "MetaManifold server starting" root host port
 
         # Initialise all projects on startup
@@ -354,10 +409,7 @@ module Server
 
         listen || return nothing
         _workload_enabled() || errormonitor(@async _warm_routes(host, port))
-        serve(; host, port, access_log=nothing,
-              middleware=[_bad_request_middleware, _r_busy_middleware, _cors_middleware,
-                          _analysis_source_middleware, _file_middleware],
-              show_errors=false)
+        serve(; host, port, middleware=_MIDDLEWARE, _SERVE_OPTIONS...)
     end
 
     """
