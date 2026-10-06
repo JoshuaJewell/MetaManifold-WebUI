@@ -1329,13 +1329,37 @@ function run_nmds(mat::Matrix{Float64}; seed::Integer=123, transform::String="no
 end
 
 """
+    _varies_within_any_block(values, blocks) -> Bool
+
+Whether `values` takes at least two distinct values among the samples of some
+block in `blocks` (one label per sample).
+"""
+function _varies_within_any_block(values::AbstractVector, blocks::AbstractVector)
+    first_seen = Dict{eltype(blocks),eltype(values)}()
+    for (v, b) in zip(values, blocks)
+        isequal(get!(first_seen, b, v), v) || return true
+    end
+    false
+end
+
+"""
     run_permanova(mat, metadata; seed=123, transform="none", blocks=nothing) -> Union{NamedTuple, Nothing}
 
-PERMANOVA via vegan::adonis2 with 999 permutations.
+PERMANOVA via vegan::adonis2 with up to 999 permutations.
 `metadata` is a DataFrame with one row per sample and covariate columns.
+Each covariate is tested as its own term (`by = "terms"`), sequentially in
+column order, so each row is conditioned on the terms before it. The top-level
+`term`, `r2`, `f_statistic` and `p_value` are those of the first term.
 `blocks`, one label per sample (e.g. the individual a sample came from),
 restricts permutations to within blocks. It is ignored when no label repeats,
-since singleton blocks admit no permutation at all.
+since singleton blocks admit no permutation at all. A term that is constant
+within every block cannot be tested by within-block permutation (each sample
+never leaves its block, so the permutations never exchange that term's labels
+and the p-value does not test it), so its p-value is withheld and
+`untestable_reason` says why.
+`permutations` is the number of permutations actually performed, which is fewer
+than 999 when the blocks admit fewer, and `min_p_value` the smallest p-value
+that number can produce.
 `transform` is applied before `vegdist`; see [`run_nmds`](@ref).
 """
 function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=123,
@@ -1348,6 +1372,10 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
     formula_rhs = join(covariates, " + ")
     mat = transform_counts(mat; method=transform)
     blocked = !isnothing(blocks) && length(blocks) == size(mat, 1) && !allunique(blocks)
+    # Within-block permutation never exchanges the labels of a term that is
+    # constant inside every block, so its p-value does not test that term.
+    untestable = blocked ? [c for c in covariates if !_varies_within_any_block(metadata[!, c], blocks)] :
+                           String[]
 
     with_r_lock(; timeout=R_WAIT_SECONDS[]) do
         meta_r = copy(metadata)
@@ -1357,6 +1385,7 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
         RCall.globalEnv[:seed] = Int(seed)
         RCall.globalEnv[:perm_blocks] = blocked ? String.(blocks) : String[]
         RCall.globalEnv[:disp_cols] = String.(covariates)
+        RCall.globalEnv[:perm_untestable] = String.(untestable)
         RCall.reval("""
             set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
             dist_mat <- vegdist(mat, method = "bray")
@@ -1368,12 +1397,25 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
                 999
             }
             perm_err <- NULL
+            perm_n <- NA_integer_
             perm_res <- tryCatch(
-                adonis2(form, data = meta_r, permutations = perm_ctrl, parallel = 1),
-                error = function(e) { perm_err <<- conditionMessage(e); NULL }
-            )
+                # vegan 2.7 defaults to by = NULL, one test of the whole model.
+                adonis2(form, data = meta_r, permutations = perm_ctrl, by = "terms", parallel = 1),
+                error = function(e) { perm_err <<- conditionMessage(e); NULL })
             if (!is.null(perm_res)) {
-                perm_text <- paste(capture.output(print(perm_res)), collapse = "\\n")
+                # permute enumerates every permutation instead of drawing 999 when
+                # the blocks admit fewer, which small blocks make likely; the
+                # control adonis2 used records how many it ran.
+                perm_n <- attr(perm_res, "control")[["nperm"]]
+                # Within-block permutation never exchanges such a term's labels
+                # between blocks, so its p-value does not test that term.
+                untestable_rows <- which(rownames(perm_res) %in% perm_untestable)
+                perm_res[untestable_rows, "Pr(>F)"] <- NA
+                perm_text <- paste(c(capture.output(print(perm_res)),
+                                     if (length(untestable_rows) > 0)
+                                         paste0("Pr(>F) withheld for ", paste(rownames(perm_res)[untestable_rows], collapse = ", "),
+                                                ": constant within every permutation block, so within-block permutation does not test it.")),
+                                   collapse = "\\n")
                 perm_r2 <- perm_res\$R2[1]
                 perm_f <- perm_res\$F[1]
                 perm_p <- perm_res[["Pr(>F)"]][1]
@@ -1411,6 +1453,7 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
         r2 = RCall.rcopy(RCall.reval("perm_r2"))
         f_stat = RCall.rcopy(RCall.reval("perm_f"))
         p_val = RCall.rcopy(RCall.reval("perm_p"))
+        n_perm = RCall.rcopy(RCall.reval("perm_n"))
         # adonis2 tests terms sequentially, so each row is conditioned on the terms above it.
         term_names = String.(vcat(RCall.rcopy(RCall.reval("perm_terms"))))
         term_r2 = vcat(RCall.rcopy(RCall.reval("perm_terms_r2")))
@@ -1425,20 +1468,32 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
             (; groups = [(; group = groups[k], mean = vcat(d[:mean])[k], median = vcat(d[:median])[k]) for k in eachindex(groups)],
                f_statistic = d[:f], df = [Int(d[:df1]), Int(d[:df2])], p_value = d[:p], text = String(d[:text]))
         end
-        RCall.reval("rm(mat, meta_r, formula_rhs, seed, perm_blocks, disp_cols, perm_ctrl, dist_mat, form, perm_res, perm_err, perm_text, perm_r2, perm_f, perm_p, perm_terms, perm_terms_r2, perm_terms_f, perm_terms_p, disp, disp_err); gc()")
+        RCall.reval("rm(mat, meta_r, formula_rhs, seed, perm_blocks, disp_cols, perm_untestable, perm_ctrl, dist_mat, form, perm_res, perm_err, perm_n, perm_text, perm_r2, perm_f, perm_p, perm_terms, perm_terms_r2, perm_terms_f, perm_terms_p, disp, disp_err); if (exists(\"untestable_rows\")) rm(untestable_rows); gc()")
 
         ismissing(txt) && return nothing
         # When R's adonis2 threw, txt is the error message and r2/f/p are missing.
         # Return a named tuple with :message so the route can distinguish and surface it.
         ismissing(r2) && return (; message=string(txt))
+        reason(t) = t in untestable ?
+            "'$t' is constant within every permutation block, and permutations are restricted " *
+            "within blocks, so its labels are never exchanged and the p-value would not test it; " *
+            "a between-block term needs whole blocks permuted" :
+            nothing
+        withheld(t, p) = (t in untestable || ismissing(p)) ? nothing : p
+        terms = [(; term=term_names[k],
+                    r2=term_r2[k],
+                    f_statistic=ismissing(term_f[k]) ? nothing : term_f[k],
+                    p_value=withheld(term_names[k], term_p[k]),
+                    untestable_reason=reason(term_names[k])) for k in eachindex(term_names)]
         (; text=txt,
+           term=term_names[1],
            r2=r2,
            f_statistic=ismissing(f_stat) ? nothing : f_stat,
-           p_value=ismissing(p_val) ? nothing : p_val,
-           terms=[(; term=term_names[k],
-                     r2=term_r2[k],
-                     f_statistic=ismissing(term_f[k]) ? nothing : term_f[k],
-                     p_value=ismissing(term_p[k]) ? nothing : term_p[k]) for k in eachindex(term_names)],
+           p_value=withheld(term_names[1], p_val),
+           untestable_reason=reason(term_names[1]),
+           terms,
+           permutations=Int(n_perm),
+           min_p_value=1 / (Int(n_perm) + 1),
            blocked,
            dispersion)
     end

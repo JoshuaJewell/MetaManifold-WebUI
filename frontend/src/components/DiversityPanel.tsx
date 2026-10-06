@@ -99,18 +99,19 @@ export function DiversityPanel({ study, runs, option, aggregate }: {
         <div className="card" style={{ fontFamily: 'monospace', fontSize: '.82rem', whiteSpace: 'pre-wrap' }}>
           <div className="card-title">PERMANOVA Results</div>
           <pre style={{ margin: 0 }}>{permanova.text}</pre>
-          {(permanova.terms?.length
-            ? permanova.terms
-            : permanova.p_value != null
-              ? [{ term: 'model', r2: permanova.r2 ?? NaN, f_statistic: permanova.f_statistic, p_value: permanova.p_value }]
-              : []
-          ).map(t => (
+          {(permanova.terms ?? []).map(t => (
             <p key={t.term} style={{ marginTop: 8, fontFamily: 'inherit' }}>
-              {t.term}: R&sup2; = {t.r2.toFixed(3)} · F = {t.f_statistic?.toFixed(2) ?? 'n/a'} · p = {t.p_value?.toFixed(4) ?? 'n/a'}
+              {t.term}: R&sup2; = {t.r2.toFixed(3)} · F = {t.f_statistic?.toFixed(2) ?? 'n/a'} ·{' '}
+              {t.untestable_reason ? `p not reported: ${t.untestable_reason}` : `p = ${t.p_value?.toFixed(4) ?? 'n/a'}`}
             </p>
           ))}
           {(permanova.terms?.length ?? 0) > 1 && (
             <p style={{ marginTop: 4, fontFamily: 'inherit' }}>Terms are tested in order, each after the ones above it.</p>
+          )}
+          {permanova.permutations != null && permanova.min_p_value != null && (
+            <p style={{ marginTop: 4, fontFamily: 'inherit' }}>
+              {permanova.permutations} permutations; the smallest attainable p is {permanova.min_p_value.toFixed(4)}.
+            </p>
           )}
           {permanova.blocked && (
             <p style={{ marginTop: 4, fontFamily: 'inherit' }}>Permutations restricted within individuals.</p>
