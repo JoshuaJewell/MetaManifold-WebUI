@@ -73,6 +73,15 @@ _wg_request(method, path, body="") =
         errs = SV.Validation.ValidationError[]
         SV.Validation._validate_remote!(errs, saved["remote"], "test")
         @test isempty(errs)
+
+        # Naming a host without a staging_dir, or with one that is not a string,
+        # leaves the remote stages nowhere to stage, and validation says so.
+        for remote in (Dict{String,Any}("host" => "user@server"),
+                       Dict{String,Any}("host" => "user@server", "staging_dir" => 42))
+            errs = SV.Validation.ValidationError[]
+            SV.Validation._validate_remote!(errs, remote, "test")
+            @test any(e -> occursin("remote.staging_dir must be set", e.message), errs)
+        end
     finally
         SV.ServerState._root[] = old_root
         rm(root; recursive=true, force=true)
