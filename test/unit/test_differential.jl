@@ -621,4 +621,54 @@ end
             @test JSON3.read(String(r.body)).error == "invalid_config"
         end
     end
+
+    ## Without zCompositions, clr_welch refuses with ZCompositionsUnavailable and
+    # the route answers 503. CI installs the package, so this hides it for the
+    # testset: unloaded, and its library dropped from .libPaths() until restored.
+    @testset "clr_welch without zCompositions is a 503" begin
+        if !HAVE_ZCOMP
+            @test_skip false    # the clr_welch route test above covers this case
+        else
+            saved_libs = rcopy(Vector{String}, reval(".libPaths()"))
+            hidden = rcopy(Bool, reval("""local({
+                lib <- dirname(find.package("zCompositions"))
+                try(unloadNamespace("zCompositions"), silent = TRUE)
+                .libPaths(setdiff(.libPaths(), lib))
+                !requireNamespace("zCompositions", quietly = TRUE)
+            })"""))
+            try
+                if !hidden
+                    @warn "zCompositions is in R's base library and cannot be hidden; SKIPPED"
+                    @test_skip hidden
+                else
+                    e = try
+                        differential_abundance([5 6; 7 3; 9 4; 4 8], ["a", "b", "c", "d"], ["p", "q"],
+                                               ["A", "A", "B", "B"]; reference="A", contrast="B",
+                                               config=DifferentialConfig(; method="clr_welch"))
+                        nothing
+                    catch err
+                        err
+                    end
+                    @test e isa ZCompositionsUnavailable
+                    @test occursin("renv::restore()", sprint(showerror, e))
+
+                    _da_fixture() do
+                        root = MetaManifold.Server.ServerState._root[]
+                        write(joinpath(root, "data", "studyD", "pipeline.yml"),
+                              "analysis:\n  differential:\n    method: clr_welch\n")
+                        r = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
+                                                    "table" => "merged", "rank" => "Genus"))
+                        body = JSON3.read(String(r.body))
+                        @test r.status == 503
+                        @test body.error == "r_unavailable"
+                        @test occursin("zCompositions", body.message)
+                    end
+                end
+            finally
+                RCall.globalEnv[:da_saved_libs] = saved_libs
+                reval(".libPaths(da_saved_libs); rm(da_saved_libs)")
+            end
+            @test rcopy(Bool, reval("requireNamespace('zCompositions', quietly = TRUE)"))
+        end
+    end
 end
