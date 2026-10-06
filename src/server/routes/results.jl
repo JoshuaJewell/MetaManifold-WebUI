@@ -400,6 +400,11 @@ function _filtered_table_df(con, table::String, columns::Vector{String},
 end
 
 ## Save filtered table to merged directory
+# Tables the pipeline writes. Saving over one would make it newer than its
+# inputs, so merge_taxa would never rebuild it; deleting one removes the merged
+# sentinel and the data the results views read. Neither route may touch them.
+const _PIPELINE_TABLES = ("merged", "merged_otu", "merged_cdhit", "cluster_membership")
+
 @post "/api/v1/studies/{study}/runs/{run}/results/tables/{table}/save" function(req,
                                                                                 study::String,
                                                                                 run::String,
@@ -418,8 +423,7 @@ end
     save_name = string(save_name)
     Validation.is_safe_name(save_name) || return json_error(400, "invalid_name",
         "Name must contain only letters, numbers, dots, hyphens, and underscores")
-    # Overwriting a pipeline table would make it newer than its inputs, so merge_taxa would never rebuild it.
-    save_name in ("merged", "merged_otu", "merged_cdhit", "cluster_membership") &&
+    save_name in _PIPELINE_TABLES &&
         return json_error(400, "reserved_name", "'$save_name' is a pipeline table; choose another name")
 
     params = _body_filter_params(body)
@@ -531,6 +535,8 @@ end
                                                                               table::String)
     err = _validate_run_request(study, run)
     isnothing(err) || return err
+    table in _PIPELINE_TABLES &&
+        return json_error(400, "reserved_name", "'$table' is a pipeline table and cannot be deleted")
     group = _req_group(req)
     dir = _merge_dir(study, run; group)
     path = joinpath(dir, table * ".csv")
