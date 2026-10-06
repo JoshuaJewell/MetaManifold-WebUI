@@ -170,4 +170,28 @@ const RR = MetaManifold.RRuntime
         @test !occursin("not run", caption)
     end
 
+    ## End to end through R: kruskal.test errors when every sample is in one
+    # group, R's tryCatch turns that into NA, and the result must be a failed
+    # test rather than a p-value or a null result.
+    @testset "an omnibus statistic R cannot compute is a failed test" begin
+        AN = MetaManifold.Analysis
+        if !AN._ensure_r()
+            @warn "Skipping: R/vegan is not available"
+            @test_skip false
+        else
+            one_group = AN._alpha_significance([1.0, 2.0, 3.0, 4.0], ["a", "a", "a", "a"],
+                                               ["s1", "s2", "s3", "s4"])
+            @test !AN.was_computed(one_group)
+            @test one_group.status === :test_failed
+            @test isnothing(one_group.omnibus)
+
+            # Positive control: two separable groups give a computed p-value.
+            two_groups = AN._alpha_significance([1.0, 2.0, 3.0, 11.0, 12.0, 13.0],
+                                                ["a", "a", "a", "b", "b", "b"],
+                                                ["s1", "s2", "s3", "s4", "s5", "s6"])
+            @test AN.was_computed(two_groups)
+            @test 0 < two_groups.omnibus < 1
+        end
+    end
+
 end
