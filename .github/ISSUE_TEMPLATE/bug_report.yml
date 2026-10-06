@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in MetaManifold does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search the existing issues first. Raise issues about a fork's own code on that fork.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps or command
+      description: The command you ran, or the steps in the web interface, so that someone else can repeat them.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include the error message, the server log lines, or a screenshot.
+    validations:
+      required: true
+  - type: input
+    id: julia
+    attributes:
+      label: Julia version
+      placeholder: output of `julia --version`
+    validations:
+      required: true
+  - type: input
+    id: r
+    attributes:
+      label: R version
+      placeholder: output of `R --version | head -1`
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: MetaManifold commit
+      placeholder: output of `git rev-parse --short HEAD`
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: The keys from `pipeline.yml` or the run's `run_config.yml` that bear on the problem.
+      render: yaml
