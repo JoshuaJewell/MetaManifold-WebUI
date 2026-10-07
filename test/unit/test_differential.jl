@@ -423,6 +423,24 @@ end
         end
     end
 
+    @testset "CLR: cmultRepl output is checked sample by sample" begin
+        # Pure Julia: no R is needed to check what cmultRepl hands back.
+        check = MetaManifold.Differential._check_compositions
+        mask = Bool[1 0 0; 0 0 0]
+        good = [0.1 0.3 0.6; 0.2 0.3 0.5]
+        @test check(good, mask, ["a", "b"]) === good
+        for (bad, why) in (([0.0 0.4 0.6; 0.2 0.3 0.5], "a replaced zero left at 0"),
+                           ([NaN 0.4 0.6; 0.2 0.3 0.5], "a non-finite value"),
+                           ([0.1 0.4 0.6; 0.2 0.3 0.5], "a row that does not sum to 1"))
+            msg = try check(bad, mask, ["first", "second"]); "" catch e; e.msg end
+            @test occursin("'first'", msg) && occursin("min_prevalence", msg)
+        end
+        # The failing sample is the one named, not always the first.
+        msg = try check([0.1 0.3 0.6; 0.2 0.3 0.6], mask, ["a", "b"]); "" catch e; e.msg end
+        @test occursin("'b'", msg) && occursin("0 replaced zeros", msg)
+        @test_throws ErrorException check(good[:, 1:2], mask, ["a", "b"])
+    end
+
     @testset "CLR: min_prevalence is applied before zero replacement" begin
         if !HAVE_ZCOMP
             @test_skip false
