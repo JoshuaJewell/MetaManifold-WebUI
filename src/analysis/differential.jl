@@ -382,6 +382,30 @@ da_out <- tryCatch(
 """
 
 """
+    _check_compositions(out, zero_mask, samples) -> out
+
+Check that cmultRepl's output `out` is one valid composition per sample: the
+same shape as the input whose zeros `zero_mask` marks, and every row finite,
+positive and summing to 1. Throws `ArgumentError` naming the first sample that
+fails, pointing at `min_prevalence`.
+"""
+function _check_compositions(out::AbstractMatrix{<:Real}, zero_mask::AbstractMatrix{Bool},
+                             samples::AbstractVector{<:AbstractString})
+    size(out) == size(zero_mask) || error(
+        "cmultRepl returned a $(size(out)) table for $(size(zero_mask)) input; a row or column was dropped")
+    for i in axes(out, 1)
+        row = view(out, i, :)
+        if !all(v -> isfinite(v) && v > 0, row) || abs(sum(row) - 1) > 1e-8
+            throw(ArgumentError(
+                "zero replacement left sample '$(samples[i])' without a valid composition: " *
+                "its $(count(view(zero_mask, i, :))) replaced zeros would take the whole sample. " *
+                "Raise analysis.differential.min_prevalence so fewer rare taxa are tested"))
+        end
+    end
+    out
+end
+
+"""
     replace_zeros(counts; frac=DEFAULT_DELTA, samples, taxa) -> NamedTuple
 
 Replace the zeros of the samples x taxa read-count matrix `counts` with
@@ -444,17 +468,7 @@ function replace_zeros(counts::AbstractMatrix{<:Real};
                         "invisible(gc())")
         end
     end
-    size(out) == size(counts) || error(
-        "cmultRepl returned a $(size(out)) table for $(size(counts)) input; a row or column was dropped")
-    for i in axes(out, 1)
-        row = view(out, i, :)
-        if !all(v -> isfinite(v) && v > 0, row) || abs(sum(row) - 1) > 1e-8
-            throw(ArgumentError(
-                "zero replacement left sample '$(samples[i])' without a valid composition: " *
-                "its $(count(view(zero_mask, i, :))) replaced zeros would take the whole sample. " *
-                "Raise analysis.differential.min_prevalence so fewer rare taxa are tested"))
-        end
-    end
+    _check_compositions(out, zero_mask, samples)
     mass = [sum(out[i, j] for j in axes(out, 2) if zero_mask[i, j]; init=0.0) for i in axes(out, 1)]
     (proportions=out, zeros_replaced=n_zero, imputed_mass=mass, warnings=unique(warns))
 end
