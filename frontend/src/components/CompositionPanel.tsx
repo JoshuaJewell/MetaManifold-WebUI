@@ -53,6 +53,10 @@ export function CompositionPanel({
       setTableOptions(opts)
       setTable(current => opts.some(o => o.key === current) ? current
         : opts.some(o => o.key === 'merged') ? 'merged' : opts[0]?.key ?? current)
+    }).catch(err => {
+      if (cancelled) return
+      setTableOptions([])
+      toast.error(`Could not list the results tables: ${errorMessage(err)}`)
     })
     return () => { cancelled = true }
   }, [study, run, group])
