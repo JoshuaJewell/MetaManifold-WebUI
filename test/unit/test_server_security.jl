@@ -80,13 +80,18 @@ end
         @testset "Oxygen docs and metrics are not served" begin
             @test SV._SERVE_OPTIONS.docs === false
             @test SV._SERVE_OPTIONS.metrics === false
+            # With a frontend build present, an unknown path falls through to the
+            # SPA catch-all and answers 200 with index.html. That is the app, not
+            # the docs, so accept exactly that body as well as a non-200 answer.
+            index = joinpath(SV._frontend_dir, "index.html")
+            spa = isfile(index) ? read(index) : nothing
             for path in ("/docs", "/docs/schema", "/docs/swagger", "/docs/metrics")
                 r = _ss_served(path)
-                body = lowercase(String(r.body))
+                body = lowercase(String(copy(r.body)))
                 @test !occursin("openapi", body)
                 @test !occursin("swagger", body)
                 @test !occursin("redoc", body)
-                @test r.status != 200
+                @test r.status != 200 || (spa !== nothing && r.body == spa)
             end
             # The served handler still answers the API.
             @test _ss_served("/api/v1/studies").status == 200
