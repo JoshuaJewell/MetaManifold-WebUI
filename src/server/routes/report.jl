@@ -126,6 +126,12 @@ const _REPORT_MIME = Dict(".svg" => "image/svg+xml", ".png" => "image/png", ".js
                           ".pdf" => "application/pdf", ".tif" => "image/tiff",
                           ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# Uploaded items are stored as sent, so an .svg can carry script. Served with
+# these, a file opened directly cannot run it or be sniffed as another type;
+# an <img> showing it is unaffected.
+const _UPLOAD_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+const _UPLOAD_HEADERS = ["X-Content-Type-Options" => "nosniff", "Content-Security-Policy" => _UPLOAD_CSP]
+
 @get "/api/v1/studies/{study}/report/{id}/file" function(req, study::String, id::String)
     err = _report_study_error(study)
     isnothing(err) || return err
@@ -134,7 +140,8 @@ const _REPORT_MIME = Dict(".svg" => "image/svg+xml", ".png" => "image/png", ".js
     it = _report_items(study)[item]
     path = joinpath(_report_dir(study), it["file"])
     isfile(path) || return json_error(404, "not_found", "The file for '$id' is missing")
-    HTTP.Response(200, ["Content-Type" => get(_REPORT_MIME, lowercase(splitext(path)[2]), "application/octet-stream")];
+    HTTP.Response(200, ["Content-Type" => get(_REPORT_MIME, lowercase(splitext(path)[2]), "application/octet-stream"),
+                        _UPLOAD_HEADERS...];
                   body=read(path))
 end
 
