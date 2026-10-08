@@ -74,8 +74,15 @@ Once a run completes, analysis is performed on request through the web UI, both 
 - Pipeline stage read-count summaries
 - NMDS ordination (Bray-Curtis, via R/vegan)
 - PERMANOVA, with PERMDISP to check for differences in dispersion (via R/vegan)
+- Differential abundance between two conditions: a negative-binomial model per taxon (via R/MASS) with Benjamini-Hochberg adjusted p-values (see [Differential abundance](#differential-abundance))
 
 Counts may be normalised before analysis (none, rarefaction to a fixed or auto-resolved depth, or scaling with ranked subsampling (SRS), which reaches the depth by scaling counts and keeps more of the community structure), and contamination-flagged taxa may be included or excluded. Ordinations can also apply a Hellinger transform before the Bray-Curtis dissimilarity. Composition charts can be drawn as a grid faceted on any two of run, group and sub-group. All analysis charts are returned as Plotly JSON and rendered interactively in the browser.
+
+## Documentation
+
+Longer documentation for users, maintainers, developers and theorists is kept as a wiki in
+[metadatastician/MetaManifold-Evidence, under `docs/wikis/`](https://github.com/metadatastician/MetaManifold-Evidence/tree/main/docs/wikis).
+Start at its [Home page](https://github.com/metadatastician/MetaManifold-Evidence/blob/main/docs/wikis/Home.md).
 
 ## Prerequisites
 
@@ -238,6 +245,67 @@ The composition view classifies each ASV/OTU into a biological category and rend
 <p align="center">
   <img src=".github/screenshots/composition.png" width="800" alt="Organism-category composition of two runs as stacked bars">
 </p>
+
+### Differential abundance
+
+The Differential Abundance tab of a study's analysis workspace tests each taxon
+for a difference in abundance between two conditions. Select exactly two runs or
+pooled-run sub-groups, a results table and a rank. The first condition is the
+reference, so a positive fold change means the taxon is more abundant in the
+second. The rank list shows only the ranks the selected runs share. With
+aggregation on, a pooled run counts as one condition rather than one per
+sub-group.
+
+Counts are summed per taxon at the chosen rank, with rows that have no name at
+that rank pooled as `Unclassified`. This happens after the read-count bounds and
+any `analysis.exclude_categories` entry that applies to `differential`. Each
+taxon is fitted with its own negative-binomial GLM, `MASS::glm.nb(y ~ group +
+offset(log(size factor)))`, on the raw integer read counts. There are no
+pseudocounts. The group coefficient gets a Wald test, and Benjamini-Hochberg
+adjustment runs over the taxa that produced a p-value. Size factors come from
+the whole count matrix and are centred to a geometric mean of 1. The code is in
+`src/analysis/differential.jl`, and the route in `src/server/routes/analysis.jl`.
+
+Settings live under `analysis.differential` (see
+[Configuring analysis](#configuring-analysis-analysis-in-pipelineyml)):
+
+- `offset`: `tss` (default) uses each sample's total reads. `rle` uses the
+  median of ratios over the taxa with reads in every sample.
+- `min_prevalence`: a fraction from 0 to 1 (default 0). A taxon with reads in a
+  smaller fraction of the samples is not fitted.
+
+The result is a volcano plot and a table. The plot draws log2 fold change
+against -log10 of the raw p-value, coloured by whether the adjusted p-value is
+below 0.05. Taxa without an adjusted p-value are left off the plot but stay in
+the table. Each table row has a status:
+
+- `ok`: the model fitted.
+- `boundary`: the model fitted, but the dispersion parameter theta reached a
+  bound (at least 1e7, so effectively Poisson, or at most 1e-8). These taxa
+  keep their p-value and stay in the adjusted family.
+- `failed`: no p-value, with the reason. Causes are counts that are constant
+  across samples, an error from `glm.nb`, a fit that did not converge, an
+  aliased group coefficient, or a non-finite estimate.
+- `filtered`: below `min_prevalence`, so not fitted.
+
+A failed or filtered taxon never gets a stand-in p-value, and it is not counted
+in the adjustment. The table downloads as `differential_abundance.csv` and can
+be added to the report. The CSV starts with `#` lines that record the
+comparison, method and settings.
+
+The test refuses, with an explicit error, when:
+
+- the selection is not exactly two conditions, or both are the same;
+- the two conditions resolve to different ranks;
+- a condition has no results table, no taxonomy columns or no sample columns,
+  or the read-count bounds remove all its samples;
+- `offset` or `min_prevalence` is invalid;
+- a count is not a non-negative integer, a condition has no samples, or there
+  are fewer than 3 samples in total;
+- `tss` meets a sample with no reads, or `rle` finds no taxon with reads in
+  every sample (use `tss`);
+- the R package MASS cannot be loaded;
+- no taxon could be fitted at all.
 
 ### Figures and report
 
@@ -553,13 +621,13 @@ Each entry names a filter in the `filters:` library of `config/composition.yml`.
 
 ### Configuring analysis (`analysis:` in `pipeline.yml`)
 
-Controls the defaults applied to the analysis charts (alpha diversity, taxa bar, NMDS, etc.). Per-chart choices such as the taxonomic rank and relative or absolute abundance are made in the UI.
+Controls the defaults applied to the analysis charts (alpha diversity, taxa bar, NMDS, differential abundance, etc.). Per-chart choices such as the taxonomic rank and relative or absolute abundance are made in the UI.
 
 ```yaml
 analysis:
   exclude_categories:            # composition categories to drop from figures; [] to keep all
-    - {set: contamination, category: Contaminant, apply_to: [diversity, taxa, venn]}
-                                 # apply_to surfaces: diversity | taxa | composition | venn
+    - {set: contamination, category: Contaminant, apply_to: [diversity, taxa, venn, differential]}
+                                 # apply_to surfaces: diversity | taxa | composition | venn | differential
                                  # (omit apply_to to act on every surface)
   alpha:                         # richness, Shannon and Simpson
     normalisation: none          # none | rarefy | srs (scaling with ranked subsampling)
@@ -576,6 +644,9 @@ analysis:
     depth: 0                     # rarefy/srs reads per sample; 0 = smallest non-empty sample
   nmds:
     max_stress: 0.2              # warn if NMDS stress exceeds this value
+  differential:                  # negative-binomial differential abundance (MASS::glm.nb)
+    offset: tss                  # tss | rle (rle is refused when no taxon has reads in every sample)
+    min_prevalence: 0.0          # fraction of samples, 0 to 1, a taxon needs reads in to be tested
 ```
 
 ### Configuring taxonomic filtering (`filters:` in `config/composition.yml`)
@@ -737,7 +808,7 @@ The server exposes a REST API under `/api/v1/`. Key endpoint groups:
 | Results        | `GET/POST/DELETE .../results/tables/...`                                                                      | List, query, filter, save, export (`.xlsx`), and delete tables; OTU member drill-down    |
 | QC             | `GET .../results/qc`, `GET .../results/dada2`                                                                 | MultiQC report metadata and DADA2 figures, logs, stats                                   |
 | Analysis       | `POST .../runs/{run}/analysis/{alpha,chart}`, `GET .../runs/{run}/analysis/{pipeline-stats,ranks}`            | Per-run charts and rank discovery                                                        |
-| Cross-run      | `POST /studies/{study}/analysis/{alpha,chart,chart-facet,nmds,permanova,venn,publication-tables}`             | Comparison, faceted charts, NMDS, PERMANOVA, taxon overlap and publication tables across runs |
+| Cross-run      | `POST /studies/{study}/analysis/{alpha,chart,chart-facet,nmds,permanova,venn,publication-tables,differential}` | Comparison, faceted charts, NMDS, PERMANOVA, taxon overlap, publication tables and differential abundance across runs |
 | Composition    | `POST .../runs/{run}/composition/summary`, `POST .../composition/{source}/query`, `POST .../composition/{source}/distinct/{column}` | Organism-composition summaries and tables for a run                             |
 | Composition library | `GET /composition`, `POST/DELETE /composition/{filters,sets}/{name}`, `GET /category-sets`, `POST/DELETE /category-sets/{name}` | Edit the filters and category sets in `config/composition.yml`               |
 | Reference trees | `GET/POST /reference-trees`, `GET/PUT/DELETE /reference-trees/{id}`, `GET/PUT .../fasta`, `POST .../run`, `GET .../log/{step}`, `GET .../qc/{align,trim}`, `GET .../alignment/{raw,trimmed}`, `GET .../treefile`, `POST .../trim-preview` | Build and inspect the shared reference trees |
