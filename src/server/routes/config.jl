@@ -115,11 +115,19 @@ const _ENUM_VALUES = Dict(
     "phylogeny.reference.tree.bootstrap" => Validation.PHYLOGENY_BOOTSTRAPS,
 )
 
+# String keys that become part of a file name: output stems and read suffixes.
+const _FILE_NAME_PARTS = ("dada2.output.fasta_prefix", "dada2.output.seq_table_prefix",
+                          "dada2.output.taxa_prefix", "cutadapt.r1_suffix", "cutadapt.r2_suffix")
+
 # Numeric keys whose factory default is a number but which also take ~.
 const _NULLABLE_NUMBERS = ("phylogeny.placement.place.heuristic",)
 
-# Why a value cannot be saved under this key, or nothing. The type follows the
-# factory default; a key whose default is ~ accepts a string, number or boolean.
+"""
+    _config_value_error(key, value) -> Union{String,Nothing}
+
+Why a value cannot be saved under this key, or nothing. The type follows the
+factory default; a key whose default is ~ accepts a string, number or boolean.
+"""
 function _config_value_error(key::String, value)
     v = value isa JSON3.Array ? collect(value) : value
     if haskey(_ENUM_VALUES, key)
@@ -136,10 +144,22 @@ function _config_value_error(key::String, value)
         (isnothing(v) || (v isa Real && !(v isa Bool))) || return "$key must be a number or empty"
         return nothing
     end
-    if key in ("remote.host", "remote.rscript") || startswith(key, "remote.tools.")
+    if key in ("remote.host", "remote.rscript")
         isnothing(v) && return nothing
         (v isa AbstractString && Validation.is_shell_safe_arg(v) && !startswith(v, "-")) ||
             return "$key may not start with '-' or contain spaces or shell metacharacters"
+        return nothing
+    end
+    # The rest of the remote block is refused here exactly as validation refuses it.
+    if startswith(key, "remote.")
+        bad = Validation.remote_value_error(key[length("remote.")+1:end], v)
+        isnothing(bad) || return bad
+    end
+    # Output stems and read-file suffixes become parts of file names (and the
+    # suffixes are spliced into a \Q...\E regex), so they are names, not paths.
+    if key in _FILE_NAME_PARTS
+        (v isa AbstractString && Validation.is_safe_name(v)) ||
+            return "$key may contain only letters, digits and . _ -"
         return nothing
     end
     default = get(_FACTORY_VALUES, key, nothing)
