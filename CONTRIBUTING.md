@@ -98,7 +98,7 @@ A pull request does not reopen these. An issue can discuss them.
 
 - `config/defaults/tool_versions.yml` pins Julia, R, bun and the external tools,
   and `install.jl` and CI both install from it. The Julia version is repeated in
-  the CI matrix. Change a pin by editing that file, and expect the change to be
+  the CI workflow. Change a pin by editing that file, and expect the change to be
   discussed.
 - R packages are pinned in `renv.lock`.
 - CI job names carry no version numbers, so that a pin change leaves required
