@@ -16,6 +16,7 @@ const REPO_ROOT   = normpath(joinpath(@__DIR__, "..", ".."))
 const PINS_PATH   = joinpath(REPO_ROOT, "config", "defaults", "tool_versions.yml")
 const INSTALL_JL  = joinpath(REPO_ROOT, "install.jl")
 const CI_PATH     = joinpath(REPO_ROOT, ".github", "workflows", "ci.yml")
+const WORKFLOWS   = joinpath(REPO_ROOT, ".github", "workflows")
 const MANIFEST    = joinpath(REPO_ROOT, "Manifest.toml")
 const RENV_LOCK   = joinpath(REPO_ROOT, "renv.lock")
 
@@ -29,13 +30,10 @@ const EXPECTED_PLATFORMS = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "ma
 
 is_sha256(s) = s isa AbstractString && occursin(r"^[0-9a-f]{64}$", s)
 
-"""Return the first step of `job` whose `uses:` names `action`, or nothing."""
-function ci_step_using(job, action)
-    for step in get(job, "steps", [])
-        startswith(get(step, "uses", ""), action) && return step
-    end
-    return nothing
-end
+# This fork's account allows only GitHub's own actions and its own, each pinned to a
+# full commit SHA.
+allowed_action(uses) =
+    occursin(r"^(actions|hyperpolymath)/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-f]{40}$", uses)
 
 
 @testset "install pins" begin
@@ -187,18 +185,18 @@ end
         ci = YAML.load_file(CI_PATH)
         job = ci["jobs"]["test"]
 
-        # Julia is the one version CI cannot read from the pin file, because nothing can
-        # be read before Julia exists. It is therefore duplicated, and this is the test
-        # that makes the duplication safe.
+        # Julia is the one runtime CI cannot read from the pin file, because nothing can
+        # be read before Julia exists. Its archive URL and checksum are therefore
+        # duplicated in the job's env, and this is the test that makes the duplication
+        # safe. The pinned URL names the version, which must equal Manifest.toml's
+        # (tested above).
         #
-        # Read from the `Set up Julia` step rather than from a matrix: the matrix was
-        # removed because GitHub appends a matrix combination to the posted check name
-        # (see "a required check name is a stable identifier" below). The step is located
-        # by its `uses:` rather than by index, so reordering the steps cannot make this
-        # assertion quietly vanish.
-        setup = ci_step_using(job, "julia-actions/setup-julia")
-        @test setup !== nothing
-        @test setup["with"]["version"] == pins["runtimes"]["julia"]["version"]
+        # Read from the job's env rather than from a matrix: the matrix was removed
+        # because GitHub appends a matrix combination to the posted check name (see "a
+        # required check name is a stable identifier" below).
+        archive = pins["runtimes"]["julia"]["archives"]["linux-x86_64"]
+        @test job["env"]["JULIA_URL"] == archive["url"]
+        @test job["env"]["JULIA_SHA256"] == archive["sha256"]
 
         # A floating runner would carry the R apt pin, which names a 24.04 build, off to
         # whatever the next LTS ships.
@@ -248,8 +246,31 @@ end
         @test !occursin("set +e", fetch_code)
 
         @test occursin("source scripts/ci/fetch_pinned.sh", runs)
-        for ref in (raw"$VSEARCH_URL", raw"$SWARM_URL", raw"$FASTQC_URL")
+        for ref in (raw"$VSEARCH_URL", raw"$SWARM_URL", raw"$FASTQC_URL",
+                    raw"$JULIA_URL", raw"$BUN_URL")
             @test occursin("fetch_pinned \"$ref\"", runs)
+        end
+
+        # Julia and Bun, which actions used to install, are refused unless they hash
+        # to their pins.
+        for (sha, file) in ((raw"$JULIA_SHA256", "julia.tar.gz"), (raw"$BUN_SHA256", "bun.zip"))
+            @test occursin("echo \"$sha  $file\" | sha256sum -c -", runs)
+        end
+    end
+
+    @testset "every action is one this account allows" begin
+        # Anything else ends the whole workflow in startup_failure before any job runs,
+        # so the run names no failing step. That is how ci.yml failed on every run on
+        # this fork, from at least 2026-10-02 until it stopped using julia-actions,
+        # oven-sh/setup-bun and codecov/codecov-action.
+        files = filter(f -> endswith(f, ".yml") || endswith(f, ".yaml"), readdir(WORKFLOWS))
+        @test "ci.yml" in files
+        @testset "$file" for file in files
+            for (_, job) in YAML.load_file(joinpath(WORKFLOWS, file))["jobs"],
+                step in get(job, "steps", [])
+                uses = get(step, "uses", nothing)
+                uses === nothing || @test allowed_action(uses)
+            end
         end
     end
 

@@ -8,9 +8,9 @@
 #     the pinned proof siblings (scripts/check-occupancy.sh).
 #
 # This account allows only GitHub's own actions and its own, pinned by SHA, so
-# ci.yml (julia-actions, setup-bun, codecov) cannot start on this fork. That is
-# why everything here installs from pinned URLs checked against pinned SHA256s,
-# and why the disagreement test runs here as well as in ci.yml's full suite.
+# everything here installs from pinned URLs checked against pinned SHA256s, as
+# ci.yml now does too. The disagreement test also runs in ci.yml's full suite;
+# it runs here as well so that a change to the probe gets its own check.
 name: Occupancy reading
 
 on:

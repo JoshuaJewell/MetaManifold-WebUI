@@ -1,10 +1,20 @@
 name: CI
 
+# This fork's account allows only GitHub's own actions (actions/*) and its own,
+# each pinned to a full commit SHA. Upstream's julia-actions, oven-sh/setup-bun
+# and codecov/codecov-action are none of these, and with them this workflow
+# ended in startup_failure on every run. So Julia and Bun are installed here
+# from the archives config/defaults/tool_versions.yml pins, each refused unless
+# it hashes to the pinned SHA256, and the Julia depot is cached with
+# actions/cache. Coverage is kept as a workflow artifact, since the Codecov
+# project is upstream's. test/unit/test_install_pins.jl asserts that every
+# `uses:` in .github/workflows is allowed by that policy.
+
 on:
   push:
     branches: [main]
+  # Any base branch, so a PR stacked on another one is tested too.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -53,22 +63,45 @@ jobs:
     # the environment, so those commands pass --no-init-file instead.
     env:
       RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
+      # Pinned rather than tracking latest stable, because a pinned Manifest.toml
+      # resolved by an unpinned Julia is not a reproducible build. These must equal
+      # runtimes.julia.archives.linux-x86_64 in the pin file, whose version must
+      # equal julia_version in Manifest.toml; they cannot be read from the pin
+      # file, since nothing can be read before Julia exists.
+      # test/unit/test_install_pins.jl fails if any of them disagree.
+      JULIA_URL: https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.5-linux-x86_64.tar.gz
+      JULIA_SHA256: 41b84d727e4e96fbf3ed9e92fa195d773d247b9097f73fad688f8b699758bae7
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-
-      - name: Set up Julia
-        uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9  # v2.7.0
         with:
-          # Pinned rather than tracking latest stable, because a pinned Manifest.toml
-          # resolved by an unpinned Julia is not a reproducible build. This must equal
-          # julia_version in Manifest.toml; it cannot be read from the pin file, since
-          # nothing can be read before Julia exists. test/unit/test_install_pins.jl
-          # fails if the three ever disagree.
-          version: "1.12.5"
+          persist-credentials: false   # nothing here pushes
 
-      - name: Cache Julia packages
-        uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9  # v2.1.0
+      - name: Install Julia
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$JULIA_URL" julia.tar.gz
+          echo "$JULIA_SHA256  julia.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/julia
+          sudo tar xzf julia.tar.gz -C /opt/julia --strip-components=1
+          rm julia.tar.gz
+          echo /opt/julia/bin >> "$GITHUB_PATH"
+
+      # The registry, packages, artifacts and precompiled caches, keyed on the
+      # Manifest (which also names the Julia version). Saved once instantiation
+      # has succeeded, so a failed run cannot store a half-built depot.
+      - name: Restore the Julia depot
+        id: julia-depot
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: |
+            ~/.julia/registries
+            ~/.julia/packages
+            ~/.julia/artifacts
+            ~/.julia/compiled
+          key: julia-depot-${{ runner.os }}-${{ hashFiles('Manifest.toml') }}
+          restore-keys: |
+            julia-depot-${{ runner.os }}-
 
       # Every external version CI installs is read from the committed pin file, so CI
       # and a developer's machine cannot drift apart. A temporary environment is used
@@ -84,7 +117,10 @@ jobs:
             pins = YAML.load_file("config/defaults/tool_versions.yml")
             open(ENV["GITHUB_ENV"], "a") do io
                 println(io, "R_APT_VERSION=", pins["runtimes"]["r"]["apt_version"])
-                println(io, "BUN_VERSION=", pins["toolchain"]["bun"]["version"])
+                bun = pins["toolchain"]["bun"]
+                println(io, "BUN_VERSION=", bun["version"])
+                println(io, "BUN_URL=", bun["archives"]["linux-x86_64"]["url"])
+                println(io, "BUN_SHA256=", bun["archives"]["linux-x86_64"]["sha256"])
                 println(io, "CUTADAPT_SPEC=cutadapt==", pins["tools"]["cutadapt"]["version"])
                 println(io, "MULTIQC_SPEC=multiqc==", pins["tools"]["multiqc"]["version"])
                 fastqc = pins["tools"]["fastqc"]["archives"]["any"]
@@ -221,10 +257,28 @@ jobs:
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
+      - name: Save the Julia depot
+        if: steps.julia-depot.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          bun-version: ${{ env.BUN_VERSION }}
+          path: |
+            ~/.julia/registries
+            ~/.julia/packages
+            ~/.julia/artifacts
+            ~/.julia/compiled
+          key: julia-depot-${{ runner.os }}-${{ hashFiles('Manifest.toml') }}
+
+      # Downloaded against the pinned URL and refused unless it hashes to the pinned
+      # SHA256, as install.jl does when no bun of this version is on PATH.
+      - name: Install Bun
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$BUN_URL" bun.zip
+          echo "$BUN_SHA256  bun.zip" | sha256sum -c -
+          unzip -q bun.zip
+          sudo mv bun-linux-x64/bun /usr/local/bin/bun
+          rm -rf bun.zip bun-linux-x64
+          test "$(bun --version)" = "$BUN_VERSION"
 
       - name: Build frontend
         working-directory: frontend
@@ -289,16 +343,25 @@ jobs:
           fi
           exit "$status"
 
+      # What julia-processcoverage did: the .cov files under src/ to lcov.info, with
+      # CoverageTools pinned to an exact release.
       - name: Process coverage
-        uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38  # v1.2.2
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.activate(temp = true)
+            Pkg.add(name = "CoverageTools", version = "1.4.2")
+            using CoverageTools
+            LCOV.writefile("lcov.info", process_folder("src"))'
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v6.0.2
+      # The Codecov project (codecov.yml, the README badge) is upstream's, so the fork
+      # keeps its coverage as an artifact of the run instead.
+      - name: Keep coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: JoshuaJewell/MetaManifold-WebUI
-          fail_ci_if_error: false
+          name: lcov
+          path: lcov.info
+          retention-days: 14
 
   # Machine-checked proofs of the Benjamini-Hochberg adjustment and the TSS/RLE
   # scaling algebra (proofs/agda, proofs/agda/README.md).
@@ -318,6 +381,8 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false   # nothing here pushes
 
       - name: Install Agda and the standard library
         run: |
