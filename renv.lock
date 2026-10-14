@@ -673,6 +673,25 @@
       "Author": "Constantin Ahlmann-Eltze [aut] (ORCID: <https://orcid.org/0000-0002-3762-068X>), Peter Hickey [aut, cre] (ORCID: <https://orcid.org/0000-0002-8153-6258>), Hervé Pagès [aut]",
       "Maintainer": "Peter Hickey <peter.hickey@gmail.com>"
     },
+    "NADA": {
+      "Package": "NADA",
+      "Version": "1.6-1.2",
+      "Source": "Repository",
+      "Title": "Nondetects and Data Analysis for Environmental Data",
+      "Author": "Lopaka Lee [aut, cre]",
+      "Authors@R": "person(given = \"Lopaka\", family = \"Lee\", role = c(\"aut\", \"cre\"), email = \"rclee@usgs.gov\")",
+      "Description": "Contains methods described by Dennis Helsel in  his book \"Nondetects And Data Analysis: Statistics  for Censored Environmental Data\".",
+      "Maintainer": "Lopaka Lee <rclee@usgs.gov>",
+      "Depends": [
+        "R (>= 2.10)",
+        "methods",
+        "survival"
+      ],
+      "License": "GPL (>= 2)",
+      "Collate": "All.R summary.R cen.R km.R reg.R mle.R ken.R ros.R icmle.R",
+      "NeedsCompilation": "no",
+      "Repository": "CRAN"
+    },
     "R6": {
       "Package": "R6",
       "Version": "2.6.1",
@@ -2907,6 +2926,36 @@
       "Maintainer": "Hadley Wickham <hadley@posit.co>",
       "Repository": "CRAN"
     },
+    "survival": {
+      "Package": "survival",
+      "Version": "3.8-3",
+      "Source": "Repository",
+      "Title": "Survival Analysis",
+      "Priority": "recommended",
+      "Date": "2024-12-17",
+      "Depends": [
+        "R (>= 3.5.0)"
+      ],
+      "Imports": [
+        "graphics",
+        "Matrix",
+        "methods",
+        "splines",
+        "stats",
+        "utils"
+      ],
+      "LazyData": "Yes",
+      "LazyDataCompression": "xz",
+      "ByteCompile": "Yes",
+      "Authors@R": "c(person(c(\"Terry\", \"M\"), \"Therneau\", email=\"therneau.terry@mayo.edu\", role=c(\"aut\", \"cre\")), person(\"Thomas\", \"Lumley\", role=c(\"ctb\", \"trl\"), comment=\"original S->R port and R maintainer until 2009\"), person(\"Atkinson\", \"Elizabeth\", role=\"ctb\"), person(\"Crowson\", \"Cynthia\", role=\"ctb\"))",
+      "Description": "Contains the core survival analysis routines, including definition of Surv objects,  Kaplan-Meier and Aalen-Johansen (multi-state) curves, Cox models, and parametric accelerated failure time models.",
+      "License": "LGPL (>= 2)",
+      "URL": "https://github.com/therneau/survival",
+      "NeedsCompilation": "yes",
+      "Author": "Terry M Therneau [aut, cre], Thomas Lumley [ctb, trl] (original S->R port and R maintainer until 2009), Atkinson Elizabeth [ctb], Crowson Cynthia [ctb]",
+      "Maintainer": "Terry M Therneau <therneau.terry@mayo.edu>",
+      "Repository": "CRAN"
+    },
     "tibble": {
       "Package": "tibble",
       "Version": "3.3.1",
@@ -3013,6 +3062,28 @@
       "NeedsCompilation": "yes",
       "Author": "Lionel Henry [aut, cre], Hadley Wickham [aut], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Lionel Henry <lionel@posit.co>",
+      "Repository": "CRAN"
+    },
+    "truncnorm": {
+      "Package": "truncnorm",
+      "Version": "1.0-9",
+      "Source": "Repository",
+      "Title": "Truncated Normal Distribution",
+      "Description": "Density, probability, quantile and random number generation functions for the truncated normal distribution.",
+      "Authors@R": "c(person(\"Olaf\", \"Mersmann\", role=c(\"aut\", \"cre\"),  email=\"olafm@p-value.net\"), person(\"Heike\", \"Trautmann\", role=c(\"aut\")), person(\"Detlef\", \"Steuer\", role=c(\"aut\")), person(\"Björn\", \"Bornkamp\", role=c(\"aut\")))",
+      "URL": "https://github.com/olafmersmann/truncnorm",
+      "BugReports": "https://github.com/olafmersmann/truncnorm/issues",
+      "Depends": [
+        "R (>= 3.4.0)"
+      ],
+      "Suggests": [
+        "testthat"
+      ],
+      "License": "GPL (>= 2)",
+      "Encoding": "UTF-8",
+      "NeedsCompilation": "yes",
+      "Author": "Olaf Mersmann [aut, cre], Heike Trautmann [aut], Detlef Steuer [aut], Björn Bornkamp [aut]",
+      "Maintainer": "Olaf Mersmann <olafm@p-value.net>",
       "Repository": "CRAN"
     },
     "utf8": {
@@ -3192,6 +3263,33 @@
       "Author": "Jim Hester [aut], Lionel Henry [aut, cre], Kirill Müller [aut], Kevin Ushey [aut], Hadley Wickham [aut], Winston Chang [aut], Jennifer Bryan [ctb], Richard Cotton [ctb], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Lionel Henry <lionel@posit.co>",
       "Repository": "CRAN"
+    },
+    "zCompositions": {
+      "Package": "zCompositions",
+      "Version": "1.6.2",
+      "Source": "Repository",
+      "Type": "Package",
+      "Title": "Treatment of Zeros, Left-Censored and Missing Values in Compositional Data Sets",
+      "Date": "2026-06-20",
+      "Authors@R": "c(person(given = \"Javier\", family = \"Palarea-Albaladejo\", role = c(\"cre\",\"aut\"), email = \"javier.palarea@udg.edu\", comment = c(ORCID = \"0000-0003-0162-669X\")), person(given = \"Josep Antoni\", family = \"Martin-Fernandez\", role = c(\"aut\"), email = \"josepantoni.martin@udg.edu\", comment = c(ORCID = \"0000-0003-2366-1592\")))",
+      "Maintainer": "Javier Palarea-Albaladejo <javier.palarea@udg.edu>",
+      "Depends": [
+        "R (>= 2.14.0)",
+        "methods",
+        "MASS",
+        "NADA",
+        "truncnorm"
+      ],
+      "ByteCompile": "yes",
+      "Description": "Principled methods for the imputation of zeros, left-censored and missing data in compositional data sets (Palarea-Albaladejo and Martin-Fernandez (2015) <doi:10.1016/j.chemolab.2015.02.019>).",
+      "License": "GPL (>= 2)",
+      "Repository": "CRAN",
+      "RoxygenNote": "7.3.3",
+      "Encoding": "UTF-8",
+      "URL": "https://github.com/Japal/zCompositions",
+      "BugReports": "https://github.com/Japal/zCompositions/issues",
+      "NeedsCompilation": "no",
+      "Author": "Javier Palarea-Albaladejo [cre, aut] (ORCID: <https://orcid.org/0000-0003-0162-669X>), Josep Antoni Martin-Fernandez [aut] (ORCID: <https://orcid.org/0000-0003-2366-1592>)"
     }
   }
 }

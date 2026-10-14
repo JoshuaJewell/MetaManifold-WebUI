@@ -15,11 +15,24 @@ end
 # Read the document; an unparseable file becomes a 400 naming it. DatabasesLibrary.load
 # raises on a bad file because an empty document would pass validation and the next
 # Save would overwrite the real config. Returns the document, or an HTTP.Response error.
+"""
+    _read_databases() -> Union{Dict,HTTP.Response}
+
+Read the canonical databases document, or an empty document if the file is absent.
+Loading errors become a 400 `databases_unreadable` response naming the file and
+reason; the file is not modified.
+"""
 function _read_databases()
     try
         DatabasesLibrary.load(_databases_path())
     catch e
-        @error "databases.yml is not readable" path=_databases_path() exception=(e, catch_backtrace())
+        # @warn, not @error: the 400 on the next line is this function's own verdict
+        # that an unreadable config/databases.yml is an operator-fixable input, not a
+        # server fault. Error severity with a backtrace reports a routine bad file as
+        # a crash. The reason is kept -- it is what names the YAML defect -- and only
+        # the backtrace goes, which pointed into YAML.jl's parser, never at the
+        # offending line.
+        @warn "databases.yml is not readable" path=_databases_path() reason=sprint(showerror, e)
         json_error(400, "databases_unreadable",
             "config/databases.yml cannot be read as a databases document and must be repaired by hand: $(sprint(showerror, e))")
     end

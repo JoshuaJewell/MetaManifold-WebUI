@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { AnnotationSource, ComparisonRunSpec } from '../api/types'
 import { AnalysisSourceContext } from './analysisSource'
-import { useSharedResultsTables } from './annotationShared'
+import { useSharedResultsTablesState } from './annotationShared'
 import { DiversityPanel } from './DiversityPanel'
 import { TaxaCompositionChart } from './TaxaCompositionChart'
 import { VennPanel } from './VennPanel'
@@ -80,7 +80,7 @@ export function AnalysisWorkspace({ study, runs: baseRuns, source, perRun }: {
   }, [aggregate, selectedRuns])
 
   //## Dataset: results tables shared by every selected run
-  const options = useSharedResultsTables(study, selectedRuns)
+  const { options, error: optionsError } = useSharedResultsTablesState(study, selectedRuns)
   const [analysisKey, setAnalysisKey] = useState<string | null>(null)
   useEffect(() => {
     setAnalysisKey(current => current && options.some(o => o.key === current) ? current : options[0]?.key ?? null)
@@ -138,6 +138,8 @@ export function AnalysisWorkspace({ study, runs: baseRuns, source, perRun }: {
                   onChange={e => setAnalysisKey(e.target.value)}>
                   {options.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
                 </select>
+              ) : optionsError ? (
+                <span className="error-msg" style={{ margin: 0 }}>could not list the results tables: {optionsError}</span>
               ) : (
                 <span style={{ color: 'var(--color-muted-fg)' }}>no results table shared by the selected runs</span>
               )}

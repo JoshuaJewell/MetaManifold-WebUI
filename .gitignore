@@ -336,6 +336,8 @@ LocalPreferences.toml
 # Development server log (dev/dev.sh)
 dev/server.log
 
+# Agda interface files (proofs/agda)
+proofs/agda/_build/
 # Proof siblings fetched by scripts/fetch-siblings.sh, and Agda interface files
 /_build/
 *.agdai

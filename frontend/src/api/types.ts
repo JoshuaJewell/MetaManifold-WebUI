@@ -243,15 +243,32 @@ export interface ComparisonRequest extends AnalysisRequest {
   aggregate?: boolean
 }
 
+export interface PermanovaTerm {
+  term: string
+  r2: number
+  f_statistic: number | null
+  /** Null when the term could not be tested; `untestable_reason` says why. */
+  p_value: number | null
+  /** Set when within-block permutation cannot change this term. */
+  untestable_reason?: string | null
+}
+
 export interface PermanovaResult {
   text: string
+  /** The first term (group, when it varies); r2, f_statistic and p_value are its own. */
+  term?: string
   r2: number | null
   f_statistic: number | null
   p_value: number | null
+  untestable_reason?: string | null
+  /** Permutations actually performed: fewer than 999 when the blocks admit fewer. */
+  permutations?: number
+  /** Smallest p-value attainable with that many permutations. */
+  min_p_value?: number
   /** True when permutations were restricted within individuals. */
   blocked?: boolean
   /** One row per model term, tested sequentially in formula order. */
-  terms?: { term: string; r2: number; f_statistic: number | null; p_value: number | null }[]
+  terms?: PermanovaTerm[]
   /** PERMDISP on the same distances: do the groups differ in spread? */
   dispersion?: PermdispResult | { error: string }
 }
@@ -381,16 +398,30 @@ export interface DifferentialRow {
   taxon: string
   status: DifferentialStatus
   note: string
-  /** Natural-log fold change, contrast over reference. */
+  /**
+   * nb_glm: natural-log fold change, contrast over reference. clr_welch: mean
+   * CLR of contrast minus mean CLR of reference, which is not a fold change.
+   */
   estimate: number | null
+  /** nb_glm only; null for clr_welch. */
   log2_fold_change: number | null
   standard_error: number | null
+  /** z (nb_glm) or Welch's t (clr_welch). */
   statistic: number | null
   pvalue: number | null
   /** Benjamini-Hochberg adjusted; null outside the tested family. */
   padj: number | null
+  /** nb_glm only. */
   dispersion_theta: number | null
   prevalence: number
+}
+
+export type DifferentialMethod = 'nb_glm' | 'clr_welch'
+
+/** Which row field holds the effect size, and what to call it. */
+export interface DifferentialEffect {
+  key: 'log2_fold_change' | 'estimate'
+  label: string
 }
 
 export interface DifferentialResult {
@@ -400,9 +431,26 @@ export interface DifferentialResult {
   table: string
   groups: { reference: string; contrast: string }
   n_samples: Record<string, number>
+  effect: DifferentialEffect
+  /** Empty for clr_welch, which takes no library-size offset. */
   size_factors: { sample: string; group: string; factor: number }[]
-  config: { offset: 'tss' | 'rle'; min_prevalence: number }
-  diagnostics: { n_taxa: number; n_tested: number; n_failed: number; n_boundary: number; n_filtered: number }
+  config: {
+    method: DifferentialMethod
+    min_prevalence: number
+    /** nb_glm only. */
+    offset?: 'tss' | 'rle'
+    /** clr_welch only. */
+    replacement_delta?: number
+  }
+  diagnostics: {
+    n_taxa: number; n_tested: number; n_failed: number; n_boundary: number; n_filtered: number
+    /** clr_welch only. */
+    zero_replacement?: {
+      method: string; delta: number; zeros_replaced: number; n_taxa_in_composition: number
+      n_taxa_unobserved: number; median_imputed_fraction: number; max_imputed_fraction: number
+      warnings: string[]
+    }
+  }
   rows: DifferentialRow[]
   figure: unknown
 }

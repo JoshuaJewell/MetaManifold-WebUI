@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { errorMessage } from '../api/errorMessage'
 import { useToast } from './Toast'
 import type { ComparisonRunSpec, DifferentialResult } from '../api/types'
-import { uniqueRuns } from '../api/types'
+import { sharedRanks } from './sharedRanks'
 import type { AnalysisOption } from './annotationShared'
 import { AnalysisChart } from './AnalysisChart'
 import { AddToReport } from './AddToReport'
 import { saveBlob } from '../utils/download'
-import { differentialCsv, formatStat } from './differentialTable'
+import { differentialCsv, effectValue, formatStat } from './differentialTable'
 
 const cell = { padding: '3px 10px', textAlign: 'right' } as const
 const head = { padding: '4px 10px', textAlign: 'right' } as const
@@ -21,10 +21,10 @@ function csvBlob(result: DifferentialResult): Blob {
 }
 
 /**
- * Differential abundance between exactly two runs or sub-groups: a
- * negative-binomial model per taxon at the chosen rank, with BH-adjusted
- * p-values, shown as a volcano plot and a table that can be downloaded or
- * added to the report. The first selected condition is the reference.
+ * Differential abundance between exactly two runs or sub-groups: a model per
+ * taxon at the chosen rank (negative-binomial GLM or Welch's t-test on CLR values, as
+ * configured), with BH-adjusted p-values, shown as a volcano plot and a table
+ * that can be downloaded or added to the report. The first selected condition is the reference.
  */
 export function DifferentialPanel({ study, runs, option, aggregate }: {
   study: string
@@ -36,42 +36,58 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
   const [ranks, setRanks] = useState<string[]>([])
   const [rank, setRank] = useState<string>('')
   const [ranksReady, setRanksReady] = useState(false)
+  const [ranksError, setRanksError] = useState<string | null>(null)
   const [result, setResult] = useState<DifferentialResult | null>(null)
   const [loading, setLoading] = useState(false)
+  // Only the response to the latest request, for the current inputs, is shown.
+  const request = useRef(0)
 
   // The ranks shared by every selected run.
   useEffect(() => {
+    setRanksError(null)
     if (!option || runs.length === 0) { setRanks([]); setRank(''); setRanksReady(false); return }
     let cancelled = false
     setRanksReady(false)
-    Promise.all(
-      uniqueRuns(runs).map(r =>
-        api.analysis.ranks(study, r.run, {
-          table: option.table,
-          group: r.group,
-          ...(r.source ? { source: r.source } : {}),
-        }).catch(() => [] as string[])
-      )
-    ).then(results => {
+    sharedRanks(runs, r => api.analysis.ranks(study, r.run, {
+      table: option.table,
+      group: r.group,
+      ...(r.source ? { source: r.source } : {}),
+    })).then(shared => {
       if (cancelled) return
-      const shared = results.reduce<string[]>((acc, cur) => acc.filter(r => cur.includes(r)), results[0] ?? [])
       setRanks(shared)
       setRanksReady(true)
       setRank(current => shared.includes(current) ? current : (shared[shared.length - 1] ?? ''))
+    }).catch(err => {
+      if (cancelled) return
+      setRanks([])
+      setRank('')
+      setRanksError(errorMessage(err))
     })
     return () => { cancelled = true }
   }, [study, runs, option])
 
+  // A result answers the inputs it was computed from; new inputs discard it,
+  // along with any request still in flight for the old ones.
+  useEffect(() => {
+    request.current++
+    setResult(null)
+    setLoading(false)
+  }, [study, runs, option?.table, rank, aggregate])
+
+  /** Fit the model for the current inputs and show it, unless the inputs changed meanwhile. */
   const run = async () => {
     if (!option || !rank) return
+    const req = ++request.current
     setLoading(true)
     try {
-      setResult(await api.analysis.differential(study, { runs, table: option.table, rank, aggregate }))
+      const res = await api.analysis.differential(study, { runs, table: option.table, rank, aggregate })
+      if (req === request.current) setResult(res)
     } catch (err) {
+      if (req !== request.current) return
       setResult(null)
       toast.error(`Differential abundance failed: ${errorMessage(err)}`)
     } finally {
-      setLoading(false)
+      if (req === request.current) setLoading(false)
     }
   }
 
@@ -94,9 +110,12 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
         {ranksReady && ranks.length === 0 && (
           <span style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)' }}>No taxonomy rank shared by the selected runs.</span>
         )}
+        {ranksError && (
+          <span className="error-msg" style={{ margin: 0 }}>Could not read the taxonomy ranks: {ranksError}</span>
+        )}
         {runs.length === 2 && (
           <span style={{ fontSize: '.82rem', color: 'var(--color-muted-fg)' }}>
-            Reference: {runs[0].prefix ?? runs[0].run}; positive fold changes mean more abundant in {runs[1].prefix ?? runs[1].run}.
+            Reference: {runs[0].prefix ?? runs[0].run}; a positive effect means more abundant in {runs[1].prefix ?? runs[1].run}.
           </span>
         )}
       </div>
@@ -109,6 +128,12 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
             {result.diagnostics.n_boundary > 0 && `, ${result.diagnostics.n_boundary} at a dispersion boundary`}
             {result.diagnostics.n_filtered > 0 && `, ${result.diagnostics.n_filtered} below the prevalence threshold`}
             . Samples: {Object.entries(result.n_samples).map(([g, n]) => `${g} ${n}`).join(', ')}.
+            {result.diagnostics.zero_replacement && (() => {
+              const z = result.diagnostics.zero_replacement
+              return ` ${z.zeros_replaced} zeros replaced by ${z.method} over ${z.n_taxa_in_composition} taxa; ` +
+                `replaced values hold ${(100 * z.median_imputed_fraction).toPrecision(2)}% of the median sample ` +
+                `and at most ${(100 * z.max_imputed_fraction).toPrecision(2)}% of any, and are not measurements.`
+            })()}
           </p>
 
           <AnalysisChart study={study} figure={result.figure} />
@@ -126,8 +151,8 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
               <thead>
                 <tr style={{ borderBottom: '2px solid var(--color-border)' }}>
                   <th style={{ ...head, textAlign: 'left' }}>{result.rank}</th>
-                  <th style={head}>log2 FC</th>
-                  <th style={head}>Estimate (ln)</th>
+                  <th style={head}>{result.effect.label}</th>
+                  {result.config.method === 'nb_glm' && <th style={head}>Estimate (ln)</th>}
                   <th style={head}>SE</th>
                   <th style={head}>p</th>
                   <th style={head}>padj (BH)</th>
@@ -138,8 +163,8 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
                 {result.rows.map(r => (
                   <tr key={r.taxon} style={{ borderBottom: '1px solid var(--color-border)' }}>
                     <td style={{ ...cell, textAlign: 'left' }}>{r.taxon}</td>
-                    <td style={cell}>{formatStat(r.log2_fold_change)}</td>
-                    <td style={cell}>{formatStat(r.estimate)}</td>
+                    <td style={cell}>{formatStat(effectValue(result, r))}</td>
+                    {result.config.method === 'nb_glm' && <td style={cell}>{formatStat(r.estimate)}</td>}
                     <td style={cell}>{formatStat(r.standard_error)}</td>
                     <td style={cell}>{formatStat(r.pvalue)}</td>
                     <td style={cell}>{formatStat(r.padj)}</td>

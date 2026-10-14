@@ -347,13 +347,27 @@ analysis:
   # comparing two conditions on the raw read counts, with Benjamini-Hochberg
   # adjusted p-values.
   differential:
+    # The model fitted to each taxon. nb_glm: a negative-binomial GLM on the read
+    # counts with a library-size offset; the effect is a log2 fold change. clr_welch:
+    # Welch's t-test on centred log-ratios over the taxa passing min_prevalence,
+    # after zCompositions::cmultRepl replaces their zeros; the effect is a
+    # difference in CLR units, not a fold change.
+    method: nb_glm
     # How library size enters each model, as a log offset: tss (total reads per
     # sample) or rle (median-of-ratios over the taxa present in every sample).
     # rle is refused when no taxon is present in every sample.
+    # Used by nb_glm only; clr_welch ignores it, since log-ratios carry no library size.
     offset: tss
     # Fraction of samples, 0 to 1, in which a taxon must have reads to be
-    # tested. Taxa below it are listed as filtered, without a p-value.
+    # tested. Taxa below it are listed as filtered, without a p-value. For
+    # clr_welch it is applied before zero replacement, so on a sparse table it also
+    # keeps imputed values for rare taxa out of every sample; clr_welch refuses a
+    # taxon seen in fewer than 2 samples.
     min_prevalence: 0.0
+    # clr_welch only: cmultRepl's frac, between 0 and 1. An imputed proportion above
+    # its taxon's smallest observed proportion is lowered to this fraction of it.
+    # A replaced zero is not a measurement.
+    replacement_delta: 0.65
 
 ## Occupancy probe (MMW-01)
 # Measures each attested stage's memory: Julia's allocation total, and the

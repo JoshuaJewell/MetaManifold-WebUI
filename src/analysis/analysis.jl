@@ -16,6 +16,7 @@ export sample_columns, filtered_counts, filtered_df, taxonomy_levels, taxon_colu
        natural_less, natural_sort, short_sample_labels, pinned_segment_order,
        alpha_boxplot, nmds_chart,
        run_nmds, run_permanova, r_available,
+       AlphaSignificance, was_computed,
        venn_taxa_present
 
 ## DuckDB query helpers for analysis
@@ -905,20 +906,96 @@ function _has_sample_pairs(labels::Vector{String}, sample_ids::Vector{String})
     !isempty(reduce(intersect, sets))
 end
 
-_no_significance() = (nothing, DataFrame(group1=String[], group2=String[], p=Float64[]))
+## Why a significance result carries a status rather than only a p-value
+#
+# "The test did not run" and "the test ran and found nothing" are different
+# scientific claims, and the shape this once returned - `(nothing, empty
+# DataFrame)` - could not tell them apart. Four distinct conditions collapsed onto
+# that single value: R/vegan being absent, there being no common sample IDs to
+# pair, the statistic itself erroring to `NA_real_`, and a genuine result in which
+# no pair reached significance. Only the last is a finding. Rendering any of the
+# other three the way a null result is rendered publishes a negative result that
+# was never computed. (A busy R runtime is not among them: `RBusyError`
+# propagates to the server, which reports the chart as unavailable.)
+#
+# `status` is therefore the primary field and the p-value is subordinate to it:
+# `:computed` is the only status under which these numbers may be read as
+# evidence. `reason` carries the wording shown to whoever is looking at the chart.
+"""
+    AlphaSignificance
 
-# Waits for the R runtime like the other R analyses. While a pipeline run holds
-# it, RBusyError reaches the server, which reports the chart as unavailable
-# until the run completes.
+Outcome of an alpha-diversity significance test: a `status` saying whether the
+test ran, the omnibus p-value and pairwise table when it did, and a `reason`
+shown to the reader when it did not.
+"""
+struct AlphaSignificance
+    status   :: Symbol
+    omnibus  :: Union{Float64,Nothing}
+    pairwise :: DataFrame
+    reason   :: String
+end
+
+"""Zero-row pairwise table with the columns `group1`, `group2`, `p`."""
+_empty_pairwise() = DataFrame(group1=String[], group2=String[], p=Float64[])
+
+"""Wrap a test that actually ran: the only status whose numbers are evidence."""
+_computed(omnibus::Union{Float64,Nothing}, pairwise::DataFrame) =
+    AlphaSignificance(:computed, omnibus, pairwise, "")
+
+"""Record that no test result exists, with the `status` and reader-facing `reason`."""
+_not_computed(status::Symbol, reason::AbstractString;
+              pairwise::DataFrame=_empty_pairwise()) =
+    AlphaSignificance(status, nothing, pairwise, String(reason))
+
+"""
+    was_computed(r::AlphaSignificance) -> Bool
+
+Whether `r` has status `:computed`. False means no omnibus result is available, so
+neither `omnibus` nor `pairwise` may be presented as a finding.
+"""
+was_computed(r::AlphaSignificance) = r.status === :computed
+
+"""
+Run the omnibus (and optionally pairwise) alpha-diversity test, returning an
+`AlphaSignificance` whose status distinguishes a computed omnibus result from
+an unavailable or failed test.
+
+`values`, group `labels` and `sample_ids` describe the same samples. Unpaired
+data use Kruskal-Wallis; `paired_samples` uses common sample IDs across all
+groups, averaging repeated IDs within a group, with paired Wilcoxon for two
+groups or Friedman for more. `pairwise` requests Wilcoxon comparisons with
+Benjamini-Hochberg adjusted p-values.
+
+Unavailable R/vegan, no common IDs for pairing, or an omnibus R error converted
+to a missing p-value return statuses `:r_unavailable`, `:no_paired_samples` or
+`:test_failed`, respectively. A failed omnibus result retains any pairwise rows.
+
+Waits for the R runtime like the other R analyses. While a pipeline run holds
+it, `RBusyError` reaches the server, which reports the chart as unavailable
+until the run completes.
+"""
 function _alpha_significance(values::Vector{Float64},
                              labels::Vector{String},
                              sample_ids::Vector{String};
                              pairwise::Bool=false,
                              paired_samples::Bool=false)
-    _ensure_r() || return _no_significance()
+    _ensure_r() || return _not_computed(:r_unavailable,
+        "R/vegan is not available, so no significance test was performed")
     _alpha_significance_r(values, labels, sample_ids; pairwise, paired_samples)
 end
 
+"""
+    _significance_caption(r, test_label) -> String
+
+The omnibus caption drawn on a panel. When the test did not run this says so in
+words rather than printing "n/a" beside a test name, which reads as a result.
+"""
+function _significance_caption(r::AlphaSignificance, test_label::AbstractString)
+    was_computed(r) || return "$test_label not run<br>$(r.reason)"
+    "$test_label $(_significance_stars(r.omnibus))<br>$(_format_p_value(r.omnibus))"
+end
+
+"""R side of `_alpha_significance`, run under the R lock once vegan is loaded."""
 function _alpha_significance_r(values::Vector{Float64},
                                labels::Vector{String},
                                sample_ids::Vector{String};
@@ -932,7 +1009,8 @@ function _alpha_significance_r(values::Vector{Float64},
                 [values[i] for i in eachindex(labels) if labels[i] == label],
             ) for label in groups_u)
             common_ids = reduce(intersect, [Set(keys(m)) for m in Base.values(paired_maps)])
-            isempty(common_ids) && return nothing, DataFrame(group1=String[], group2=String[], p=Float64[])
+            isempty(common_ids) && return _not_computed(:no_paired_samples,
+                "the groups share no sample IDs, so no paired test could be performed")
             common = sort(collect(common_ids))
 
             RCall.globalEnv[:paired_groups] = groups_u
@@ -1004,18 +1082,45 @@ function _alpha_significance_r(values::Vector{Float64},
             pairwise_df = DataFrame(RCall.rcopy(RCall.reval("pairwise_df")))
             RCall.reval("rm(values, groups, do_pairwise, groups_f, overall_p, pairwise_df); gc()")
         end
-        overall_p = ismissing(p_value) ? nothing : Float64(p_value)
-        overall_p, pairwise_df
+        # R returns `NA_real_` from its own `tryCatch` when the statistic cannot be
+        # computed at all (a degenerate group, say). That is a failed test, not a
+        # non-significant one, so it keeps whatever pairwise rows did come back but
+        # never claims an omnibus result.
+        if ismissing(p_value)
+            return _not_computed(:test_failed,
+                "the omnibus statistic could not be computed for these groups";
+                pairwise=pairwise_df)
+        end
+        _computed(Float64(p_value), pairwise_df)
     end
 end
 
+"""
+Draw significance brackets for each pairwise result on one panel, or a single
+"not run" notice when `significance` holds no computed result.
+"""
 function _add_pairwise_annotations!(layout::Dict{String,Any},
                                     xaxis_key::String,
                                     yaxis_ref::String,
                                     yaxis_layout_key::String,
                                     group_labels::Vector{String},
                                     values_by_label::Dict{String, Vector{Float64}},
-                                    pairwise_df::DataFrame)
+                                    significance::AlphaSignificance)
+    # Drawing no brackets is how "no pair reached significance" looks, so a test
+    # that never ran must say so instead of borrowing that appearance.
+    if !was_computed(significance)
+        annotations = get!(layout, "annotations", Any[])
+        push!(annotations, Dict{String,Any}(
+            "xref" => "$xaxis_key domain", "yref" => "$yaxis_ref domain",
+            "x" => 0.5, "y" => 1.0,
+            "xanchor" => "center", "yanchor" => "bottom",
+            "text" => "Pairwise tests not run - $(significance.reason)",
+            "showarrow" => false,
+            "font" => Dict("size" => 10, "color" => "#b45309"),
+        ))
+        return
+    end
+    pairwise_df = significance.pairwise
     nrow(pairwise_df) == 0 && return
 
     all_vals = reduce(vcat, values(values_by_label); init=Float64[])
@@ -1069,6 +1174,22 @@ function _add_pairwise_annotations!(layout::Dict{String,Any},
     layout[yaxis_layout_key] = axis
 end
 
+"""
+    alpha_boxplot(groups; show_points=true, annotate_significance=false,
+                  pairwise_brackets=false, paired_samples=false,
+                  paired_lines=false, significance_test="kruskal_wallis") -> Dict
+
+Build a Plotly figure with richness, Shannon and Gini-Simpson boxplot panels.
+Each group is `(label, sample_ids, richness, shannon, simpson)`, with metric
+values aligned to its sample IDs. `paired_lines` joins matching IDs across
+groups and disables point jitter. `paired_samples` selects paired tests when
+an ID is shared by every group; otherwise tests are unpaired.
+
+With at least two group labels and `significance_test == "kruskal_wallis"`,
+tests run even when neither annotation option is enabled. The options display
+omnibus captions or pairwise brackets, including notices for unavailable or
+failed tests. `RBusyError` propagates when the R runtime stays busy.
+"""
 function alpha_boxplot(groups::AbstractVector{<:Tuple{String, Vector{String}, AbstractVector{<:Real}, Vector{Float64}, Vector{Float64}}};
                        show_points::Bool=true,
                        annotate_significance::Bool=false,
@@ -1087,7 +1208,7 @@ function alpha_boxplot(groups::AbstractVector{<:Tuple{String, Vector{String}, Ab
     ]
     traces = Any[]
     panel_annotations = Dict{Int, Vector{Dict{String,Any}}}()
-    panel_pairwise = Dict{Int, DataFrame}()
+    panel_pairwise = Dict{Int, AlphaSignificance}()
     for (pi, (yax, xax, _, _, _, panel_idx)) in enumerate(panels)
         panel_labels = String[]
         panel_values = Float64[]
@@ -1139,9 +1260,9 @@ function alpha_boxplot(groups::AbstractVector{<:Tuple{String, Vector{String}, Ab
         if length(unique(panel_labels)) >= 2 && significance_test == "kruskal_wallis"
             need_pairwise = pairwise_brackets
             paired = paired_samples && _has_sample_pairs(panel_labels, panel_sample_ids)
-            p_value, pairwise_df = _alpha_significance(panel_values, panel_labels, panel_sample_ids;
-                                                       pairwise=need_pairwise,
-                                                       paired_samples=paired)
+            significance = _alpha_significance(panel_values, panel_labels, panel_sample_ids;
+                                               pairwise=need_pairwise,
+                                               paired_samples=paired)
             if annotate_significance
             anns = get!(panel_annotations, panel_idx, Dict{String,Any}[])
             # Anchor to this panel's axis domain so the label remaps with its
@@ -1150,12 +1271,13 @@ function alpha_boxplot(groups::AbstractVector{<:Tuple{String, Vector{String}, Ab
                 "xref" => "$xax domain", "yref" => "$yax domain",
                 "x" => 0.98, "y" => 0.98,
                 "xanchor" => "right", "yanchor" => "top",
-                "text" => "$(paired ? (length(unique(panel_labels)) == 2 ? "Paired Wilcoxon" : "Friedman") : "KW") $(_significance_stars(p_value))<br>$(_format_p_value(p_value))",
+                "text" => _significance_caption(significance,
+                    paired ? (length(unique(panel_labels)) == 2 ? "Paired Wilcoxon" : "Friedman") : "KW"),
                 "showarrow" => false,
                 "align" => "right",
             ))
             end
-            pairwise_brackets && (panel_pairwise[panel_idx] = pairwise_df)
+            pairwise_brackets && (panel_pairwise[panel_idx] = significance)
         end
     end
     layout = Dict{String,Any}(
@@ -1329,14 +1451,46 @@ function run_nmds(mat::Matrix{Float64}; seed::Integer=123, transform::String="no
 end
 
 """
+    _varies_within_any_block(values, blocks) -> Bool
+
+Whether `values` takes at least two distinct values among the samples of some
+block in `blocks` (one label per sample).
+"""
+function _varies_within_any_block(values::AbstractVector, blocks::AbstractVector)
+    first_seen = Dict{eltype(blocks),eltype(values)}()
+    for (v, b) in zip(values, blocks)
+        isequal(get!(first_seen, b, v), v) || return true
+    end
+    false
+end
+
+"""
     run_permanova(mat, metadata; seed=123, transform="none", blocks=nothing) -> Union{NamedTuple, Nothing}
 
-PERMANOVA via vegan::adonis2 with 999 permutations.
+PERMANOVA via vegan::adonis2 with up to 999 permutations.
 `metadata` is a DataFrame with one row per sample and covariate columns.
+Columns named `sample` (case-insensitive) and constant columns are excluded.
+Each remaining covariate is tested as its own term (`by = "terms"`), sequentially in
+column order, so each row is conditioned on the terms before it. The top-level
+`term`, `r2`, `f_statistic` and `p_value` are those of the first term.
 `blocks`, one label per sample (e.g. the individual a sample came from),
-restricts permutations to within blocks. It is ignored when no label repeats,
-since singleton blocks admit no permutation at all.
+restricts permutations to within blocks. It is ignored when its length does
+not match the sample count or when no label repeats,
+since singleton blocks admit no permutation at all. A term that is constant
+within every block cannot be tested by within-block permutation (each sample
+never leaves its block, so the permutations never exchange that term's labels
+and the p-value does not test it), so its p-value is withheld and
+`untestable_reason` says why.
+`permutations` is the number of permutations actually performed, which is fewer
+than 999 when the blocks admit fewer, and `min_p_value` the smallest p-value
+that number can produce.
 `transform` is applied before `vegdist`; see [`run_nmds`](@ref).
+
+Returns `nothing` when R/vegan is unavailable or no covariates remain. An
+`adonis2` error becomes a named tuple containing `message`; on success,
+`dispersion` contains PERMDISP results for the combined covariate groups or
+an `error` message. `RBusyError`, transformation errors and R errors outside
+these caught tests propagate.
 """
 function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=123,
                        transform::String="none",
@@ -1348,6 +1502,10 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
     formula_rhs = join(covariates, " + ")
     mat = transform_counts(mat; method=transform)
     blocked = !isnothing(blocks) && length(blocks) == size(mat, 1) && !allunique(blocks)
+    # Within-block permutation never exchanges the labels of a term that is
+    # constant inside every block, so its p-value does not test that term.
+    untestable = blocked ? [c for c in covariates if !_varies_within_any_block(metadata[!, c], blocks)] :
+                           String[]
 
     with_r_lock(; timeout=R_WAIT_SECONDS[]) do
         meta_r = copy(metadata)
@@ -1357,6 +1515,7 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
         RCall.globalEnv[:seed] = Int(seed)
         RCall.globalEnv[:perm_blocks] = blocked ? String.(blocks) : String[]
         RCall.globalEnv[:disp_cols] = String.(covariates)
+        RCall.globalEnv[:perm_untestable] = String.(untestable)
         RCall.reval("""
             set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
             dist_mat <- vegdist(mat, method = "bray")
@@ -1368,12 +1527,25 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
                 999
             }
             perm_err <- NULL
+            perm_n <- NA_integer_
             perm_res <- tryCatch(
-                adonis2(form, data = meta_r, permutations = perm_ctrl, parallel = 1),
-                error = function(e) { perm_err <<- conditionMessage(e); NULL }
-            )
+                # vegan 2.7 defaults to by = NULL, one test of the whole model.
+                adonis2(form, data = meta_r, permutations = perm_ctrl, by = "terms", parallel = 1),
+                error = function(e) { perm_err <<- conditionMessage(e); NULL })
             if (!is.null(perm_res)) {
-                perm_text <- paste(capture.output(print(perm_res)), collapse = "\\n")
+                # permute enumerates every permutation instead of drawing 999 when
+                # the blocks admit fewer, which small blocks make likely; the
+                # control adonis2 used records how many it ran.
+                perm_n <- attr(perm_res, "control")[["nperm"]]
+                # Within-block permutation never exchanges such a term's labels
+                # between blocks, so its p-value does not test that term.
+                untestable_rows <- which(rownames(perm_res) %in% perm_untestable)
+                perm_res[untestable_rows, "Pr(>F)"] <- NA
+                perm_text <- paste(c(capture.output(print(perm_res)),
+                                     if (length(untestable_rows) > 0)
+                                         paste0("Pr(>F) withheld for ", paste(rownames(perm_res)[untestable_rows], collapse = ", "),
+                                                ": constant within every permutation block, so within-block permutation does not test it.")),
+                                   collapse = "\\n")
                 perm_r2 <- perm_res\$R2[1]
                 perm_f <- perm_res\$F[1]
                 perm_p <- perm_res[["Pr(>F)"]][1]
@@ -1411,6 +1583,7 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
         r2 = RCall.rcopy(RCall.reval("perm_r2"))
         f_stat = RCall.rcopy(RCall.reval("perm_f"))
         p_val = RCall.rcopy(RCall.reval("perm_p"))
+        n_perm = RCall.rcopy(RCall.reval("perm_n"))
         # adonis2 tests terms sequentially, so each row is conditioned on the terms above it.
         term_names = String.(vcat(RCall.rcopy(RCall.reval("perm_terms"))))
         term_r2 = vcat(RCall.rcopy(RCall.reval("perm_terms_r2")))
@@ -1425,20 +1598,32 @@ function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=
             (; groups = [(; group = groups[k], mean = vcat(d[:mean])[k], median = vcat(d[:median])[k]) for k in eachindex(groups)],
                f_statistic = d[:f], df = [Int(d[:df1]), Int(d[:df2])], p_value = d[:p], text = String(d[:text]))
         end
-        RCall.reval("rm(mat, meta_r, formula_rhs, seed, perm_blocks, disp_cols, perm_ctrl, dist_mat, form, perm_res, perm_err, perm_text, perm_r2, perm_f, perm_p, perm_terms, perm_terms_r2, perm_terms_f, perm_terms_p, disp, disp_err); gc()")
+        RCall.reval("rm(mat, meta_r, formula_rhs, seed, perm_blocks, disp_cols, perm_untestable, perm_ctrl, dist_mat, form, perm_res, perm_err, perm_n, perm_text, perm_r2, perm_f, perm_p, perm_terms, perm_terms_r2, perm_terms_f, perm_terms_p, disp, disp_err); if (exists(\"untestable_rows\")) rm(untestable_rows); gc()")
 
         ismissing(txt) && return nothing
         # When R's adonis2 threw, txt is the error message and r2/f/p are missing.
         # Return a named tuple with :message so the route can distinguish and surface it.
         ismissing(r2) && return (; message=string(txt))
+        reason(t) = t in untestable ?
+            "'$t' is constant within every permutation block, and permutations are restricted " *
+            "within blocks, so its labels are never exchanged and the p-value would not test it; " *
+            "a between-block term needs whole blocks permuted" :
+            nothing
+        withheld(t, p) = (t in untestable || ismissing(p)) ? nothing : p
+        terms = [(; term=term_names[k],
+                    r2=term_r2[k],
+                    f_statistic=ismissing(term_f[k]) ? nothing : term_f[k],
+                    p_value=withheld(term_names[k], term_p[k]),
+                    untestable_reason=reason(term_names[k])) for k in eachindex(term_names)]
         (; text=txt,
+           term=term_names[1],
            r2=r2,
            f_statistic=ismissing(f_stat) ? nothing : f_stat,
-           p_value=ismissing(p_val) ? nothing : p_val,
-           terms=[(; term=term_names[k],
-                     r2=term_r2[k],
-                     f_statistic=ismissing(term_f[k]) ? nothing : term_f[k],
-                     p_value=ismissing(term_p[k]) ? nothing : term_p[k]) for k in eachindex(term_names)],
+           p_value=withheld(term_names[1], p_val),
+           untestable_reason=reason(term_names[1]),
+           terms,
+           permutations=Int(n_perm),
+           min_p_value=1 / (Int(n_perm) + 1),
            blocked,
            dispersion)
     end
