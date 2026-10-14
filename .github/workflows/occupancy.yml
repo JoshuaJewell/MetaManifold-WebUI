@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+#
+# The occupancy reading of the vsearch stage (docs/occupancy-2026-10.adoc):
+# Session IR's counted bytes against the typed peak computed in Agda from the
+# pinned proof siblings. Kept apart from ci.yml because it is about the docs and
+# their pinned siblings, not the application; it runs only when they change.
+name: Occupancy reading
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/occupancy/**
+      - docs/occupancy-2026-10.adoc
+      - scripts/check-occupancy.sh
+      - scripts/fetch-siblings.sh
+      - .github/workflows/occupancy.yml
+  # Any base branch, so a PR stacked on another one is checked too.
+  pull_request:
+    paths:
+      - docs/occupancy/**
+      - docs/occupancy-2026-10.adoc
+      - scripts/check-occupancy.sh
+      - scripts/fetch-siblings.sh
+      - .github/workflows/occupancy.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  typed-peak:
+    name: Occupancy typed peak
+    runs-on: ubuntu-24.04
+    # The Agda 2.6.4.3 Debian trixie packages, in a digest-pinned image, as the
+    # upstream proof job uses. The siblings need no standard library.
+    container: debian:trixie-20250929-slim@sha256:1caf1c703c8f7e15dcf2e7769b35000c764e6f50e4d7401c355fb0248f3ddfdb
+    timeout-minutes: 20
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      # git before checkout, so the checkout is a repository and the siblings can be fetched.
+      - name: Install git and Agda
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends ca-certificates git agda-bin=2.6.4.3-1+b2
+          agda --version | grep -qx 'Agda version 2.6.4.3'
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false   # the siblings are public; nothing here pushes
+
+      # The Session IR stepper is Julia (standard library only).
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9  # v2.7.0
+        with:
+          version: "1.12.5"
+
+      - name: Counted bytes against typed peak
+        run: bash scripts/check-occupancy.sh
