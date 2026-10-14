@@ -17,8 +17,33 @@ concurrency:
 
 jobs:
   test:
-    name: Julia ${{ matrix.julia-version }} / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    # The name is a fixed string, it carries no version, and the job has NO matrix.
+    # Both are required, and the first without the second is a trap that has already
+    # been sprung here once.
+    #
+    # A branch ruleset matches a required status check by the DISPLAY NAME GitHub posts
+    # for the job. A renamed check does not fail -- it is simply absent, and an absent
+    # required check can never be satisfied, so every pull request deadlocks until an
+    # admin bypasses the rule, triggered by nothing more alarming than editing a version
+    # number.
+    #
+    # MEASURED on hyperpolymath/MetaManifold-WebUI#39 (2026-09-21): this job, named exactly `Julia tests` but still
+    # carrying a 1x1 `strategy.matrix`, posted `Julia tests (1.12.5, ubuntu-24.04)`.
+    # GitHub appends the matrix combination whenever the name does not already reference
+    # the matrix, so a 1x1 matrix is still a matrix and the pins were still embedded in
+    # the check name. The matrix was therefore removed rather than merely renamed around:
+    # it selected exactly one combination and bought nothing.
+    #
+    # The two values it held are literals below, each keeping its own reasoning.
+    # `test/unit/test_install_pins.jl` asserts, for EVERY job in this file, that the name
+    # interpolates nothing AND that the job has no matrix -- so this cannot regress
+    # silently. If a matrix is ever genuinely wanted here, the required context must move
+    # to a matrix-free aggregator job first.
+    name: Julia tests
+    # Explicit, not ubuntu-latest: the R pin below names an apt package revision built
+    # for 24.04, and a runner that silently rolled to the next LTS would take that pin
+    # with it. `runs-on` cannot read `env`, so this is a literal.
+    runs-on: ubuntu-24.04
     # The repository's root .Rprofile sources renv/activate.R, so R started from
     # the checkout auto-activates renv and rewrites the library paths. renv is a
     # local-development convenience; CI installs into the system library and
@@ -28,19 +53,6 @@ jobs:
     # the environment, so those commands pass --no-init-file instead.
     env:
       RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
-    strategy:
-      fail-fast: false
-      matrix:
-        # Pinned rather than tracking latest stable, because a pinned Manifest.toml
-        # resolved by an unpinned Julia is not a reproducible build. This must equal
-        # julia_version in Manifest.toml; it cannot be read from the pin file, since
-        # nothing can be read before Julia exists. test/unit/test_install_pins.jl
-        # fails if the three ever disagree.
-        julia-version: ["1.12.5"]
-        # Explicit, not ubuntu-latest: the R pin below names an apt package revision
-        # built for 24.04, and a runner that silently rolled to the next LTS would
-        # take that pin with it.
-        os: [ubuntu-24.04]
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -48,7 +60,12 @@ jobs:
       - name: Set up Julia
         uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9  # v2.7.0
         with:
-          version: ${{ matrix.julia-version }}
+          # Pinned rather than tracking latest stable, because a pinned Manifest.toml
+          # resolved by an unpinned Julia is not a reproducible build. This must equal
+          # julia_version in Manifest.toml; it cannot be read from the pin file, since
+          # nothing can be read before Julia exists. test/unit/test_install_pins.jl
+          # fails if the three ever disagree.
+          version: "1.12.5"
 
       - name: Cache Julia packages
         uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9  # v2.1.0
@@ -139,7 +156,7 @@ jobs:
           sudo chmod 777 "$RENV_PATHS_CACHE"
           sudo env R_CLI_DYNAMIC=false TERM=dumb Rscript --no-init-file -e 'install.packages(c("renv", "BiocManager"), repos="https://cloud.r-project.org", lib=.Library)'
           sudo env RENV_PATHS_CACHE="$RENV_PATHS_CACHE" R_CLI_DYNAMIC=false TERM=dumb Rscript --no-init-file -e 'renv::restore(project=".", library=.Library, prompt=FALSE)'
-          Rscript --no-init-file -e 'for (pkg in c("dada2","Biostrings","ShortRead","vegan","dplyr","MASS")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
+          Rscript --no-init-file -e 'for (pkg in c("dada2","Biostrings","ShortRead","vegan","dplyr","MASS","zCompositions")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
 
       # Saved on failure too, since the packages built before a failure are the ones
       # the next attempt should reuse. Root writes the cache, so it is made readable first.
@@ -230,7 +247,7 @@ jobs:
           julia --project=. -e '
             using RCall
             R"cat(.libPaths(), sep=\"\n\")"
-            for pkg in ["dada2", "dplyr", "vegan", "tibble", "MASS"]
+            for pkg in ["dada2", "dplyr", "vegan", "tibble", "MASS", "zCompositions"]
               R"if (!require($pkg, character.only=TRUE, quietly=TRUE)) stop($pkg, \" not found\")"
             end
           '
@@ -282,3 +299,45 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: JoshuaJewell/MetaManifold-WebUI
           fail_ci_if_error: false
+
+  # Machine-checked proofs of the Benjamini-Hochberg adjustment and the TSS/RLE
+  # scaling algebra (proofs/agda, proofs/agda/README.md).
+  # Agda publishes no 2.6.4.3 binary, and agda-stdlib 2.1 requires Agda 2.6.4.x,
+  # so the pair comes from Debian trixie, which packages exactly that pair with
+  # pre-built library interfaces. The image is pinned by digest and the two
+  # packages by revision, so a rebuild in the archive fails loudly here instead
+  # of silently changing the checker. These pins live here rather than in
+  # config/defaults/tool_versions.yml because no other job and no installer
+  # reads them.
+  agda:
+    name: Agda proofs
+    runs-on: ubuntu-24.04
+    container: debian:trixie-20250929-slim@sha256:1caf1c703c8f7e15dcf2e7769b35000c764e6f50e4d7401c355fb0248f3ddfdb
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install Agda and the standard library
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends agda-bin=2.6.4.3-1+b2 agda-stdlib=2.1-4
+          agda --version | grep -qx 'Agda version 2.6.4.3'
+          grep -qx 'name: standard-library-2.1' /usr/share/agda-stdlib/standard-library.agda-lib
+
+      # Runs before the type-check: --safe already refuses postulates, but the
+      # audit also refuses holes, check-disabling pragmas and flags, and any
+      # module that MetaManifold/All.agda does not import (an unimported module
+      # is never type-checked at all).
+      - name: Axiom audit
+        run: bash proofs/tests/axiom-audit.sh
+
+      - name: Type-check
+        env:
+          AGDA_DIR: /tmp/agda-dir
+        run: |
+          mkdir -p "$AGDA_DIR"
+          echo /usr/share/agda-stdlib/standard-library.agda-lib > "$AGDA_DIR/libraries"
+          cd proofs/agda
+          agda MetaManifold/All.agda

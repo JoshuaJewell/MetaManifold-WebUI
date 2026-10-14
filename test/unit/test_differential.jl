@@ -2,8 +2,9 @@
 # SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 #
 # Differential abundance: Benjamini-Hochberg, TSS/RLE size factors, input
-# validation, and the negative-binomial fit checked against a direct
-# MASS::glm.nb call. Tests needing R or MASS skip loudly when either is absent.
+# validation, the negative-binomial fit checked against a direct MASS::glm.nb
+# call, and clr_welch checked against direct zCompositions::cmultRepl and Welch
+# t.test calls. Tests needing R, MASS or zCompositions skip loudly when absent.
 
 using MetaManifold
 using MetaManifold.Differential
@@ -28,6 +29,8 @@ end
 const HAVE_R = _r_has("stats")
 const HAVE_MASS = HAVE_R && _r_has("MASS")
 HAVE_MASS || @info "R or MASS unavailable - the negative-binomial fit tests are SKIPPED"
+const HAVE_ZCOMP = HAVE_R && _r_has("zCompositions")
+HAVE_ZCOMP || @info "R or zCompositions unavailable - the clr_welch tests are SKIPPED"
 
 # Rows per run: Up is split over two ASVs so the route must pool them by genus.
 const _DA_ROWS = Dict(
@@ -163,6 +166,15 @@ end
         @test_throws ArgumentError DifferentialConfig("css")
         @test_throws ArgumentError DifferentialConfig("tss", 1.5)
         @test_throws ArgumentError DifferentialConfig("tss", NaN)
+        @test DifferentialConfig().method == "nb_glm"
+        @test DifferentialConfig().replacement_delta == 0.65
+        @test DifferentialConfig(; method="clr_welch", replacement_delta=0.3).replacement_delta == 0.3
+        @test_throws ArgumentError DifferentialConfig(; method="ancombc")
+        # The pre-review name, never released, is not accepted.
+        @test_throws ArgumentError DifferentialConfig(; method="clr_lm")
+        for d in (0, 1, -0.5, NaN)
+            @test_throws ArgumentError DifferentialConfig(; method="clr_welch", replacement_delta=d)
+        end
     end
 
     @testset "Input validation" begin
@@ -268,6 +280,41 @@ end
         end
     end
 
+    @testset "A taxon absent from one group is refused, not reported as p≈1" begin
+        if !HAVE_MASS
+            @test_skip false
+        else
+            # 'only_b' has no reads in any A sample: complete separation.
+            only_b = vcat(fill(0, 12), [50, 80, 120, 30, 60, 90, 40, 70, 110, 55, 65, 85])
+            counts = hcat(effect, only_b)
+            taxa = vcat(effect_taxa, ["only_b"])
+            res = differential_abundance(counts, effect_samples, taxa, effect_groups;
+                                         reference="A", contrast="B")
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            s = byt["only_b"]
+            @test s["status"] == "failed"
+            @test occursin("'A'", s["note"]) && occursin("complete separation", s["note"])
+            @test all(isnothing, (s["estimate"], s["standard_error"], s["pvalue"], s["padj"]))
+            # The BH family is the three other taxa only.
+            @test res["diagnostics"]["n_tested"] == 3
+            @test [byt[t]["padj"] for t in effect_taxa] ≈
+                  bh_adjust([byt[t]["pvalue"] for t in effect_taxa])
+
+            # Control: the direct fit converges and reports p near 1, which is
+            # the value the check above keeps out of the results.
+            off = log.(tss_factors(counts, effect_samples))
+            g = effect_groups
+            direct = rcopy(R"""
+                local({
+                  fit <- MASS::glm.nb($only_b ~ factor($g, levels = c("A", "B")) + offset($off),
+                                      control = glm.control(maxit = 100))
+                  c(as.numeric(fit$converged), summary(fit)$coefficients[2, 4])
+                })
+            """)
+            @test direct[1] == 1 && direct[2] > 0.9
+        end
+    end
+
     @testset "No fittable taxon is an explicit error" begin
         if !HAVE_MASS
             @test_skip false
@@ -304,6 +351,255 @@ end
         @test isnothing(SV._config_value_error("analysis.differential.offset", "rle"))
         @test !isnothing(SV._config_value_error("analysis.differential.offset", "css"))
         @test isnothing(SV._config_value_error("analysis.differential.min_prevalence", 0.1))
+        @test isnothing(SV._config_value_error("analysis.differential.method", "clr_welch"))
+        @test !isnothing(SV._config_value_error("analysis.differential.method", "ancombc"))
+    end
+
+    @testset "CLR transform" begin
+        @test clr_transform([1.0 exp(1) exp(2)]) ≈ [-1.0 0.0 1.0]
+        z = clr_transform([1.0 2 3 4; 5 1 1 9; 0.5 0.25 8 2])
+        @test all(abs.(sum(z; dims=2)) .< 1e-12)
+        # Scale invariance: a sample's CLR does not depend on its library size.
+        @test clr_transform([10.0 20 30 40]) ≈ clr_transform([1.0 2 3 4])
+        @test_throws ArgumentError clr_transform([0.0 1 2])
+        @test_throws ArgumentError clr_transform([NaN 1 2])
+    end
+
+    clr_config = DifferentialConfig(; method="clr_welch")
+
+    @testset "CLR + Welch: estimate is the difference of group mean CLRs" begin
+        if !HAVE_ZCOMP
+            @test_skip false
+        else
+            res = differential_abundance(effect, effect_samples, effect_taxa, effect_groups;
+                                         reference="A", contrast="B", config=clr_config)
+            @test res["effect"] == Dict("key" => "estimate", "label" => "CLR difference")
+            @test isempty(res["size_factors"])
+            @test res["config"]["method"] == "clr_welch" && !haskey(res["config"], "offset")
+            @test res["diagnostics"]["zero_replacement"]["zeros_replaced"] == 0
+            @test occursin("Welch", res["method"]) && occursin("cmultRepl", res["method"])
+            # Known answer, independent of R: the estimate is mean(B) - mean(A)
+            # of each taxon's CLR.
+            z = clr_transform(Float64.(effect))
+            a = effect_groups .== "A"; b = .!a
+            expected = vec(sum(z[b, :]; dims=1)) ./ count(b) .- vec(sum(z[a, :]; dims=1)) ./ count(a)
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            for (j, t) in enumerate(effect_taxa)
+                @test byt[t]["status"] == "ok"
+                @test byt[t]["estimate"] ≈ expected[j] rtol=1e-8
+                @test isnothing(byt[t]["log2_fold_change"]) && isnothing(byt[t]["dispersion_theta"])
+                @test 0 <= byt[t]["pvalue"] <= 1 && !isnothing(byt[t]["padj"])
+            end
+            @test byt["t_up"]["estimate"] > 0 && byt["t_down"]["estimate"] < 0
+            @test byt["t_up"]["padj"] < 0.05 && byt["t_down"]["padj"] < 0.05
+
+            @testset "matches a direct Welch t.test, with unequal groups" begin
+                # 12 A against 3 B: the case where pooled and Welch variances differ.
+                keep = 1:15
+                g = effect_groups[keep]
+                un = differential_abundance(effect[keep, :], effect_samples[keep], effect_taxa, g;
+                                            reference="A", contrast="B", config=clr_config)
+                ub = Dict(r["taxon"] => r for r in un["rows"])
+                zk = clr_transform(Float64.(effect[keep, :]))
+                for (j, t) in enumerate(effect_taxa)
+                    y = zk[:, j]
+                    direct = rcopy(R"""
+                        local({
+                          tt <- stats::t.test($y[$g == "B"], $y[$g == "A"], var.equal = FALSE)
+                          c(tt$estimate[[1]] - tt$estimate[[2]], tt$stderr, tt$statistic[[1]], tt$p.value)
+                        })
+                    """)
+                    @test ub[t]["estimate"] ≈ direct[1] rtol=1e-10
+                    @test ub[t]["standard_error"] ≈ direct[2] rtol=1e-10
+                    @test ub[t]["statistic"] ≈ direct[3] rtol=1e-10
+                    @test ub[t]["pvalue"] ≈ direct[4] rtol=1e-8
+                end
+                # Control: the pooled-variance test gives a different p-value
+                # here, so the parity above can tell the two apart.
+                y = zk[:, 1]
+                pooled = rcopy(R"stats::t.test($y[$g == 'B'], $y[$g == 'A'], var.equal = TRUE)$p.value")
+                @test !isapprox(ub["t_up"]["pvalue"], pooled; rtol=1e-3)
+            end
+        end
+        # Refused before R is reached: Welch needs a variance in each group.
+        @test_throws ArgumentError differential_abundance(effect[[1, 2, 13], :], effect_samples[[1, 2, 13]],
+            effect_taxa, ["A", "A", "B"]; reference="A", contrast="B", config=clr_config)
+    end
+
+    @testset "Zero replacement matches a direct zCompositions::cmultRepl call" begin
+        if !HAVE_ZCOMP
+            @test_skip false
+        else
+            x = [0 3 0 12 5; 7 0 1 0 9; 2 2 2 2 2; 0 6 4 30 1; 5 1 0 3 0]
+            out = replace_zeros(x; frac=0.65)
+            direct = rcopy(R"""
+                as.matrix(zCompositions::cmultRepl($(Float64.(x)), label = 0, method = "GBM",
+                          output = "prop", frac = 0.65, z.warning = 1, z.delete = FALSE,
+                          suppress.print = TRUE))
+            """)
+            @test out.proportions ≈ direct rtol=1e-12
+            @test out.zeros_replaced == count(==(0), x)
+            @test all(>(0), out.proportions)
+            @test vec(sum(out.proportions; dims=2)) ≈ ones(5)
+            # The ratios among a sample's observed taxa are kept.
+            @test out.proportions[1, 2] / out.proportions[1, 4] ≈ 3 / 12
+            # A sample without zeros is its closure; it has no imputed mass.
+            @test out.proportions[3, :] ≈ fill(0.2, 5)
+            @test out.imputed_mass[3] == 0.0
+            @test out.imputed_mass[1] ≈ out.proportions[1, 1] + out.proportions[1, 3]
+            # No zero at all: cmultRepl is not called, the closure is returned.
+            @test replace_zeros([1 3; 2 2]).proportions ≈ [0.25 0.75; 0.5 0.5]
+
+            msg = try replace_zeros([0 3 4; 1 0 5; 0 2 6]; taxa=["lone", "q", "r"]); "" catch e; e.msg end
+            @test occursin("'lone'", msg) && occursin("min_prevalence", msg)
+            msg = try replace_zeros([0 0; 3 4; 1 2]; samples=["empty", "b", "c"]); "" catch e; e.msg end
+            @test occursin("'empty'", msg)
+            @test_throws ArgumentError replace_zeros(reshape([1, 2, 3], 3, 1))
+        end
+    end
+
+    @testset "CLR: cmultRepl output is checked sample by sample" begin
+        # Pure Julia: no R is needed to check what cmultRepl hands back.
+        check = MetaManifold.Differential._check_compositions
+        mask = Bool[1 0 0; 0 0 0]
+        good = [0.1 0.3 0.6; 0.2 0.3 0.5]
+        @test check(good, mask, ["a", "b"]) === good
+        for (bad, why) in (([0.0 0.4 0.6; 0.2 0.3 0.5], "a replaced zero left at 0"),
+                           ([NaN 0.4 0.6; 0.2 0.3 0.5], "a non-finite value"),
+                           ([0.1 0.4 0.6; 0.2 0.3 0.5], "a row that does not sum to 1"))
+            msg = try check(bad, mask, ["first", "second"]); "" catch e; e.msg end
+            @test occursin("'first'", msg) && occursin("min_prevalence", msg)
+        end
+        # The failing sample is the one named, not always the first.
+        msg = try check([0.1 0.3 0.6; 0.2 0.3 0.6], mask, ["a", "b"]); "" catch e; e.msg end
+        @test occursin("'b'", msg) && occursin("0 replaced zeros", msg)
+        @test_throws ErrorException check(good[:, 1:2], mask, ["a", "b"])
+    end
+
+    @testset "CLR: min_prevalence is applied before zero replacement" begin
+        if !HAVE_ZCOMP
+            @test_skip false
+        else
+            # Six samples x five taxa: 'ghost' has no reads anywhere, 'rare' one
+            # read in one sample, 'r' is in four of six, 'p' and 'q' in all.
+            x = [10 20 2 0 0; 12 18 0 0 0; 11 19 3 3 0; 30 8 0 0 0; 28 9 4 0 0; 33 7 5 0 0]
+            s = ["s$i" for i in 1:6]
+            taxa = ["p", "q", "r", "rare", "ghost"]
+            g = ["A", "A", "A", "B", "B", "B"]
+            res = differential_abundance(x, s, taxa, g; reference="A", contrast="B",
+                                         config=DifferentialConfig("tss", 0.5; method="clr_welch"))
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            @test byt["ghost"]["status"] == "filtered"
+            @test occursin("not part of the composition", byt["ghost"]["note"])
+            @test byt["rare"]["status"] == "filtered"
+            @test occursin("min_prevalence", byt["rare"]["note"])
+            @test all(t -> byt[t]["status"] == "ok", ("p", "q", "r"))
+            zr = res["diagnostics"]["zero_replacement"]
+            @test zr["n_taxa_in_composition"] == 3 && zr["n_taxa_unobserved"] == 1
+            # Only r's two zeros are replaced; rare's five zeros are not.
+            @test zr["zeros_replaced"] == 2
+            @test 0 < zr["max_imputed_fraction"] < 1
+            @test zr["median_imputed_fraction"] == 0.0
+
+            # The fit saw the 3-taxon composition: 'rare' contributed nothing.
+            z = clr_transform(replace_zeros(x[:, 1:3]).proportions)
+            a = g .== "A"
+            @test byt["p"]["estimate"] ≈ sum(z[.!a, 1]) / 3 - sum(z[a, 1]) / 3 rtol=1e-8
+
+            # Without the threshold, 'rare' (one sample) reaches cmultRepl,
+            # whose prior is undefined for it; the refusal names the fix.
+            msg = try
+                differential_abundance(x, s, taxa, g; reference="A", contrast="B", config=clr_config)
+                ""
+            catch e
+                e.msg
+            end
+            @test occursin("'rare'", msg) && occursin("min_prevalence", msg)
+
+            @test_throws ArgumentError differential_abundance(x[:, [1, 5]], s, ["p", "ghost"], g;
+                reference="A", contrast="B", config=clr_config)
+        end
+    end
+
+    @testset "CLR: a sparse table with rare taxa runs once min_prevalence is set" begin
+        if !HAVE_ZCOMP
+            @test_skip false
+        else
+            # 24 samples (12 A, 12 B) x 211 taxa, about 90% zeros, built from a
+            # fixed formula: 6 common taxa in every sample ('c1' is four times
+            # as abundant in B), 4 moderate taxa in two thirds of the samples,
+            # one sparse taxon in 3 of 24 samples (87.5% zeros, which cmultRepl's
+            # default z.delete would drop), and 200 rare taxa in 1 or 2 samples.
+            n = 24
+            grp = vcat(fill("A", 12), fill("B", 12))
+            common = [100 + (37i + 11j) % 200 for i in 1:n, j in 1:6]
+            common[13:24, 1] .*= 4
+            moderate = [(i + j) % 3 == 0 ? 0 : 5 + (i * j) % 7 for i in 1:n, j in 1:4]
+            sparse = [i in (1, 9, 17) ? 4 : 0 for i in 1:n]
+            rare = zeros(Int, n, 200)
+            for k in 1:200
+                rare[(7k) % n + 1, k] = 1 + k % 3
+                iseven(k) && (rare[(13k) % n + 1, k] = 1 + k % 2)
+            end
+            counts = hcat(common, moderate, sparse, rare)
+            taxa = vcat(["c$j" for j in 1:6], ["m$j" for j in 1:4], ["sparse"], ["rare$k" for k in 1:200])
+            samples = ["s$i" for i in 1:n]
+            @test count(==(0), counts) / length(counts) > 0.85
+            @test all(k -> 1 <= count(>(0), rare[:, k]) <= 2, 1:200)
+
+            # Unfiltered, the rare taxa reach the replacement and are refused.
+            msg = try
+                differential_abundance(counts, samples, taxa, grp; reference="A", contrast="B",
+                                       config=clr_config)
+                ""
+            catch e
+                e.msg
+            end
+            @test occursin("min_prevalence", msg)
+
+            # min_prevalence = 0.1 keeps taxa seen in 3 or more of 24 samples.
+            res = differential_abundance(counts, samples, taxa, grp; reference="A", contrast="B",
+                                         config=DifferentialConfig("tss", 0.1; method="clr_welch"))
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            d = res["diagnostics"]
+            @test d["n_tested"] == 11 && d["n_filtered"] == 200 && d["n_failed"] == 0
+            @test res["status"] == "ok"
+            @test all(k -> byt["rare$k"]["status"] == "filtered", 1:200)
+            # The sparse taxon is tested, not silently dropped by cmultRepl.
+            @test byt["sparse"]["status"] == "ok" && !isnothing(byt["sparse"]["pvalue"])
+            @test byt["c1"]["estimate"] > 0 && byt["c1"]["padj"] < 0.05
+            zr = d["zero_replacement"]
+            @test zr["n_taxa_in_composition"] == 11
+            @test zr["zeros_replaced"] == count(==(0), counts[:, 1:11])
+            @test isempty(zr["warnings"])
+
+            # What filtering bought: replacing over every taxon seen in 2 or
+            # more samples instead puts far more imputed mass in each sample.
+            wide = findall(j -> count(>(0), counts[:, j]) >= 2, axes(counts, 2))
+            unfiltered = replace_zeros(counts[:, wide])
+            med(v) = (s = sort(v); (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2)
+            @test med(unfiltered.imputed_mass) > 5 * zr["median_imputed_fraction"]
+            @test maximum(unfiltered.imputed_mass) > zr["max_imputed_fraction"]
+        end
+    end
+
+    @testset "CLR: constant log-ratios are refused with their reason" begin
+        if !HAVE_ZCOMP
+            @test_skip false
+        else
+            # p and q in the same 1:1 ratio everywhere: both CLRs are constant
+            # (zero), so neither can be fitted and the whole test is refused.
+            e = try
+                differential_abundance([5 5; 7 7; 9 9; 4 4], ["a", "b", "c", "d"], ["p", "q"],
+                                       ["A", "A", "B", "B"]; reference="A", contrast="B", config=clr_config)
+                nothing
+            catch err
+                err
+            end
+            @test e isa ErrorException
+            @test occursin("no taxon could be fitted", e.msg)
+            @test occursin("constant", e.msg)
+        end
     end
 
     @testset "Route: two runs through the in-process router" begin
@@ -343,6 +639,85 @@ end
 
             r = _da_post("noSuchStudy", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")]))
             @test r.status == 404
+        end
+    end
+
+    @testset "Route: clr_welch selected by the study config" begin
+        _da_fixture() do
+            root = MetaManifold.Server.ServerState._root[]
+            write(joinpath(root, "data", "studyD", "pipeline.yml"),
+                  "analysis:\n  differential:\n    method: clr_welch\n    replacement_delta: 0.5\n")
+            r = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
+                                        "table" => "merged", "rank" => "Genus"))
+            body = JSON3.read(String(r.body))
+            if !HAVE_ZCOMP
+                HAVE_R ? (@test r.status == 503 && body.error == "r_unavailable") :
+                         (@test_skip r.status == 200)
+            else
+                @test r.status == 200
+                @test body.effect.key == "estimate" && body.effect.label == "CLR difference"
+                @test body.config.method == "clr_welch" && body.config.replacement_delta == 0.5
+                @test isempty(body.size_factors)
+                @test body.diagnostics.zero_replacement.zeros_replaced == 0
+                @test body.diagnostics.zero_replacement.median_imputed_fraction == 0
+                byt = Dict(String(x.taxon) => x for x in body.rows)
+                @test byt["Up"].estimate > 0 && byt["Down"].estimate < 0
+                @test all(x -> x.log2_fold_change === nothing, body.rows)
+                @test occursin("CLR difference", body.figure.layout.xaxis.title)
+            end
+
+            write(joinpath(root, "data", "studyD", "pipeline.yml"),
+                  "analysis:\n  differential:\n    method: clr_welch\n    replacement_delta: 1.5\n")
+            r = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
+                                        "table" => "merged", "rank" => "Genus"))
+            @test r.status == 400
+            @test JSON3.read(String(r.body)).error == "invalid_config"
+        end
+    end
+
+    ## Without zCompositions, clr_welch refuses with ZCompositionsUnavailable and
+    # the route answers 503. CI installs the package into R's base library, where
+    # it cannot be hidden from .libPaths(), so the testset instead binds a
+    # `requireNamespace` in R's global environment that reports zCompositions
+    # missing and defers to base for every other package. reval evaluates there,
+    # so the production probe sees the package as absent on any machine.
+    @testset "clr_welch without zCompositions is a 503" begin
+        if !HAVE_R
+            @test_skip false    # the clr_welch route test above covers this case
+        else
+            reval("""requireNamespace <- function(package, ...) {
+                if (identical(package, "zCompositions")) FALSE
+                else base::requireNamespace(package, ...)
+            }""")
+            try
+                @test !rcopy(Bool, reval("requireNamespace('zCompositions', quietly = TRUE)"))
+                e = try
+                    differential_abundance([5 6; 7 3; 9 4; 4 8], ["a", "b", "c", "d"], ["p", "q"],
+                                           ["A", "A", "B", "B"]; reference="A", contrast="B",
+                                           config=DifferentialConfig(; method="clr_welch"))
+                    nothing
+                catch err
+                    err
+                end
+                @test e isa ZCompositionsUnavailable
+                @test occursin("renv::restore()", sprint(showerror, e))
+
+                _da_fixture() do
+                    root = MetaManifold.Server.ServerState._root[]
+                    write(joinpath(root, "data", "studyD", "pipeline.yml"),
+                          "analysis:\n  differential:\n    method: clr_welch\n")
+                    r = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
+                                                "table" => "merged", "rank" => "Genus"))
+                    body = JSON3.read(String(r.body))
+                    @test r.status == 503
+                    @test body.error == "r_unavailable"
+                    @test occursin("zCompositions", body.message)
+                end
+            finally
+                reval("rm(requireNamespace)")
+            end
+            @test !rcopy(Bool, reval("exists('requireNamespace', envir = globalenv(), inherits = FALSE)"))
+            @test rcopy(Bool, reval("requireNamespace('zCompositions', quietly = TRUE)")) == HAVE_ZCOMP
         end
     end
 end

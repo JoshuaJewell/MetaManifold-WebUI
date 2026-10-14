@@ -522,6 +522,14 @@ _saved_root = SV.ServerState._root[]
             @test rej.status == 400
             @test read(SV._primers_path(), String) == before
 
+            # An unreadable file is a 400 naming the file, logged as a warning: the
+            # operator can repair it, so it is not reported as a server fault.
+            write(SV._primers_path(), "Forward: [unterminated\n")
+            unreadable = @test_logs (:warn, "primers.yml is not readable") SV._read_primers()
+            @test unreadable.status == 400
+            @test read(SV._primers_path(), String) == "Forward: [unterminated\n"
+            write(SV._primers_path(), before)
+
             # A body that is not a JSON object is rejected with an actionable 400
             # rather than throwing out of the route as a bare 500. This route backs
             # a Save button, where a malformed request is a plausible client bug.
@@ -788,7 +796,7 @@ _saved_root = SV.ServerState._root[]
             # file be overwritten from an empty editor.
             before = read(dbpath, String)
             write(dbpath, "databases: [unterminated\n")
-            @test SV._read_databases().status == 400
+            @test (@test_logs (:warn, "databases.yml is not readable") SV._read_databases()).status == 400
             @test read(dbpath, String) == "databases: [unterminated\n"
             write(dbpath, before)
 
