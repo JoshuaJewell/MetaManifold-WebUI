@@ -818,10 +818,14 @@ _stage_index(att::Attestation, name::AbstractString) =
     findfirst(s -> get(s, "name", nothing) == String(name), stages(att))
 
 """
-    record_stage!(att, name, env; started, finished, status, commands, outputs) -> Attestation
+    record_stage!(att, name, env; started, finished, status, commands, outputs, occupancy) -> Attestation
 
 Record one stage's own captured environment, replacing any earlier record of that
 stage.
+
+`occupancy` is the stage's `MemoryProbe` record. It is stored under the stage's
+`occupancy` key only when given, so a stage recorded without the probe has
+exactly the keys it always had.
 
 Re-running a single stage of an existing run must update that stage alone, because
 a run directory is an accretion and the other stages' records remain true. The
@@ -832,7 +836,8 @@ function record_stage!(att::Attestation, name::AbstractString, env::CapturedEnvi
                        finished::AbstractString = timestamp(),
                        status::AbstractString   = "ok",
                        commands::AbstractVector = String[],
-                       outputs::AbstractVector  = OrderedDict{String,Any}[])
+                       outputs::AbstractVector  = OrderedDict{String,Any}[],
+                       occupancy::Union{AbstractDict,Nothing} = nothing)
     stage = OrderedDict{String,Any}(
         "name"                => String(name),
         "started"             => String(started),
@@ -847,6 +852,7 @@ function record_stage!(att::Attestation, name::AbstractString, env::CapturedEnvi
         "outputs"             => Any[OrderedDict{String,Any}(string(k) => v for (k, v) in o)
                                      for o in outputs],
     )
+    isnothing(occupancy) || (stage["occupancy"] = occupancy)
     index = _stage_index(att, name)
     isnothing(index) ? push!(stages(att), stage) : (stages(att)[index] = stage)
     return summarise!(att)
