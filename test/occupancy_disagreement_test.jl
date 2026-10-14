@@ -43,6 +43,9 @@ using MetaManifold
 const MP = MetaManifold.MemoryProbe
 const PV = MetaManifold.Provenance
 const TL = MetaManifold.Tools
+# Not const: other test files bind SV in Main the same way, and runtests.jl
+# includes them all into one module.
+SV = MetaManifold.Server
 
 const PROBE_ON = Dict("occupancy_probe" => Dict("enabled" => true, "interval_ms" => 10))
 
@@ -102,21 +105,19 @@ end
 const ORDERS = ("asv_then_otu", "otu_then_asv", "concurrent")
 
 # The stage's work in `order`, under a fresh probe. Returns the probe's record.
+# ASV-then-OTU and concurrent are the stage's own two shapes, run through the
+# pipeline's _vsearch_searches; OTU-then-ASV has no caller and is spelled out.
 function run_order(dir, out, order)
     mkpath(out)
     probe = MP.start(PROBE_ON)
+    asv() = _search(dir, out, "asv")
+    otu() = _search(dir, out, "otu")
     MP.within(probe) do
-        if order == "asv_then_otu"
-            MP.task(() -> _search(dir, out, "asv"), "vsearch:asv")
-            MP.task(() -> _search(dir, out, "otu"), "vsearch:otu")
-        elseif order == "otu_then_asv"
-            MP.task(() -> _search(dir, out, "otu"), "vsearch:otu")
-            MP.task(() -> _search(dir, out, "asv"), "vsearch:asv")
+        if order == "otu_then_asv"
+            MP.task(otu, "vsearch:otu")
+            MP.task(asv, "vsearch:asv")
         else
-            # The shape of the full pipeline's vsearch stage.
-            a = Threads.@spawn MP.task(() -> _search(dir, out, "asv"), "vsearch:asv")
-            o = Threads.@spawn MP.task(() -> _search(dir, out, "otu"), "vsearch:otu")
-            fetch(a); fetch(o)
+            SV._vsearch_searches(asv, otu; concurrent = order == "concurrent")
         end
     end
     MP.finish!(probe)
@@ -184,6 +185,45 @@ _task(rec, label) = only(t for t in rec["tasks"] if t["label"] == label)
         end
     end
 
+    @testset "the vsearch stage's two shapes" begin
+        # Serial and concurrent return the same pair, and record one task per
+        # search; with no OTU search the pair ends in `nothing` and no OTU task
+        # is recorded. A single-stage re-run attests both searches' outputs.
+        for concurrent in (false, true)
+            probe = MP.start(PROBE_ON)
+            @test MP.within(() -> SV._vsearch_searches(() -> :asv, () -> :otu; concurrent), probe) ==
+                  (:asv, :otu)
+            @test MP.within(() -> SV._vsearch_searches(() -> :asv, nothing; concurrent), probe) ==
+                  (:asv, nothing)
+            @test sort([t["label"] for t in MP.finish!(probe)["tasks"]]) ==
+                  ["vsearch:asv", "vsearch:asv", "vsearch:otu"]
+        end
+
+        # The pipeline's call: the same search on each result, against one database.
+        stub(project, result, db) = (project, result, db)
+        for concurrent in (false, true)
+            @test SV._vsearch_stage(stub, :p, :asvs, :otus, :db; concurrent) ==
+                  ((:p, :asvs, :db), (:p, :otus, :db))
+            @test SV._vsearch_stage(stub, :p, :asvs, nothing, :db; concurrent) ==
+                  ((:p, :asvs, :db), nothing)
+        end
+
+        # Concurrently, a failed ASV search is rethrown only once the OTU search
+        # has finished, so it cannot be left running.
+        otu_done = Threads.Atomic{Bool}(false)
+        @test_throws TaskFailedException SV._vsearch_searches(() -> error("ASV search failed"),
+                                                               () -> (sleep(0.3); otu_done[] = true; :otu);
+                                                               concurrent = true)
+        @test otu_done[]
+    end
+
+    @testset "a handle the probe cannot watch is ignored" begin
+        # run(cmd; wait=false) returns a Process or a ProcessChain; anything else
+        # must leave the stage alone rather than fail it.
+        @test MP.watch!(:not_a_process) === nothing
+        @test MP.unwatch!(MP.watch!(:not_a_process)) === nothing
+    end
+
     if !Sys.islinux()
         @info "Occupancy probe: not Linux, so there is no /proc to sample; the child-memory tests are SKIPPED"
     else
@@ -212,7 +252,6 @@ _task(rec, label) = only(t for t in rec["tasks"] if t["label"] == label)
         end
 
         @testset "through the pipeline's _attest, flag off and on" begin
-            SV = MetaManifold.Server
             mktempdir() do tmp
                 cfg_path = joinpath(tmp, "run_config.yml")
                 for probed in (false, true)

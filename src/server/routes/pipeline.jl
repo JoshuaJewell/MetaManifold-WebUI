@@ -204,6 +204,32 @@ function _attest(f::Function, att, env, name::AbstractString; config_path::Strin
     end
 end
 
+# The vsearch stage's two searches: `asv()`, and `otu()` unless it is `nothing`, each
+# under its occupancy probe label. The full pipeline runs them concurrently; a
+# single-stage re-run runs them one after the other. These are the two shapes whose
+# memory peaks the probe tells apart, and test/occupancy_disagreement_test.jl runs
+# both through this function. Returns the two results, `nothing` for an absent OTU
+# search. Concurrently, both are waited for before a failure is rethrown, so a
+# failed ASV search cannot leave the OTU search running.
+function _vsearch_searches(asv::Function, otu::Union{Function,Nothing}; concurrent::Bool)
+    if !concurrent
+        asv_tax = MemoryProbe.task(asv, "vsearch:asv")
+        return (asv_tax, isnothing(otu) ? nothing : MemoryProbe.task(otu, "vsearch:otu"))
+    end
+    asv_task = Threads.@spawn MemoryProbe.task(asv, "vsearch:asv")
+    otu_task = isnothing(otu) ? nothing : Threads.@spawn MemoryProbe.task(otu, "vsearch:otu")
+    tasks = filter(!isnothing, Any[asv_task, otu_task])
+    foreach(t -> (try wait(t) catch end), tasks)
+    (fetch(asv_task), isnothing(otu_task) ? nothing : fetch(otu_task))
+end
+
+# The vsearch stage for one run: `search(project, result, db)` on the ASV result and,
+# unless `otus` is `nothing`, on the OTU result (_vsearch_searches). `search` is the
+# pipeline's `vsearch`; it is passed in so the stage can be tested without one.
+_vsearch_stage(search::Function, project, asvs, otus, db; concurrent::Bool) =
+    _vsearch_searches(() -> search(project, asvs, db),
+                      isnothing(otus) ? nothing : () -> search(project, otus, db); concurrent)
+
 # The files a stage hands on, by content, for its provenance record.
 _output_paths(r::ASVResult)      = [r.fasta, r.count_table, r.taxonomy]
 _output_paths(r::OTUResult)      = [r.fasta, r.count_table]
@@ -271,17 +297,7 @@ function _run_full_pipeline(study::String, run::String, db_config::String,
         # OTU search it claims to cover.
         asv_tax, otu_tax = if vsearch_enabled
             _attest(att, env, "vsearch"; config_path) do
-                asv_task = Threads.@spawn MemoryProbe.task("vsearch:asv") do
-                    vsearch(project, asvs, dbs["$(db_name)_vsearch"])
-                end
-                otu_task = (swarm_enabled && !isnothing(otus)) ?
-                    Threads.@spawn(MemoryProbe.task("vsearch:otu") do
-                        vsearch(project, otus, dbs["$(db_name)_vsearch"])
-                    end) : nothing
-                # Wait for both before rethrowing, so a failed ASV search cannot leave the OTU search running.
-                tasks = filter(!isnothing, Any[asv_task, otu_task])
-                foreach(t -> (try wait(t) catch end), tasks)
-                (fetch(asv_task), isnothing(otu_task) ? nothing : fetch(otu_task))
+                _vsearch_stage(vsearch, project, asvs, otus, dbs["$(db_name)_vsearch"]; concurrent=true)
             end
         else
             (nothing, nothing)
@@ -452,19 +468,11 @@ function _run_stage(study::String, run::String, stage::String,
             end
         elseif step == "vsearch"
             if vsearch_enabled
-                # Serial here, concurrent in the full pipeline: the same two
-                # searches in the two shapes the occupancy probe distinguishes.
+                # Serial here, concurrent in the full pipeline (_vsearch_searches).
                 _record("vsearch") do
                     asvs = _asvresult_from_disk(run_dir)
-                    MemoryProbe.task("vsearch:asv") do
-                        vsearch(project, asvs, dbs["$(db_name)_vsearch"])
-                    end
-                    otus = _oturesult_from_disk(run_dir)
-                    if !isnothing(otus) && swarm_enabled
-                        MemoryProbe.task("vsearch:otu") do
-                            vsearch(project, otus, dbs["$(db_name)_vsearch"])
-                        end
-                    end
+                    otus = swarm_enabled ? _oturesult_from_disk(run_dir) : nothing
+                    _vsearch_stage(vsearch, project, asvs, otus, dbs["$(db_name)_vsearch"]; concurrent=false)
                 end
             end
             # merge_taxa follows as its own step when it is in the list.
