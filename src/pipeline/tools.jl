@@ -14,6 +14,7 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _run_killa
     using ..PipelineTypes
     using ..PipelineLog
     using ..Config
+    import ..MemoryProbe
 
     _sq(s::AbstractString) = "'" * replace(s, "'" => "'\\''") * "'"
 
@@ -24,13 +25,18 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _run_killa
     # Truncation is the stage's own affair, done once at entry via reset_tool_logs.
     # Run a command and wait for it. If the waiting task is interrupted (a job
     # cancel), the child process is killed so it cannot keep writing outputs.
+    # When the stage is probed (occupancy_probe.enabled), the child's memory is
+    # sampled while it runs; otherwise watch!/unwatch! do nothing.
     function _run_killable(cmd::Base.AbstractCmd)
         p = run(cmd; wait=false)
+        watched = MemoryProbe.watch!(p)
         try
             wait(p)
         catch
             process_running(p) && kill(p)
             rethrow()
+        finally
+            MemoryProbe.unwatch!(watched)
         end
         success(p) || throw(ProcessFailedException(p))
         nothing
