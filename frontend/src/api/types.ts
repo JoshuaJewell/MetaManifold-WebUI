@@ -243,15 +243,32 @@ export interface ComparisonRequest extends AnalysisRequest {
   aggregate?: boolean
 }
 
+export interface PermanovaTerm {
+  term: string
+  r2: number
+  f_statistic: number | null
+  /** Null when the term could not be tested; `untestable_reason` says why. */
+  p_value: number | null
+  /** Set when within-block permutation cannot change this term. */
+  untestable_reason?: string | null
+}
+
 export interface PermanovaResult {
   text: string
+  /** The first term (group, when it varies); r2, f_statistic and p_value are its own. */
+  term?: string
   r2: number | null
   f_statistic: number | null
   p_value: number | null
+  untestable_reason?: string | null
+  /** Permutations actually performed: fewer than 999 when the blocks admit fewer. */
+  permutations?: number
+  /** Smallest p-value attainable with that many permutations. */
+  min_p_value?: number
   /** True when permutations were restricted within individuals. */
   blocked?: boolean
   /** One row per model term, tested sequentially in formula order. */
-  terms?: { term: string; r2: number; f_statistic: number | null; p_value: number | null }[]
+  terms?: PermanovaTerm[]
   /** PERMDISP on the same distances: do the groups differ in spread? */
   dispersion?: PermdispResult | { error: string }
 }
