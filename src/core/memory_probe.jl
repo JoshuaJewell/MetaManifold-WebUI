@@ -51,7 +51,7 @@ mutable struct TaskTrace
     peak_kib  :: Int
     hwm_kib   :: Int
     # The sample window the task's children were live in: the index of the first
-    # sample taken after the first of them started, and of the one taken after
+    # sample taken after the first of them started, and the last taken before
     # the last was waited for. 0 means never. Two tasks overlap when the later
     # one's `first_sample` falls at or before the earlier one's `last_sample`,
     # which is the interleaving the grade algebra sequences over.
@@ -277,8 +277,8 @@ function watch!(proc::Base.Process)
     end
     lock(p.lock) do
         t.processes += 1
+        t.processes == 1 && (t.first_sample = p.samples + 1)
         if pid !== nothing
-            isempty(t.live) && (t.first_sample = p.samples)
             push!(t.live, pid)
         end
     end
@@ -326,8 +326,11 @@ end
 #     hwm peak drift        with   drift ≤ peak
 #
 #   * `peak`  — the high-water mark this interaction reached, in KiB;
-#   * `drift` — what it still held when the next interaction began;
+#   * `drift` — the net change in memory held by the next interaction's start;
 #   * `release` = peak − drift — what the frontier reclaims.
+#
+# A task's drift subtracts earlier tasks that exited before the next start, so
+# it can be negative. The folded drift is the sum of peaks still live there.
 #
 # Sequencing starts the next interaction from the previous one's drift:
 #
@@ -354,7 +357,7 @@ end
 
 const GRADE_ALGEBRA = "ResourceAlgebra.Instances.HWM"
 
-"A grade of the pinned high-water-mark algebra: a peak and the drift it holds."
+"A grade of the pinned high-water-mark algebra: a peak and a net memory change."
 struct Grade
     peak  :: Int
     drift :: Int
@@ -388,10 +391,10 @@ end
 _is_windowed(rec::AbstractDict) = _window(rec) !== nothing
 
 # Whether `prev` was still live when `next` started, so the handover hands its
-# peak on rather than reclaiming it. A `prev` never unwatched (window end 0) was
-# still live; a `next` that never started (window start 0) never overlapped.
+# peak on rather than reclaiming it. A started `prev` never unwatched (window
+# end 0) was still live; a task that never started (window start 0) never overlapped.
 _overlaps(prev::Tuple{Int,Int}, next::Tuple{Int,Int}) =
-    next[1] != 0 && (prev[2] == 0 || next[1] <= prev[2])
+    prev[1] != 0 && next[1] != 0 && (prev[2] == 0 || next[1] <= prev[2])
 
 # Grades and labels in sampled order, or `nothing` when the record carries no
 # windows: a comparison is then skipped rather than made on an assumed order.
@@ -404,18 +407,24 @@ function _grades_and_labels(occ::AbstractDict)
     order  = sort(collect(eachindex(recs)); by = i -> (_window(recs[i])[1], i))
     ordered = collect(recs)[order]
     windows = [_window(r) for r in ordered]
+    peaks   = [Int(get(r, "peak_rss_kib", 0)) for r in ordered]
     grades  = Grade[]
     labels  = String[]
+    live    = Int[]
+    held    = 0
     for (i, rec) in enumerate(ordered)
-        peak = Int(get(rec, "peak_rss_kib", 0))
-        drift = if i == length(ordered)
+        push!(live, i)
+        if i == length(ordered)
             # The stage waits for its children: a task still resident at the end
-            # keeps its peak as the grade's drift, an exited one holds nothing.
-            (windows[i][1] != 0 && windows[i][2] == 0) ? peak : 0
+            # keeps its peak in the folded drift, an exited one holds nothing.
+            filter!(j -> windows[j][1] != 0 && windows[j][2] == 0, live)
         else
-            _overlaps(windows[i], windows[i + 1]) ? peak : 0
+            filter!(j -> _overlaps(windows[j], windows[i + 1]), live)
         end
-        push!(grades, Grade(peak, drift))
+        remaining = sum(j -> peaks[j], live; init = 0)
+        # seq adds drifts, so reclaim expired predecessors as well as this task.
+        push!(grades, Grade(peaks[i], remaining - held))
+        held = remaining
         push!(labels, String(get(rec, "label", "?")))
     end
     grades, labels
@@ -424,9 +433,11 @@ end
 """
     task_grades(occupancy) -> Union{Vector{Grade},Nothing}
 
-One grade per task of a stage's `occupancy` record, in sampled order: a task's
-drift is its peak when it was still live at the next task's start, and 0 when it
-had exited. `nothing` when the record carries no sample windows.
+One grade per task of a stage's `occupancy` record, in sampled order. Its drift
+is the change in the live peak sum by the next task's start, including releases
+of earlier tasks; the final boundary retains only unclosed windows. Folding
+with `seq` carries exactly the peaks still live at each boundary. `nothing` when
+the record carries no sample windows.
 """
 function task_grades(occ::AbstractDict)
     graded = _grades_and_labels(occ)

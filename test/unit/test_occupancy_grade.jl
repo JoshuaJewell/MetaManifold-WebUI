@@ -21,8 +21,7 @@ const RECORDED_SCHEDULES =
     normpath(joinpath(@__DIR__, "..", "..", "docs", "occupancy", "schedules.yml"))
 
 # One task as the probe records it, with the sample window a schedule gives it.
-# The window is what the grade reads: a task still live when the next one starts
-# hands its peak on as drift, an exited one hands on nothing.
+# The windows determine which peaks remain live at each handover.
 function _occ_task(peak; label = "t", first_sample = 1, last_sample = 2)
     OrderedDict{String,Any}("label" => label, "processes" => 1, "samples" => 3,
                             "peak_rss_kib" => peak, "hwm_kib" => peak,
@@ -80,6 +79,75 @@ _occ_stage(tasks; measured) = OrderedDict{String,Any}(
         @test MG.disagreement(together) === nothing
     end
 
+    @testset "overlap expires at each handover" begin
+        for (windows, predicted, remaining) in (
+            ([(1, 2), (2, 3), (4, 5)], 160, 0), # an overlapping pair, then a serial task
+            ([(1, 3), (2, 5), (4, 6)], 160, 0), # pairwise overlap, never all three
+            ([(1, 6), (2, 3), (4, 5)], 180, 0), # the first survives a shorter task
+            ([(1, 5), (2, 5), (3, 5)], 240, 0), # genuine three-way overlap
+            ([(1, 2), (1, 2), (3, 4)], 160, 0), # children registered before sample 1
+            ([(1, 0), (2, 3), (4, 0)], 180, 180), # unclosed windows remain live
+        )
+            tasks = [_occ_task(peak; label = "t$i", first_sample = window[1],
+                               last_sample = window[2])
+                     for (i, (peak, window)) in enumerate(zip((100, 60, 80), windows))]
+            occ = _occ_stage(tasks; measured = predicted)
+            grades = MG.task_grades(occ)
+            folded = foldl(MG.seq, grades)
+            @test folded.peak == predicted
+            @test folded.drift == remaining
+            @test MG.release(folded) == predicted - remaining
+            @test MG.cost_bound_rss_kib(occ) == 240
+            @test MG.reclaimed_kib(occ) == 240 - predicted
+            @test MG.disagreement(occ) === nothing
+            @test MG.graded(occ)["predicted_peak_kib"] == predicted
+            # Record order does not change the sampled order.
+            @test MG.stage_grade(_occ_stage(reverse(tasks); measured = predicted)) == folded
+        end
+        @test !MG._overlaps((0, 0), (1, 2)) # a never-started task is not live
+        @test !MG._overlaps((1, 0), (0, 0))
+        @test MG._overlaps((1, 2), (1, 2))
+        @test MG._overlaps((1, 2), (2, 3))   # the end sample is included
+        @test !MG._overlaps((1, 2), (3, 4))
+    end
+
+    @testset "registration keeps the first child's sample boundary" begin
+        # No background sampler: watch! takes the first sample deterministically.
+        probe = MG.Probe(0.01, ReentrantLock(), MG.TaskTrace[], MG.TaskTrace("(stage)"),
+                         0, 0, Base.gc_num(), Base.gc_live_bytes(), false, nothing,
+                         nothing, nothing, nothing, Vector{UInt8}(undef, 8192),
+                         Vector{UInt8}(undef, 64))
+        function child!()
+            proc = run(`sleep 0.01`; wait = false)
+            pid = MG.watch!(proc)
+            try
+                wait(proc)
+            finally
+                MG.unwatch!(pid)
+            end
+        end
+        MG.within(probe) do
+            MG.task("two children") do
+                child!()
+                @test probe.samples == 1
+                @test probe.tasks[1].first_sample == 1
+                @test probe.tasks[1].last_sample == 1
+                MG.task("between children") do
+                    child!()
+                end
+                child!()
+            end
+        end
+        first_task, between = probe.tasks
+        @test first_task.processes == 2
+        @test first_task.first_sample == 1
+        @test first_task.last_sample == 3
+        @test between.first_sample == 2
+        @test MG._overlaps((first_task.first_sample, first_task.last_sample),
+                           (between.first_sample, between.last_sample))
+        @test MG.TaskTrace("never started").first_sample == 0
+    end
+
     @testset "the graded record says what it is" begin
         rec = _occ_stage([_occ_task(100; label = "vsearch:asv", first_sample = 1, last_sample = 4),
                           _occ_task(60;  label = "vsearch:otu", first_sample = 2, last_sample = 5)];
@@ -93,7 +161,9 @@ _occ_stage(tasks; measured) = OrderedDict{String,Any}(
         @test g["disagreement"] === nothing
         @test [t["label"] for t in g["tasks"]] == ["vsearch:asv", "vsearch:otu"]
         @test g["tasks"][1]["drift_kib"] == 100       # still resident at the handover
-        @test g["tasks"][2]["release_kib"] == 60      # the last one hands on nothing
+        @test g["tasks"][2]["drift_kib"] == -100     # the earlier task also exited
+        @test g["tasks"][2]["release_kib"] == 160    # both peaks are reclaimed
+        @test g["drift_kib"] == 0
     end
 
     @testset "a measured peak above the prediction is a disagreement" begin
