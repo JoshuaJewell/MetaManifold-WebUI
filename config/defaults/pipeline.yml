@@ -368,3 +368,18 @@ analysis:
     # its taxon's smallest observed proportion is lowered to this fraction of it.
     # A replaced zero is not a measurement.
     replacement_delta: 0.65
+
+## Occupancy probe (MMW-01)
+# Measures each attested stage's memory: Julia's allocation total, and the
+# sampled resident memory of the tools it runs as child processes (Linux /proc).
+# Recorded under the stage's `occupancy` key in attestation.yml. See the
+# header of src/core/memory_probe.jl.
+#
+# Off unless set, and deliberately left commented out here: the run config is
+# embedded in attestation.yml, so a default key would change every run's record
+# even with the probe off. Set it by editing a pipeline.yml (the config editor
+# only offers keys that have a factory default).
+# occupancy_probe:
+#   enabled: true
+#   # Sampling interval in milliseconds (at least 1).
+#   interval_ms: 10

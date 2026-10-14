@@ -9,6 +9,7 @@
 using JSON3, RCall
 using ..RRuntime: with_r_lock
 const Provenance = MetaManifold.Provenance
+const MemoryProbe = MetaManifold.MemoryProbe
 
 ## Tagging helpers
 
@@ -180,17 +181,26 @@ end
 #
 # A stage that skipped leaves its earlier record alone: writing the current
 # environment over it would attribute old outputs to new tool versions.
+#
+# With `occupancy_probe.enabled: true` in the run config, the stage's memory is
+# measured (MemoryProbe) and recorded under the stage's `occupancy` key. Off, the
+# probe is `nothing` and the record is exactly what it was without it.
 function _attest(f::Function, att, env, name::AbstractString; config_path::String)
     started = Provenance.timestamp()
     ran_before = stage_run_count(config_path)
+    probe = MemoryProbe.start(get(get(att.doc, "config", Dict()), "run_config", nothing))
     try
-        result = f()
+        result = MemoryProbe.within(f, probe)
         stage_run_count(config_path) > ran_before &&
-            Provenance.record_stage!(att, name, env; started, outputs=_stage_outputs(result))
+            Provenance.record_stage!(att, name, env; started, outputs=_stage_outputs(result),
+                                     occupancy=MemoryProbe.finish!(probe))
         return result
     catch
-        Provenance.record_stage!(att, name, env; started, status="failed")
+        Provenance.record_stage!(att, name, env; started, status="failed",
+                                 occupancy=MemoryProbe.finish!(probe))
         rethrow()
+    finally
+        MemoryProbe.finish!(probe)
     end
 end
 
@@ -261,9 +271,13 @@ function _run_full_pipeline(study::String, run::String, db_config::String,
         # OTU search it claims to cover.
         asv_tax, otu_tax = if vsearch_enabled
             _attest(att, env, "vsearch"; config_path) do
-                asv_task = Threads.@spawn(vsearch(project, asvs, dbs["$(db_name)_vsearch"]))
+                asv_task = Threads.@spawn MemoryProbe.task("vsearch:asv") do
+                    vsearch(project, asvs, dbs["$(db_name)_vsearch"])
+                end
                 otu_task = (swarm_enabled && !isnothing(otus)) ?
-                    Threads.@spawn(vsearch(project, otus, dbs["$(db_name)_vsearch"])) : nothing
+                    Threads.@spawn(MemoryProbe.task("vsearch:otu") do
+                        vsearch(project, otus, dbs["$(db_name)_vsearch"])
+                    end) : nothing
                 # Wait for both before rethrowing, so a failed ASV search cannot leave the OTU search running.
                 tasks = filter(!isnothing, Any[asv_task, otu_task])
                 foreach(t -> (try wait(t) catch end), tasks)
@@ -438,12 +452,18 @@ function _run_stage(study::String, run::String, stage::String,
             end
         elseif step == "vsearch"
             if vsearch_enabled
+                # Serial here, concurrent in the full pipeline: the same two
+                # searches in the two shapes the occupancy probe distinguishes.
                 _record("vsearch") do
                     asvs = _asvresult_from_disk(run_dir)
-                    vsearch(project, asvs, dbs["$(db_name)_vsearch"])
+                    MemoryProbe.task("vsearch:asv") do
+                        vsearch(project, asvs, dbs["$(db_name)_vsearch"])
+                    end
                     otus = _oturesult_from_disk(run_dir)
                     if !isnothing(otus) && swarm_enabled
-                        vsearch(project, otus, dbs["$(db_name)_vsearch"])
+                        MemoryProbe.task("vsearch:otu") do
+                            vsearch(project, otus, dbs["$(db_name)_vsearch"])
+                        end
                     end
                 end
             end

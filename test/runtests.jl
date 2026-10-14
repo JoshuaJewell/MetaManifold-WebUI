@@ -85,6 +85,12 @@ using MetaManifold.Categories, MetaManifold.CompositionLibrary
         include(joinpath(@__DIR__, "unit", f))
     end
 
+    ## Occupancy probe and the two-thread disagreement test (MMW-01), with the
+    ## full suite. Its vsearch part skips, saying so, when vsearch is not on PATH.
+    if isempty(filter(a -> !startswith(a, "--"), ARGS))
+        include("occupancy_disagreement_test.jl")
+    end
+
     ## Integration tests (opt-in)
     if RUN_INTEGRATION
         using MetaManifold.DADA2, MetaManifold.OTUPipeline
