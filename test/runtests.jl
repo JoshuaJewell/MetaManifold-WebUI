@@ -45,6 +45,7 @@ const UNIT_FILES = [
     "test_remote_stages.jl",
     "test_jobs.jl",
     "test_provenance.jl",
+    "test_occupancy_grade.jl",
     "test_install_pins.jl",
     "test_migrate_composition.jl",
     "test_sample_reads.jl",

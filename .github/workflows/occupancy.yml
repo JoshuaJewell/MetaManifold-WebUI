@@ -22,6 +22,9 @@ on:
       - src/pipeline/tools.jl
       - src/server/routes/pipeline.jl
       - test/occupancy_disagreement_test.jl
+      - test/unit/test_occupancy_grade.jl
+      - scripts/check-occupancy-grades.jl
+      - scripts/lint-occupancy-readings.sh
       - docs/occupancy/**
       - docs/occupancy-2026-10.adoc
       - scripts/check-occupancy.sh
@@ -35,6 +38,9 @@ on:
       - src/pipeline/tools.jl
       - src/server/routes/pipeline.jl
       - test/occupancy_disagreement_test.jl
+      - test/unit/test_occupancy_grade.jl
+      - scripts/check-occupancy-grades.jl
+      - scripts/lint-occupancy-readings.sh
       - docs/occupancy/**
       - docs/occupancy-2026-10.adoc
       - scripts/check-occupancy.sh
@@ -106,6 +112,15 @@ jobs:
 
       - name: Three orders of the vsearch stage
         run: julia --project=. -t 2 test/occupancy_disagreement_test.jl
+
+      # Fork issue #105: the grades the recorded run's windows imply, read back
+      # against its own measurement (docs/occupancy/schedules.yml).
+      - name: Graded reading of the recorded run
+        run: julia --project=. scripts/check-occupancy-grades.jl
+
+      # And no production code reads a peak without those grades.
+      - name: Occupancy readings are graded
+        run: bash scripts/lint-occupancy-readings.sh
 
   typed-peak:
     name: Occupancy typed peak

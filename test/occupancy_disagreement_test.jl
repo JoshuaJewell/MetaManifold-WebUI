@@ -341,6 +341,25 @@ _task(rec, label) = only(t for t in rec["tasks"] if t["label"] == label)
                     @info "occupancy: concurrent stage peak vs the larger serial stage peak" concurrent = conc["child_peak_rss_kib"] serial = serial_max overlapped = overlap cost_spread = round(spread; sigdigits = 3)
                     overlap || @warn "occupancy: the concurrent searches did not overlap in memory on this runner, so this run cannot show the order dependence"
 
+                    # The grades the sample windows imply, on this same run
+                    # (fork issue #105). The peak is recorded, not asserted — a
+                    # runner that never has both searches resident cannot show it —
+                    # but the algebra's own claims are asserted of every order:
+                    # every task is timed, the prediction at least reaches what the
+                    # samples saw (the prediction is an upper bound: at a handover
+                    # the live task holds at most its peak), it never exceeds the
+                    # cost bound (Reclaim.occupancy≤cost), and the slack between
+                    # them is never negative.
+                    for o in ORDERS
+                        r = records[o]
+                        @test all(t -> haskey(t, "first_sample") && haskey(t, "last_sample"), r["tasks"])
+                        @test haskey(r, "grades")
+                        @test MP.predicted_peak_rss_kib(r) >= r["child_peak_rss_kib"]
+                        @test MP.predicted_peak_rss_kib(r) <= MP.cost_bound_rss_kib(r)
+                        @test MP.reclaimed_kib(r) >= 0
+                        @test MP.disagreement(r) === nothing
+                    end
+
                     path = get(ENV, "OCCUPANCY_RESULTS", "")
                     if !isempty(path)
                         io = IOBuffer()
