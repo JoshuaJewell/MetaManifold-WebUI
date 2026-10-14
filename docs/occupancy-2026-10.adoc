@@ -19,8 +19,10 @@ on 2026-10-14, and checks it against the typed reading.
 * `julia_allocated_bytes`: the `Base.gc_num()` delta over the stage (cost);
 * per task (one spawned search): the largest sampled VmRSS of the child
   process it started (`peak_rss_kib`), the kernel's own VmHWM for it
-  (`hwm_kib`), and the sample window its children were live in
-  (`first_sample`, `last_sample`) — what its grade is read from;
+  (`hwm_kib`), and the sample window its children were live in — `first_sample`,
+  the first sample taken after its first child started, and `last_sample`, the
+  last taken before its last was waited for, 0 for never — which its grade is
+  read from;
 * `child_peak_rss_kib`: the largest sum of the stage's children's VmRSS at
   one sampling instant (the stage's occupancy).
 
@@ -74,8 +76,14 @@ whole window (`MemoryProbe`'s `task_grades`, `stage_grade`,
 `predicted_peak_rss_kib`, `cost_bound_rss_kib`, `reclaimed_kib`) and attaches the
 result to a recorded stage as `grades`; a record with no sample windows is left
 ungraded rather than graded on an assumed order. Tasks are read in sampled order
-(first sample, ties by record order); a task's drift is its peak when the next
-task still held it, and 0 when it had exited.
+(first sample, ties by record order). Each handover keeps only the tasks still
+live at it, so a task's `drift_kib` is the change in the live peak sum across its
+boundary — negative when the boundary also releases an earlier task — and
+`release_kib` is everything freed between its start and the next boundary, which
+can exceed that task's own peak. The folded drift is the sum of the peaks still
+live when the stage ends; the pinned instance's own `drift` is that non-negative
+live sum, the signed per-task delta being the extension its header records as
+H-2.
 
 For the three orders above, the algebra's predicted peak reproduces the measured
 stage peak exactly — 9204, 9192 and 18380 KiB — and the slack against the cost

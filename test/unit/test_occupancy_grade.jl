@@ -111,6 +111,27 @@ _occ_stage(tasks; measured) = OrderedDict{String,Any}(
         @test !MG._overlaps((1, 2), (3, 4))
     end
 
+    @testset "the reviewer's three-task example: expiry, not the sum of drifts" begin
+        # Windows [1,3], [2,10], [4,5] and peaks 100, 1, 100 KiB — CodeRabbit's
+        # example on #117. A overlaps B and exits before C starts, so the largest
+        # simultaneous sum is 101 (A+B at samples 2-3, then B+C at 4-5), not the
+        # 201 a rule that kept every earlier drift would read, and not the 201 KiB
+        # cost. A's release at C's boundary makes B's delta negative, which is how
+        # the fold stops charging for it.
+        tasks = [_occ_task(100; label = "A", first_sample = 1, last_sample = 3),
+                 _occ_task(1;   label = "B", first_sample = 2, last_sample = 10),
+                 _occ_task(100; label = "C", first_sample = 4, last_sample = 5)]
+        occ = _occ_stage(tasks; measured = 101)
+        @test [g.drift for g in MG.task_grades(occ)] == [100, -99, -1]
+        @test MG.predicted_peak_rss_kib(occ) == 101
+        @test MG.cost_bound_rss_kib(occ) == 201
+        @test MG.reclaimed_kib(occ) == 100          # the 100 KiB that never coexist
+        @test MG.disagreement(occ) === nothing
+        # The bound the expiry sharpens: 201 KiB resident at once is now the
+        # disagreement, where before the fix it was the prediction.
+        @test MG.disagreement(_occ_stage(tasks; measured = 201)) isa String
+    end
+
     @testset "registration keeps the first child's sample boundary" begin
         # No background sampler: watch! takes the first sample deterministically.
         probe = MG.Probe(0.01, ReentrantLock(), MG.TaskTrace[], MG.TaskTrace("(stage)"),

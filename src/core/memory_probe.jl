@@ -326,8 +326,14 @@ end
 #     hwm peak drift        with   drift ≤ peak
 #
 #   * `peak`  — the high-water mark this interaction reached, in KiB;
-#   * `drift` — the net change in memory held by the next interaction's start;
-#   * `release` = peak − drift — what the frontier reclaims.
+#   * `drift` — the change in the live peak sum across the interaction's
+#     boundary, so a boundary that also releases an earlier task is negative;
+#   * `release` = peak − drift — everything freed between the interaction's start
+#     and the next boundary, which can exceed the interaction's own peak.
+#
+# A task's drift subtracts earlier tasks that exited before the next start, so it
+# can be negative — the signed-drift extension `Instances/HWM`'s header records
+# as H-2. The folded drift is the sum of peaks still live at the stage's end.
 #
 # A task's drift subtracts earlier tasks that exited before the next start, so
 # it can be negative. The folded drift is the sum of peaks still live there.
@@ -368,7 +374,7 @@ struct Grade
     end
 end
 
-"`release(grade)` — what the frontier reclaims, `peak − drift`."
+"`release(grade)` — `peak − drift`: everything freed by the interaction's boundary."
 release(g::Grade) = g.peak - g.drift
 
 "`seq(a, b)` — sequence `b` after `a`: the suffix starts from `a`'s drift."
