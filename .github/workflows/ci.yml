@@ -26,6 +26,95 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
+  # A pull request that touches nothing the suite exercises -- a README edit, a
+  # wiki page, a template, a licence record -- does not need the ~19-minute
+  # Julia suite or the proof checker to pass over it. The gate decides, and the
+  # two jobs below carry `if:` on its output; when it says not relevant, GitHub
+  # posts `skipped` for them, and a skipped check satisfies a required one. The
+  # gate itself must never be skipped -- it is the check that vouches for the
+  # others' absence, so Branch-Floor requires it too.
+  #
+  # The trigger stays unfiltered for a reason this repository has already
+  # sprang once (#116): a path-filtered `pull_request` trigger does not run at
+  # all on a PR that matches no path, so a required check from that workflow
+  # never posts and can never be satisfied. Running the cheap gate on every PR
+  # and letting it skip the heavy work is the pattern the occupancy workflow
+  # (#125) established; this applies it to the main suite.
+  #
+  # The relevant-path list is deliberately the positive form: anything not
+  # listed is not relevant, so a new directory joins the suite by being added
+  # here, not by being forgotten. These tests also read the repository's own
+  # shape -- the pin tests parse `.github/workflows/`, the root-shape guard
+  # reads the tracked tree, and the occupancy reading's Agda tree lives under
+  # `docs/occupancy/` -- so those paths are relevant even though they are
+  # documentation-shaped. In a `case` pattern, `*` crosses `/`.
+  gate:
+    name: Code relevance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      relevant: ${{ steps.push.outputs.relevant || steps.pr.outputs.relevant }}
+    steps:
+      # A push only starts this workflow on main (the branch filter above), so
+      # the gate has nothing to decide: every push is relevant.
+      - name: A push is already branch-filtered
+        id: push
+        if: github.event_name == 'push'
+        run: echo 'relevant=true' >> "$GITHUB_OUTPUT"
+
+      # Full history, because the three-dot diff names the merge base of the
+      # PR's base tip and its merge commit, and a stacked PR's merge base sits
+      # further back still.
+      - name: Checkout the change
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # nothing here pushes
+          fetch-depth: 0
+
+      # --no-renames, so a file renamed out of a listed path is reported as a
+      # deletion under its original name and still counts. -z with a
+      # NUL-delimited read, so a pathname Git would quote or that contains a
+      # newline arrives raw and matches the pattern. The base SHA travels
+      # through env, not template interpolation into the script.
+      - name: Does the change touch anything the suite exercises?
+        id: pr
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          relevant=false
+          # Every pattern is quoted, so the glob survives array assignment and
+          # fires at `case` time, against the diff -- an unquoted `src/*` would
+          # expand against the checkout the runner happens to be standing in.
+          patterns=('src/*' 'test/*' 'scripts/*' 'frontend/*' 'config/*'
+                    'bench/*' 'data/*' 'proofs/*' 'R/*' 'renv/*' 'Project.toml'
+                    'Manifest.toml' 'renv.lock' '.Rprofile' 'install.sh'
+                    'start.sh' 'docs/occupancy/*' 'docs/occupancy-2026-10.adoc'
+                    '.github/workflows/*')
+          # The diff goes to a file first because a process substitution hides
+          # git diff's exit status: an unavailable comparison SHA (a force-push
+          # on the base branch, for instance) or a repository error would read
+          # as "no changes", and the gate would post relevant=false -- skipping
+          # the Julia suite and the proof checker, whose `skipped` conclusion
+          # satisfies a required check -- so a relevant PR would pass silently.
+          # A failed diff must fail the gate itself: that is the one failure
+          # the required-check design cannot afford to skip. As in the
+          # occupancy gate, which this mirrors.
+          changed="$RUNNER_TEMP/ci-changed-files"
+          if ! git diff --no-renames --name-only -z "$BASE_SHA...HEAD" > "$changed"; then
+            echo "ERROR: git diff $BASE_SHA...HEAD failed" >&2
+            exit 1
+          fi
+          while IFS= read -r -d '' file; do
+            for pattern in "${patterns[@]}"; do
+              case "$file" in
+                $pattern) relevant=true; break 2 ;;
+              esac
+            done
+          done < "$changed"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+
   test:
     # The name is a fixed string, it carries no version, and the job has NO matrix.
     # Both are required, and the first without the second is a trap that has already
@@ -50,6 +139,10 @@ jobs:
     # silently. If a matrix is ever genuinely wanted here, the required context must move
     # to a matrix-free aggregator job first.
     name: Julia tests
+    # Runs only when the gate above found a relevant path; on a docs-only PR
+    # this job posts `skipped`, which satisfies the required check.
+    needs: gate
+    if: needs.gate.outputs.relevant == 'true'
     # Explicit, not ubuntu-latest: the R pin below names an apt package revision built
     # for 24.04, and a runner that silently rolled to the next LTS would take that pin
     # with it. `runs-on` cannot read `env`, so this is a literal.
@@ -375,6 +468,9 @@ jobs:
   # reads them.
   agda:
     name: Agda proofs
+    # As the Julia suite above: only when the gate found a relevant path.
+    needs: gate
+    if: needs.gate.outputs.relevant == 'true'
     runs-on: ubuntu-24.04
     container: debian:trixie-20250929-slim@sha256:1caf1c703c8f7e15dcf2e7769b35000c764e6f50e4d7401c355fb0248f3ddfdb
     timeout-minutes: 30
