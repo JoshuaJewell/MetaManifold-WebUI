@@ -260,20 +260,33 @@ sub-group.
 Counts are summed per taxon at the chosen rank, with rows that have no name at
 that rank pooled as `Unclassified`. This happens after the read-count bounds and
 any `analysis.exclude_categories` entry that applies to `differential`. Each
-taxon is fitted with its own negative-binomial GLM, `MASS::glm.nb(y ~ group +
-offset(log(size factor)))`, on the raw integer read counts. There are no
-pseudocounts. The group coefficient gets a Wald test, and Benjamini-Hochberg
-adjustment runs over the taxa that produced a p-value. Size factors come from
-the whole count matrix and are centred to a geometric mean of 1. The code is in
+taxon is fitted by the configured method. The default, `nb_glm`, fits a
+negative-binomial GLM, `MASS::glm.nb(y ~ group + offset(log(size factor)))`,
+on the raw integer read counts; there are no pseudocounts, the group
+coefficient gets a Wald test, and the effect is a log2 fold change. Size
+factors come from the whole count matrix and are centred to a geometric mean
+of 1. The alternative, `clr_welch`, runs Welch's t-test on centred log-ratios
+over the taxa passing `min_prevalence`, after `zCompositions::cmultRepl`
+replaces their zeros; its effect is a difference in CLR units, not a fold
+change. Under either method, Benjamini-Hochberg adjustment runs over the taxa
+that produced a p-value. The code is in
 `src/analysis/differential.jl`, and the route in `src/server/routes/analysis.jl`.
 
 Settings live under `analysis.differential` (see
 [Configuring analysis](#configuring-analysis-analysis-in-pipelineyml)):
 
+- `method`: `nb_glm` (default) or `clr_welch`, as above.
 - `offset`: `tss` (default) uses each sample's total reads. `rle` uses the
-  median of ratios over the taxa with reads in every sample.
+  median of ratios over the taxa with reads in every sample. Used by `nb_glm`
+  only; `clr_welch` ignores it, since log-ratios carry no library size.
 - `min_prevalence`: a fraction from 0 to 1 (default 0). A taxon with reads in a
-  smaller fraction of the samples is not fitted.
+  smaller fraction of the samples is not fitted. For `clr_welch` it is applied
+  before zero replacement, so on a sparse table it also keeps imputed values
+  for rare taxa out of every sample.
+- `replacement_delta`: `clr_welch` only; `cmultRepl`'s `frac`, between 0 and 1
+  (default 0.65). An imputed proportion above its taxon's smallest observed
+  proportion is lowered to this fraction of it. A replaced zero is not a
+  measurement.
 
 The result is a volcano plot and a table. The plot draws log2 fold change
 against -log10 of the raw p-value, coloured by whether the adjusted p-value is

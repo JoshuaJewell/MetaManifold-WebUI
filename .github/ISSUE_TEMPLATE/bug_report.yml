@@ -37,15 +37,13 @@ body:
     id: r
     attributes:
       label: R version
+      description: Only if the problem touches the R runtime; leave empty if you do not know it.
       placeholder: output of `R --version | head -1`
-    validations:
-      required: true
   - type: input
     id: browser
     attributes:
       label: Browser and version
-    validations:
-      required: true
+      description: Only for problems in the web interface; leave empty for command-line reports.
   - type: input
     id: commit
     attributes:
