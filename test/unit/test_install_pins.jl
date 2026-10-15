@@ -346,3 +346,33 @@ end
     end
     @test isempty(extras)
 end
+
+@testset "dependabot never batches a major" begin
+    # #124 grouped every frontend update, and with nothing requiring the
+    # checks it merged five framework majors (React 18->19, vite 6->8,
+    # TypeScript 5->7, react-router-dom 6->7, plotly 2->4) in one PR, with
+    # tsc already red until #140 repaired it. A major is a migration, not an
+    # update, so it must open its own PR: a Dependabot group only claims an
+    # update when its patterns match AND its update-types admit it -- a
+    # dependency matching no group gets its own PR. Every group must
+    # therefore NAME its update-types, and never "major". The frontend must
+    # also stay on the "bun" ecosystem: the 2026-09 security-update runs
+    # proved this account's npm_and_yarn updater refuses a Bun-managed
+    # project (see the header of .github/dependabot.yml).
+    dependabot = YAML.load_file(joinpath(REPO_ROOT, ".github", "dependabot.yml"))
+    @test dependabot["version"] == 2
+    ecosystems = Dict{String,Any}()
+    for u in dependabot["updates"]
+        @test !haskey(ecosystems, u["package-ecosystem"])
+        ecosystems[u["package-ecosystem"]] = u
+    end
+    @test sort(collect(keys(ecosystems))) == ["bun", "github-actions"]
+    @test ecosystems["bun"]["directory"] == "/frontend"
+    for u in dependabot["updates"]
+        for (_, group) in get(u, "groups", Dict{String,Any}())
+            update_types = get(group, "update-types", nothing)
+            @test update_types !== nothing
+            @test !("major" in update_types)
+        end
+    end
+end
