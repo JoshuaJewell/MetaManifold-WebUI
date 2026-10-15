@@ -89,16 +89,7 @@ for f in "$@"; do
     echo "::error file=$f::kyaml-format: $f is not KYAML — run scripts/kyaml-format.sh $f" >&2
     drift=$((drift + 1))
   else
-    target="$(readlink -f "$f")" || {
-      refuse "$f" "could not resolve the rewrite target"; continue
-    }
-    rewrite_tmp="$(mktemp "$(dirname "$target")/.kyaml-format.XXXXXX")" || {
-      refuse "$f" "could not create a temporary file beside the target"; continue
-    }
-    if ! cp -p "$target" "$rewrite_tmp" || ! cat "$out" > "$rewrite_tmp" || ! mv "$rewrite_tmp" "$target"; then
-      rm -f "$rewrite_tmp"
-      refuse "$f" "could not rewrite the file"; continue
-    fi
+    cat "$out" > "$f"
     echo "kyaml-format: rewrote $f"
     rewritten=$((rewritten + 1))
   fi
