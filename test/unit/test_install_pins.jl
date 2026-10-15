@@ -333,6 +333,11 @@ end
         # configs (codecov.yml) live under .github/.
         ".github", "bench", "config", "data", "docs", "frontend",
         "proofs", "scripts", "src", "test",
+        # Agent instructions (the agents.md convention): coding agents load
+        # this at startup, and it only works from the root, which is why it
+        # is listed here rather than living under .github/ with the other
+        # health files.
+        "AGENTS.md",
         # VCS housekeeping.
         ".gitignore",
     ]
