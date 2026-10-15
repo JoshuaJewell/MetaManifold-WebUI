@@ -363,8 +363,9 @@ jobs:
           path: lcov.info
           retention-days: 14
 
-  # Machine-checked proofs of the Benjamini-Hochberg adjustment and the TSS/RLE
-  # scaling algebra (proofs/agda, proofs/agda/README.md).
+  # Machine-checked proofs of the Benjamini-Hochberg adjustment, the TSS/RLE
+  # scaling algebra and PERMANOVA's permutation bookkeeping (proofs/agda,
+  # proofs/agda/README.md).
   # Agda publishes no 2.6.4.3 binary, and agda-stdlib 2.1 requires Agda 2.6.4.x,
   # so the pair comes from Debian trixie, which packages exactly that pair with
   # pre-built library interfaces. The image is pinned by digest and the two
