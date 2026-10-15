@@ -439,6 +439,8 @@ export interface DifferentialResult {
     min_prevalence: number
     /** nb_glm only. */
     offset?: 'tss' | 'rle'
+    /** nb_glm only: where each taxon's theta comes from. */
+    dispersion?: 'ml' | 'glmGamPoi'
     /** clr_welch only. */
     replacement_delta?: number
   }
