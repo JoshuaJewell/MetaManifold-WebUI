@@ -22,7 +22,7 @@ function csvBlob(result: DifferentialResult): Blob {
 
 /**
  * Differential abundance between exactly two runs or sub-groups: a model per
- * taxon at the chosen rank (negative-binomial GLM or Welch's t-test on CLR values, as
+ * taxon at the chosen rank (negative-binomial GLM or CLR linear model, as
  * configured), with BH-adjusted p-values, shown as a volcano plot and a table
  * that can be downloaded or added to the report. The first selected condition is the reference.
  */

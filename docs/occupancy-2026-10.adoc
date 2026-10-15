@@ -18,8 +18,11 @@ on 2026-10-14, and checks it against the typed reading.
 
 * `julia_allocated_bytes`: the `Base.gc_num()` delta over the stage (cost);
 * per task (one spawned search): the largest sampled VmRSS of the child
-  process it started (`peak_rss_kib`), and the kernel's own VmHWM for it
-  (`hwm_kib`);
+  process it started (`peak_rss_kib`), the kernel's own VmHWM for it
+  (`hwm_kib`), and the sample window its children were live in — `first_sample`,
+  the first sample taken after its first child started, and `last_sample`, the
+  last taken before its last was waited for, 0 for never — which its grade is
+  read from;
 * `child_peak_rss_kib`: the largest sum of the stage's children's VmRSS at
   one sampling instant (the stage's occupancy).
 
@@ -65,6 +68,42 @@ interval 10 ms.
   coincide. Here they did: each search's memory plateaus once its database is
   loaded.
 
+== Reading the numbers
+
+A recorded `peak_rss_kib` is a reading, not an occupancy: what a stage occupied
+depends on what the next stage inherits from it. So the probe grades a stage's
+whole window (`MemoryProbe`'s `task_grades`, `stage_grade`,
+`predicted_peak_rss_kib`, `cost_bound_rss_kib`, `reclaimed_kib`) and attaches the
+result to a recorded stage as `grades`; a record with no sample windows is left
+ungraded rather than graded on an assumed order. Tasks are read in sampled order
+(first sample, ties by record order). Each handover keeps only the tasks still
+live at it, so a task's `drift_kib` is the change in the live peak sum across its
+boundary — negative when the boundary also releases an earlier task — and
+`release_kib` is everything freed between its start and the next boundary, which
+can exceed that task's own peak. The folded drift is the sum of the peaks still
+live when the stage ends; the pinned instance's own `drift` is that non-negative
+live sum, the signed per-task delta being the extension its header records as
+H-2.
+
+For the three orders above, the algebra's predicted peak reproduces the measured
+stage peak exactly — 9204, 9192 and 18380 KiB — and the slack against the cost
+bound is what the cuts reclaimed: 9180, 9152 and 0 KiB.
+`scripts/check-occupancy-grades.jl` checks that equality, occupancy≤cost and
+non-negative reclamation against this page's raw record, rebuilding each order's
+windows from `docs/occupancy/schedules.yml` (the file records no windows of its
+own; the Session IR texts in this directory state the same interleavings). The
+reclamation readings are theorems over the pinned siblings at these numbers:
+`docs/occupancy/GradedStages.agda` — `no-reclaim` for the concurrent stage,
+`reclaimed` for the serial one, where 9204 KiB are released at the frontier and
+the cost reading counts them — and the two protocol-level statements
+(`occupancy-at-cut`, `protocol-occupancy≤cost`) as the siblings' own two-step
+over the stage's timeline. `docs/occupancy/reject` gains a fourth rejection, for
+reading the concurrent stage's drift as 0.
+
+`scripts/lint-occupancy-readings.sh` keeps production code from reading the key
+directly: outside `src/core/memory_probe.jl`, an occupancy figure must go through
+those helpers.
+
 == Status
 
 [cols="1,3,1,2",options="header"]
@@ -73,7 +112,8 @@ interval 10 ms.
 | MMW-01.1 | With the flag off, a stage record has exactly its earlier keys; with it on, it gains `occupancy`; old records still parse and merge | TESTED | `test/occupancy_disagreement_test.jl` ("flag off", "round trip", "through the pipeline's _attest")
 | MMW-01.2 | For this workload, the vsearch stage's cost (Julia allocation) is the same in all three orders | TESTED | same file, "two-thread disagreement" (asserted, within 1%)
 | MMW-01.3 | For this workload, the stage peak depends on the order (A-3), and each search's own peak does not | TESTED | same file, recorded in the test log; table above
-| MMW-01.4 | For the three Session IR texts, the stepper's counted bytes equal the HWM typed peak | TESTED | `scripts/check-occupancy.sh` (stepper output against `TypedPeak.agda`; two rejections in `docs/occupancy/reject`)
+| MMW-01.4 | For the three Session IR texts, the stepper's counted bytes equal the HWM typed peak | TESTED | `scripts/check-occupancy.sh` (stepper output against `TypedPeak.agda`; three rejections in `docs/occupancy/reject`)
+| MMW-01.5 | The recorded run's grades reproduce its measured stage peaks, and the reclamation the pinned siblings' laws read off them is what the cuts freed | TESTED | `scripts/check-occupancy-grades.jl` (the recorded record), `docs/occupancy/GradedStages.agda` (`no-reclaim`, `reclaimed`, `occupancy-at-cut` at the measured numbers), `test/unit/test_occupancy_grade.jl`
 | bridge | Counted bytes are bounded by the typed peak in general (occupancy-types' v0 → typed bridge) | OPEN | unchanged; this page gives three instances, not a proof
 |===
 
@@ -106,6 +146,8 @@ interval 10 ms.
 ----
 julia --project=. -t 2 test/occupancy_disagreement_test.jl   # set OCCUPANCY_RESULTS=<file> for YAML
 bash scripts/check-occupancy.sh                               # needs julia and agda 2.6.4.x
+julia --project=. scripts/check-occupancy-grades.jl           # the recorded run's grades
+bash scripts/lint-occupancy-readings.sh                       # no ungraded readings in src/
 ----
 
 `scripts/fetch-siblings.sh` fetches the siblings at their pins into

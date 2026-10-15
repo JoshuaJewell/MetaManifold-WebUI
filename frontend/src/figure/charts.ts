@@ -2,6 +2,7 @@
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 import { api } from '../api/client'
 import { extractAlphaPanel } from '../components/alphaMetrics'
+import { stripHtmlTags } from '../utils/text'
 import { textWidth } from './legend'
 import { PX_PER_PT, tickPt, titlePt, type AlphaMetricKey, type ChartSpec, type FigureDoc, type FigurePane } from './types'
 
@@ -119,7 +120,7 @@ export function paneFigure(raw: unknown, pane: FigurePane, doc: FigureDoc, opts:
   // A title wider than its pane shrinks to fit, clear of the group letter.
   const titleRoom = opts.widthPx - 2 * doc.letters.sizePt * PX_PER_PT
   const titleSize = Math.min(titlePt(doc) * PX_PER_PT,
-    titlePt(doc) * PX_PER_PT * titleRoom / Math.max(1, textWidth(title.replace(/<[^>]+>/g, ''), titlePt(doc) * PX_PER_PT, family)))
+    titlePt(doc) * PX_PER_PT * titleRoom / Math.max(1, textWidth(stripHtmlTags(title), titlePt(doc) * PX_PER_PT, family)))
 
   for (const k of axisKeys(L, 'x').concat(axisKeys(L, 'y'))) {
     const ax = { ...(L[k] as Record<string, unknown>) }

@@ -94,7 +94,7 @@ bash install.sh
 ```
 
 `install.sh` installs Julia (via juliaup) if missing, checks for R, then hands
-off to `install.jl`, which installs the Julia dependencies, locates or downloads
+off to `scripts/install.jl`, which installs the Julia dependencies, locates or downloads
 each external tool (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est, and the
 phylogeny tools MAFFT, trimAl, IQ-TREE, RAxML and gappa), and reproduces the R
 environment from `renv.lock`. It ends with a summary listing every dependency as
@@ -159,6 +159,7 @@ The web UI lets you create studies, configure pipeline parameters, launch runs, 
 | `JULIA_METAMANIFOLD_PORT` | `8080`            | Server port   |
 | `JULIA_METAMANIFOLD_ROOT` | working directory | Project root  |
 | `JULIA_THREADS`           | `8`               | Julia threads |
+| `JULIA_METAMANIFOLD_ALLOWED_ORIGINS` | none | Extra browser origins allowed to call the API, comma-separated (the server's own origin and the Vite dev server at `localhost:5173` are always allowed) |
 
 Or run the Julia server directly:
 
@@ -643,6 +644,30 @@ bash start.sh
 ```
 
 Open `http://localhost:8080`. The backend serves the frontend.
+
+### Split deployment (frontend and API on different origins)
+
+To serve the frontend from a different address than the API, set `apiBase` in
+`frontend/public/config.json` to the API's address, and list the frontend's
+address when starting the server:
+
+```bash
+JULIA_METAMANIFOLD_ALLOWED_ORIGINS=https://frontend.example bash start.sh
+```
+
+The server accepts browser requests from its own origin (`http://localhost:<port>`
+and `http://127.0.0.1:<port>`), from the Vite dev server (`localhost:5173`), and
+from the origins listed in `JULIA_METAMANIFOLD_ALLOWED_ORIGINS`, separated by
+commas. An origin has to match exactly, scheme and port included:
+`https://frontend.example` does not cover `http://frontend.example` or
+`https://frontend.example:8443`. A page on any other origin gets
+`403 Forbidden: origin not allowed` on every request that carries an `Origin`
+header, which is every write and every cross-origin read.
+
+This also applies to an SSH tunnel on a different local port (e.g.
+`http://localhost:9000`): the browser's origin is then `http://localhost:9000`,
+not the server's `http://localhost:8080`, so start the server with
+`JULIA_METAMANIFOLD_ALLOWED_ORIGINS=http://localhost:9000`.
 
 ## Input data
 

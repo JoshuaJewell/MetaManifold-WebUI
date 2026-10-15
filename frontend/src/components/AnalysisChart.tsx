@@ -1,13 +1,14 @@
 // © 2026 Joshua Benjamin Jewell. All rights reserved.
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 import Plotly from 'plotly.js-dist-min'
+import { stripHtmlTags } from '../utils/text'
 import { AddToReport } from './AddToReport'
 import { PlotlyChart } from './PlotlyChart'
 
 const figureTitle = (fig: unknown): string | null => {
   const t = (fig as { layout?: { title?: unknown } })?.layout?.title
   const text = typeof t === 'string' ? t : (t as { text?: string } | undefined)?.text
-  return text ? text.replace(/<[^>]+>/g, '') : null
+  return text ? stripHtmlTags(text) : null
 }
 
 // The chart as standalone SVG, at a fixed print width.

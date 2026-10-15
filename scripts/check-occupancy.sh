@@ -4,8 +4,9 @@
 #
 # Gate for the occupancy reading of the vsearch stage (docs/occupancy-2026-10.adoc):
 #   1. each Session IR text checks, and occupancy-types' stepper counts its bytes;
-#   2. TypedPeak.agda type-checks against the pinned siblings, and each module in
-#      docs/occupancy/reject is refused at its own declaration;
+#   2. TypedPeak.agda and GradedStages.agda type-check against the pinned
+#      siblings, and each module in docs/occupancy/reject is refused at its own
+#      declaration;
 #   3. the counted bytes equal the typed peak, order by order.
 # Needs julia and agda (2.6.4.x) on PATH. Exit 0 only if all three hold.
 set -euo pipefail
@@ -22,6 +23,29 @@ logs=_build/check-logs
 mkdir -p "$logs"
 failures=0
 
+# GitHub renders an `::error` line as a check annotation, and annotations -- unlike
+# job logs -- can be read back through the API. A failure that only happens in CI
+# must be readable from a machine that cannot download the log, so every failure
+# below says what it was and repeats the prover's own last lines: % escapes to
+# %25 and newlines to %0A, as the workflow-command syntax requires.
+annotate() {  # title file log
+  [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+  printf '::error file=%s,title=%s::%s\n' "$2" "$1" \
+    "$(awk 'NR > 1 { printf "%%0A" } { gsub(/%/, "%25"); printf "%s", $0 }' "$3" |
+       tail -c 6000)"
+}
+
+# One Agda module that must type-check, with its own log.
+check_agda() {  # file label
+  if ! agda "${flags[@]}" "$1" >"$logs/$2.log" 2>&1; then
+    cat "$logs/$2.log"
+    annotate "Agda refused $2" "$1" "$logs/$2.log"
+    echo "ERROR: $1 does not type-check" >&2
+    exit 1
+  fi
+  echo "PASS: $2"
+}
+
 # Order -> Session IR file and TypedPeak lemma.
 orders=(asv-then-otu otu-then-asv concurrent)
 
@@ -36,18 +60,26 @@ for o in "${orders[@]}"; do
 done
 
 echo "== Typed peak (Agda, HWM Timeline)"
-agda "${flags[@]}" docs/occupancy/TypedPeak.agda >"$logs/TypedPeak.log" 2>&1 ||
-  { cat "$logs/TypedPeak.log"; echo "ERROR: TypedPeak.agda does not type-check" >&2; exit 1; }
-echo "PASS: TypedPeak.agda"
+check_agda docs/occupancy/TypedPeak.agda TypedPeak.agda
+
+# The graded reading (fork issue #105): occupancy-types' Reclaim theorems at the
+# measured grades, from the same pinned siblings. The recorded run's grades
+# against its measurement are checked by scripts/check-occupancy-grades.jl, which
+# needs the project's Julia packages and so runs in the disagreement job.
+check_agda docs/occupancy/GradedStages.agda GradedStages.agda
 for file in docs/occupancy/reject/*.agda; do
   name="$(basename -- "$file" .agda)"
   log="$logs/$name.log"
   if agda "${flags[@]}" -i docs/occupancy/reject "$file" >"$log" 2>&1; then
-    cat "$log"; echo "ERROR: invalid claim accepted: $name" >&2; failures=$((failures + 1)); continue
+    cat "$log"
+    annotate "Invalid claim accepted: $name" "$file" "$log"
+    echo "ERROR: invalid claim accepted: $name" >&2; failures=$((failures + 1)); continue
   fi
   if ! grep -Eq "/$name\.agda:[0-9]+,[0-9]+" "$log" || ! grep -q 'when checking that' "$log" ||
      grep -Eq 'Not in scope|Failed to find|Unsolved|Parse error' "$log"; then
-    cat "$log"; echo "ERROR: $name failed for the wrong reason" >&2; failures=$((failures + 1)); continue
+    cat "$log"
+    annotate "$name failed for the wrong reason" "$file" "$log"
+    echo "ERROR: $name failed for the wrong reason" >&2; failures=$((failures + 1)); continue
   fi
   echo "PASS: rejected $name ($(grep -m1 -E '[0-9]+ != [0-9]+' "$log"))"
 done
@@ -59,6 +91,8 @@ for o in "${orders[@]}"; do
   printf '%-14s %10s %10s\n' "$o" "${counted[$o]}" "$typed"
   if [ -z "${counted[$o]}" ] || [ -z "$typed" ] || [ "${counted[$o]}" != "$typed" ]; then
     echo "ERROR: $o: counted ${counted[$o]:-?} != typed ${typed:-?}" >&2; failures=$((failures + 1))
+    echo "counted ${counted[$o]:-?} KiB != typed ${typed:-?} KiB" >"$logs/counted-$o.log"
+    annotate "Counted bytes != typed peak ($o)" docs/occupancy/TypedPeak.agda "$logs/counted-$o.log"
   fi
 done
 

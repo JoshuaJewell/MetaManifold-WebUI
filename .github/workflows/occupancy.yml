@@ -22,6 +22,9 @@ on:
       - src/pipeline/tools.jl
       - src/server/routes/pipeline.jl
       - test/occupancy_disagreement_test.jl
+      - test/unit/test_occupancy_grade.jl
+      - scripts/check-occupancy-grades.jl
+      - scripts/lint-occupancy-readings.sh
       - docs/occupancy/**
       - docs/occupancy-2026-10.adoc
       - scripts/check-occupancy.sh
@@ -35,6 +38,9 @@ on:
       - src/pipeline/tools.jl
       - src/server/routes/pipeline.jl
       - test/occupancy_disagreement_test.jl
+      - test/unit/test_occupancy_grade.jl
+      - scripts/check-occupancy-grades.jl
+      - scripts/lint-occupancy-readings.sh
       - docs/occupancy/**
       - docs/occupancy-2026-10.adoc
       - scripts/check-occupancy.sh
@@ -64,7 +70,7 @@ jobs:
       # As in ci.yml: the root .Rprofile would otherwise bootstrap renv.
       RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -107,6 +113,15 @@ jobs:
       - name: Three orders of the vsearch stage
         run: julia --project=. -t 2 test/occupancy_disagreement_test.jl
 
+      # Fork issue #105: the grades the recorded run's windows imply, read back
+      # against its own measurement (docs/occupancy/schedules.yml).
+      - name: Graded reading of the recorded run
+        run: julia --project=. scripts/check-occupancy-grades.jl
+
+      # And no production code reads a peak without those grades.
+      - name: Occupancy readings are graded
+        run: bash scripts/lint-occupancy-readings.sh
+
   typed-peak:
     name: Occupancy typed peak
     runs-on: ubuntu-24.04
@@ -124,7 +139,7 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates curl git agda-bin=2.6.4.3-1+b2
           agda --version | grep -qx 'Agda version 2.6.4.3'
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false   # the siblings are public; nothing here pushes
 
