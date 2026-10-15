@@ -11,6 +11,24 @@
 # everything here installs from pinned URLs checked against pinned SHA256s, as
 # ci.yml now does too. The disagreement test also runs in ci.yml's full suite;
 # it runs here as well so that a change to the probe gets its own check.
+#
+# #116 merged with this workflow's "Occupancy typed peak" check red (its squash
+# carried a draft `TH.[_]` placeholder; #117 fixed the proof), because nothing
+# required the check to pass first -- and nothing COULD have: a check posts
+# only when its workflow runs, and the pull_request trigger was path-filtered,
+# so requiring these checks would have deadlocked every PR that touches no
+# occupancy file. A required check that never posts can never be satisfied; the
+# trap ci.yml's header records for its own job names.
+#
+# So the pull_request path filter moved into the `Occupancy relevance` gate
+# below. The workflow now runs on EVERY pull request; the gate decides whether
+# the change touches the occupancy reading; the two heavy jobs run only when it
+# does, and post their checks as `skipped` otherwise, which a required check
+# counts as satisfied. The gate itself posts on every PR too, and it is the one
+# check of the three that must be required without exception: if the gate
+# failed, its dependents would be skipped and would satisfy their requirement
+# silently. The push trigger keeps its native paths filter, so a push to main
+# still starts this workflow only when it should.
 name: Occupancy reading
 
 on:
@@ -30,22 +48,10 @@ on:
       - scripts/check-occupancy.sh
       - scripts/fetch-siblings.sh
       - .github/workflows/occupancy.yml
-  # Any base branch, so a PR stacked on another one is checked too.
+  # No paths filter, on purpose (see above): the gate must post its check on
+  # every PR, whichever files the PR touches. Any base branch, so a PR stacked
+  # on another one is gated too.
   pull_request:
-    paths:
-      - src/core/memory_probe.jl
-      - src/core/provenance.jl
-      - src/pipeline/tools.jl
-      - src/server/routes/pipeline.jl
-      - test/occupancy_disagreement_test.jl
-      - test/unit/test_occupancy_grade.jl
-      - scripts/check-occupancy-grades.jl
-      - scripts/lint-occupancy-readings.sh
-      - docs/occupancy/**
-      - docs/occupancy-2026-10.adoc
-      - scripts/check-occupancy.sh
-      - scripts/fetch-siblings.sh
-      - .github/workflows/occupancy.yml
 
 permissions:
   contents: read
@@ -62,7 +68,59 @@ env:
   JULIA_SHA256: 41b84d727e4e96fbf3ed9e92fa195d773d247b9097f73fad688f8b699758bae7
 
 jobs:
+  # Decides whether the PR touches the occupancy reading at all. The file list
+  # is the pull_request half of the old paths filter, moved here because a
+  # pinned-actions workflow cannot use a third-party paths-filter action (the
+  # account's allow-list refuses one) -- plain `case` globs are all it takes.
+  # In a case pattern `*` crosses `/`, so `docs/occupancy/*` is the old
+  # `docs/occupancy/**`.
+  gate:
+    name: Occupancy relevance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      relevant: ${{ steps.push.outputs.relevant || steps.pr.outputs.relevant }}
+    steps:
+      # A push only starts this workflow when a `paths:` file changed (the
+      # trigger filter above), so the gate has nothing to decide on pushes.
+      - name: A push is already path-filtered
+        id: push
+        if: github.event_name == 'push'
+        run: echo 'relevant=true' >> "$GITHUB_OUTPUT"
+
+      # Full history, because the three-dot diff names the merge base of the
+      # PR's base tip and its merge commit -- a shallow checkout does not have
+      # both, and a stacked PR's merge base sits further back still.
+      - name: Checkout the change
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false   # nothing here pushes
+          fetch-depth: 0
+
+      - name: Does the change touch the occupancy reading?
+        id: pr
+        if: github.event_name == 'pull_request'
+        run: |
+          relevant=false
+          patterns=(src/core/memory_probe.jl src/core/provenance.jl src/pipeline/tools.jl
+                    src/server/routes/pipeline.jl test/occupancy_disagreement_test.jl
+                    test/unit/test_occupancy_grade.jl scripts/check-occupancy-grades.jl
+                    scripts/lint-occupancy-readings.sh 'docs/occupancy/*'
+                    docs/occupancy-2026-10.adoc scripts/check-occupancy.sh
+                    scripts/fetch-siblings.sh .github/workflows/occupancy.yml)
+          while IFS= read -r file; do
+            for pattern in "${patterns[@]}"; do
+              case "$file" in
+                $pattern) relevant=true; break 2 ;;
+              esac
+            done
+          done < <(git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD")
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+
   disagreement:
+    needs: gate
+    if: needs.gate.outputs.relevant == 'true'
     name: Occupancy disagreement test
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -123,6 +181,8 @@ jobs:
         run: bash scripts/lint-occupancy-readings.sh
 
   typed-peak:
+    needs: gate
+    if: needs.gate.outputs.relevant == 'true'
     name: Occupancy typed peak
     runs-on: ubuntu-24.04
     # The Agda 2.6.4.3 Debian trixie packages, in a digest-pinned image, as the
