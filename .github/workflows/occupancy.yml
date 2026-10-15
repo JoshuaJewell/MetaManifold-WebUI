@@ -70,7 +70,7 @@ jobs:
       # As in ci.yml: the root .Rprofile would otherwise bootstrap renv.
       RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -139,7 +139,7 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates curl git agda-bin=2.6.4.3-1+b2
           agda --version | grep -qx 'Agda version 2.6.4.3'
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false   # the siblings are public; nothing here pushes
 
