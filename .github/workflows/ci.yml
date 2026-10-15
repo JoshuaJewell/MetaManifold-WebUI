@@ -148,6 +148,12 @@ jobs:
             renv-${{ runner.os }}-R${{ env.R_APT_VERSION }}-
 
       # R_CLI_DYNAMIC and TERM make renv print progress one line at a time in the log.
+      # This verification list -- and the RCall visibility check below -- must
+      # track renv.lock: restore() installs only what the lock records, so a
+      # package removed from the lock fails here at verification, nowhere near
+      # the code that stopped using it. MEASURED in this PR: dplyr left the lock
+      # and this check failed until both lists were updated. Keep them in the
+      # same commit as any lock change.
       - name: Install R packages
         env:
           RENV_PATHS_CACHE: /opt/renv-cache
@@ -243,6 +249,8 @@ jobs:
         run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
 
       - name: Verify R packages visible from RCall
+        # The second of the two lists that must track renv.lock; see the
+        # Install R packages step above for the coupling.
         run: |
           julia --project=. -e '
             using RCall
