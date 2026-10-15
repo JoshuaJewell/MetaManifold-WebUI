@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+#
+# Editor configuration for this repository. The Julia sources indent with four
+# spaces, the frontend with two, YAML with two, and every text file ends with
+# a newline and no trailing whitespace.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.jl]
+indent_style = space
+indent_size = 4
+
+[*.{jl}]
+max_line_length = off
+
+[{*.ts,*.tsx,*.js,*.jsx,*.json,*.css,*.html}]
+indent_style = space
+indent_size = 2
+
+[{*.yml,*.yaml,*.kyaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+indent_style = space
+indent_size = 2
+# Markdown's hard line breaks are two trailing spaces; keep them.
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
+
+[Justfile]
+indent_style = space
+indent_size = 4

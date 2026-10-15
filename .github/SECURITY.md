@@ -60,7 +60,7 @@ in its `attestation.yml`.
 it enabled; the *Report a vulnerability* button on the Security tab reaches
 the maintainers privately. Use it.
 
-**By email:** contact **jjewell23@rvc.ac.uk** (Jonathan Jewell, the project
+**By email:** contact **developer@joshuajewell.dev** (Jonathan Jewell, the project
 owner) with `[security]` in the subject line.
 
 Include, where they apply:

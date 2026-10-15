@@ -323,6 +323,7 @@ archive/
 !.github
 !.github/**
 !.Rprofile
+!.editorconfig
 
 # Brainstorming visual-companion scratch (mock-ups, server state)
 .superpowers/
