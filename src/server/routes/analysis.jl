@@ -1203,7 +1203,8 @@ function _differential_config(study::String)
     DifferentialConfig(String(val("analysis.differential.offset", "tss")),
                        Float64(val("analysis.differential.min_prevalence", 0.0));
                        method=String(val("analysis.differential.method", "nb_glm")),
-                       replacement_delta=Float64(val("analysis.differential.replacement_delta", 0.65)))
+                       replacement_delta=Float64(val("analysis.differential.replacement_delta", 0.65)),
+                       dispersion=String(val("analysis.differential.dispersion", "ml")))
 end
 
 """
