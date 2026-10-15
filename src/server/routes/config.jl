@@ -125,8 +125,10 @@ const _NULLABLE_NUMBERS = ("phylogeny.placement.place.heuristic",)
 """
     _config_value_error(key, value) -> Union{String,Nothing}
 
-Why a value cannot be saved under this key, or nothing. The type follows the
-factory default; a key whose default is ~ accepts a string, number or boolean.
+Return a rejection message for `value` under the dotted pipeline `key`, or
+`nothing`. Enums, command arguments, remote settings and file-name parts have
+specific checks; otherwise the type follows the factory default, with no type
+restriction for a default of ~. Does not write config or check key recognition.
 """
 function _config_value_error(key::String, value)
     v = value isa JSON3.Array ? collect(value) : value
@@ -292,6 +294,13 @@ end
 # Read the document; an unparseable file becomes a 400 naming it. PrimersLibrary.load
 # raises on a bad file because an empty document would pass validation and the next
 # Save would overwrite the real primers. Returns the document, or an HTTP.Response error.
+"""
+    _read_primers() -> Union{Dict,HTTP.Response}
+
+Read the canonical primers document, or an empty document if the file is absent.
+Loading errors become a 400 `primers_unreadable` response naming the file and
+reason; the file is not modified.
+"""
 function _read_primers()
     try
         PrimersLibrary.load(_primers_path())

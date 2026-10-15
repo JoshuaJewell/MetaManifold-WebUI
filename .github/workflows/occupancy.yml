@@ -1,0 +1,238 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+#
+# The occupancy reading of the vsearch stage (docs/occupancy-2026-10.adoc):
+#   * the two-thread disagreement test (test/occupancy_disagreement_test.jl) on
+#     the pinned vsearch, and
+#   * Session IR's counted bytes against the typed peak computed in Agda from
+#     the pinned proof siblings (scripts/check-occupancy.sh).
+#
+# This account allows only GitHub's own actions and its own, pinned by SHA, so
+# everything here installs from pinned URLs checked against pinned SHA256s, as
+# ci.yml now does too. The disagreement test also runs in ci.yml's full suite;
+# it runs here as well so that a change to the probe gets its own check.
+#
+# #116 merged with this workflow's "Occupancy typed peak" check red (its squash
+# carried a draft `TH.[_]` placeholder; #117 fixed the proof), because nothing
+# required the check to pass first -- and nothing COULD have: a check posts
+# only when its workflow runs, and the pull_request trigger was path-filtered,
+# so requiring these checks would have deadlocked every PR that touches no
+# occupancy file. A required check that never posts can never be satisfied; the
+# trap ci.yml's header records for its own job names.
+#
+# So the pull_request path filter moved into the `Occupancy relevance` gate
+# below. The workflow now runs on EVERY pull request; the gate decides whether
+# the change touches the occupancy reading; the two heavy jobs run only when it
+# does, and post their checks as `skipped` otherwise, which a required check
+# counts as satisfied. The gate itself posts on every PR too, and it is the one
+# check of the three that must be required without exception: if the gate
+# failed, its dependents would be skipped and would satisfy their requirement
+# silently. The push trigger keeps its native paths filter, so a push to main
+# still starts this workflow only when it should.
+name: Occupancy reading
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/core/memory_probe.jl
+      - src/core/provenance.jl
+      - src/pipeline/tools.jl
+      - src/server/routes/pipeline.jl
+      - test/occupancy_disagreement_test.jl
+      - test/unit/test_occupancy_grade.jl
+      - scripts/check-occupancy-grades.jl
+      - scripts/lint-occupancy-readings.sh
+      - docs/occupancy/**
+      - docs/occupancy-2026-10.adoc
+      - scripts/check-occupancy.sh
+      - scripts/fetch-siblings.sh
+      - .github/workflows/occupancy.yml
+  # No paths filter, on purpose (see above): the gate must post its check on
+  # every PR, whichever files the PR touches. Any base branch, so a PR stacked
+  # on another one is gated too.
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+env:
+  # Julia 1.12.5, the version Manifest.toml was resolved with. The checksum is
+  # julialang's own (bin/checksums/julia-1.12.5.sha256), as the official Docker
+  # image (docker-library/julia a39df01) records it.
+  JULIA_URL: https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.5-linux-x86_64.tar.gz
+  JULIA_SHA256: 41b84d727e4e96fbf3ed9e92fa195d773d247b9097f73fad688f8b699758bae7
+
+jobs:
+  # Decides whether the PR touches the occupancy reading at all. The file list
+  # is the pull_request half of the old paths filter, moved here because a
+  # pinned-actions workflow cannot use a third-party paths-filter action (the
+  # account's allow-list refuses one) -- plain `case` globs are all it takes.
+  # In a case pattern `*` crosses `/`, so `docs/occupancy/*` is the old
+  # `docs/occupancy/**`.
+  gate:
+    name: Occupancy relevance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      relevant: ${{ steps.push.outputs.relevant || steps.pr.outputs.relevant }}
+    steps:
+      # A push only starts this workflow when a `paths:` file changed (the
+      # trigger filter above), so the gate has nothing to decide on pushes.
+      - name: A push is already path-filtered
+        id: push
+        if: github.event_name == 'push'
+        run: echo 'relevant=true' >> "$GITHUB_OUTPUT"
+
+      # Full history, because the three-dot diff names the merge base of the
+      # PR's base tip and its merge commit -- a shallow checkout does not have
+      # both, and a stacked PR's merge base sits further back still.
+      - name: Checkout the change
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # nothing here pushes
+          fetch-depth: 0
+
+      - name: Does the change touch the occupancy reading?
+        id: pr
+        if: github.event_name == 'pull_request'
+        env:
+          # zizmor flags template expressions interpolated into run scripts
+          # (template-injection), and the gate script is easier to run locally
+          # with the value in an environment variable in any case. The base SHA
+          # is GitHub-supplied, but the indirection costs nothing.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          relevant=false
+          patterns=(src/core/memory_probe.jl src/core/provenance.jl src/pipeline/tools.jl
+                    src/server/routes/pipeline.jl test/occupancy_disagreement_test.jl
+                    test/unit/test_occupancy_grade.jl scripts/check-occupancy-grades.jl
+                    scripts/lint-occupancy-readings.sh 'docs/occupancy/*'
+                    docs/occupancy-2026-10.adoc scripts/check-occupancy.sh
+                    scripts/fetch-siblings.sh .github/workflows/occupancy.yml)
+          # The diff goes to a file first because a process substitution hides
+          # git diff's exit status: an unavailable comparison SHA or a repository
+          # error would read as "no changes", and the gate would post
+          # relevant=false -- skipping the two occupancy jobs, whose `skipped`
+          # conclusion satisfies a required check -- so a relevant PR would
+          # pass silently. A failed diff must fail the gate itself: that is
+          # the one failure the required-check design cannot afford to skip.
+          changed="$RUNNER_TEMP/occupancy-changed-files"
+          if ! git diff --no-renames --name-only -z "$BASE_SHA...HEAD" > "$changed"; then
+            echo "ERROR: git diff $BASE_SHA...HEAD failed" >&2
+            exit 1
+          fi
+          while IFS= read -r -d '' file; do
+            for pattern in "${patterns[@]}"; do
+              case "$file" in
+                $pattern) relevant=true; break 2 ;;
+              esac
+            done
+          done < "$changed"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+
+  disagreement:
+    needs: gate
+    if: needs.gate.outputs.relevant == 'true'
+    name: Occupancy disagreement test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # As in ci.yml: the root .Rprofile would otherwise bootstrap renv.
+      RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Julia
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$JULIA_URL" julia.tar.gz
+          echo "$JULIA_SHA256  julia.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/julia
+          sudo tar xzf julia.tar.gz -C /opt/julia --strip-components=1
+          rm julia.tar.gz
+          echo /opt/julia/bin >> "$GITHUB_PATH"
+
+      # RCall builds against R. The occupancy test uses no R package.
+      - name: Install R
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends r-base-core
+
+      - name: Instantiate the project
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+
+      # The pinned vsearch (config/defaults/tool_versions.yml), refused unless it
+      # hashes to the pinned SHA256, as ci.yml installs it.
+      - name: Install vsearch
+        run: |
+          eval "$(julia --project=. -e '
+            using YAML
+            v = YAML.load_file("config/defaults/tool_versions.yml")["tools"]["vsearch"]
+            a = v["archives"]["linux-x86_64"]
+            println("VSEARCH_VERSION=", v["version"]); println("VSEARCH_URL=", a["url"]); println("VSEARCH_SHA256=", a["sha256"])')"
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$VSEARCH_URL" vsearch.tar.gz
+          echo "$VSEARCH_SHA256  vsearch.tar.gz" | sha256sum -c -
+          tar xzf vsearch.tar.gz --warning=no-unknown-keyword
+          sudo mv "vsearch-$VSEARCH_VERSION-linux-x86_64/bin/vsearch" /usr/local/bin/vsearch
+          rm -rf vsearch.tar.gz "vsearch-$VSEARCH_VERSION-linux-x86_64"
+          vsearch --version
+
+      - name: Three orders of the vsearch stage
+        run: julia --project=. -t 2 test/occupancy_disagreement_test.jl
+
+      # Fork issue #105: the grades the recorded run's windows imply, read back
+      # against its own measurement (docs/occupancy/schedules.yml).
+      - name: Graded reading of the recorded run
+        run: julia --project=. scripts/check-occupancy-grades.jl
+
+      # And no production code reads a peak without those grades.
+      - name: Occupancy readings are graded
+        run: bash scripts/lint-occupancy-readings.sh
+
+  typed-peak:
+    needs: gate
+    if: needs.gate.outputs.relevant == 'true'
+    name: Occupancy typed peak
+    runs-on: ubuntu-24.04
+    # The Agda 2.6.4.3 Debian trixie packages, in a digest-pinned image, as the
+    # upstream proof job uses. The siblings need no standard library.
+    container: debian:trixie-20250929-slim@sha256:1caf1c703c8f7e15dcf2e7769b35000c764e6f50e4d7401c355fb0248f3ddfdb
+    timeout-minutes: 20
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      # git before checkout, so the checkout is a repository and the siblings can be fetched.
+      - name: Install git, curl and Agda
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends ca-certificates curl git agda-bin=2.6.4.3-1+b2
+          agda --version | grep -qx 'Agda version 2.6.4.3'
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # the siblings are public; nothing here pushes
+
+      # The Session IR stepper is Julia (standard library only).
+      - name: Install Julia
+        shell: bash
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$JULIA_URL" julia.tar.gz
+          echo "$JULIA_SHA256  julia.tar.gz" | sha256sum -c -
+          mkdir -p /opt/julia
+          tar xzf julia.tar.gz -C /opt/julia --strip-components=1
+          rm julia.tar.gz
+          echo /opt/julia/bin >> "$GITHUB_PATH"
+
+      - name: Counted bytes against typed peak
+        shell: bash
+        run: bash scripts/check-occupancy.sh

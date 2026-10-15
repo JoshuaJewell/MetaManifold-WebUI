@@ -1,0 +1,13 @@
+(* SPDX-License-Identifier: AGPL-3.0-only *)
+(* vsearch-asv-then-otu.sir - the vsearch stage with the two searches run one
+   after the other, ASV first: the single-stage re-run's order. Each search is
+   one buffer, sized by its measured peak in KiB (docs/occupancy-2026-10.adoc,
+   2026-10-14 run); each process exits holding nothing, so its buffer is dropped
+   before the next search starts.
+
+   Expected: steps = 0 (no communication), peak_live = max 9204 9180 = 9204. *)
+let asv = alloc 9204 in
+let _ = drop asv in
+let otu = alloc 9180 in
+let _ = drop otu in
+unit

@@ -1,0 +1,9 @@
+(* SPDX-License-Identifier: AGPL-3.0-only *)
+(* vsearch-otu-then-asv.sir - the same two searches, OTU first.
+
+   Expected: steps = 0, peak_live = max 9192 9152 = 9192. *)
+let otu = alloc 9192 in
+let _ = drop otu in
+let asv = alloc 9152 in
+let _ = drop asv in
+unit

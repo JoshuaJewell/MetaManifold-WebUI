@@ -283,4 +283,4 @@ fi
 echo ""
 echo "Running install.jl..."
 echo ""
-julia --project=. install.jl "$@"
+julia --project=. scripts/install.jl "$@"

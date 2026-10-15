@@ -250,6 +250,9 @@ vignettes/*.pdf
 ## Documentation kept local except published release notes
 docs/*
 !docs/release-notes/
+# and the dated occupancy reading (MMW-01), whose table the gate checks
+!docs/occupancy-2026-10.adoc
+!docs/occupancy/
 
 # translation temp files
 
@@ -320,6 +323,7 @@ archive/
 !.github
 !.github/**
 !.Rprofile
+!.editorconfig
 
 # Brainstorming visual-companion scratch (mock-ups, server state)
 .superpowers/
@@ -335,3 +339,6 @@ dev/server.log
 
 # Agda interface files (proofs/agda)
 proofs/agda/_build/
+# Proof siblings fetched by scripts/fetch-siblings.sh, and Agda interface files
+/_build/
+*.agdai
