@@ -1,0 +1,39 @@
+# Dependabot version updates. Until this file landed, only security updates
+# ran (those need no configuration), and those failed for a separate reason:
+# the "Dependabot Updates" runs of 2026-09-26..27 tried to fix alerts against
+# fixtures under test/doi using the npm_and_yarn updater, which refuses a
+# Bun-managed project ("bun.lock but no package-lock.json"). Those fixtures
+# have since left the repository and both alerts are fixed.
+#
+# What cannot be covered here: Julia (Project.toml / Manifest.toml) and R
+# (renv.lock) are not Dependabot package-ecosystems. Their pins live in
+# config/defaults/tool_versions.yml and are asserted by
+# test/unit/test_install_pins.jl and the CI workflow instead.
+#
+# The workflows pin every action to a full commit SHA (this account's
+# allowlist policy, asserted by test/unit/test_install_pins.jl). Dependabot
+# advances those pins to the current SHA of the tracked version, so the
+# pinning policy itself survives updates.
+version: 2
+updates:
+  # The frontend is Bun-managed: package.json plus bun.lock, no npm/yarn/pnpm
+  # lockfile, so it must be declared as the "bun" ecosystem.
+  - package-ecosystem: "bun"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      actions:
+        patterns: ["*"]
