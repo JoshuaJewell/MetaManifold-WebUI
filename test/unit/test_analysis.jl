@@ -102,6 +102,22 @@
         @test all(a -> endswith(String(get(a, "yref", "")), " domain"), sig_anns)
     end
 
+    @testset "alpha_boxplot paired test needs shared samples" begin
+        label(fig) = first(get(fig["layout"], "annotations", Any[]))["text"]
+        unshared = [
+            ("GroupA", ["s1", "s2"], [10, 20], [1.0, 2.0], [0.7, 0.8]),
+            ("GroupB", ["s3"],       [15],     [1.5],      [0.75]),
+        ]
+        fig = Analysis.alpha_boxplot(unshared; annotate_significance=true, paired_samples=true)
+        @test startswith(label(fig), "KW")
+        shared = [
+            ("GroupA", ["s1", "s2"], [10, 20], [1.0, 2.0], [0.7, 0.8]),
+            ("GroupB", ["s1", "s2"], [15, 25], [1.5, 2.5], [0.75, 0.85]),
+        ]
+        fig = Analysis.alpha_boxplot(shared; annotate_significance=true, paired_samples=true)
+        @test startswith(label(fig), "Paired Wilcoxon")
+    end
+
     @testset "alpha_boxplot paired lines" begin
         # "solo" appears in one group only, so nothing can be paired with it.
         groups = [

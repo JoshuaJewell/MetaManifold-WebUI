@@ -1,0 +1,12 @@
+(* SPDX-License-Identifier: AGPL-3.0-only *)
+(* vsearch-concurrent.sir - the two searches spawned together, as the full
+   pipeline runs them. Session IR has no parallel composition, so this is the
+   interleaving the measurement observed: both buffers live at once, then both
+   dropped.
+
+   Expected: steps = 0, peak_live = 9176 + 9204 = 18380. *)
+let asv = alloc 9176 in
+let otu = alloc 9204 in
+let _ = drop asv in
+let _ = drop otu in
+unit

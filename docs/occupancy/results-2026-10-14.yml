@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# The raw MemoryProbe records behind docs/occupancy-2026-10.adoc, written by
+# test/occupancy_disagreement_test.jl with OCCUPANCY_RESULTS set (2026-10-14).
+vsearch: "vsearch v2.30.5_linux_x86_64, 15.7GB RAM, 4 cores"
+julia: "1.12.5"
+threads: 2
+cpus: 4
+cost_spread: 0.00039231071008238524
+orders:
+  asv_then_otu:
+    probe: "MemoryProbe 1"
+    interval_ms: 10
+    samples: 56
+    julia_allocated_bytes: 978432
+    julia_live_bytes_delta: 978544
+    child_peak_rss_kib: 9204
+    tasks:
+      - label: "vsearch:asv"
+        processes: 1
+        samples: 33
+        peak_rss_kib: 9204
+        hwm_kib: 9204
+      - label: "vsearch:otu"
+        processes: 1
+        samples: 20
+        peak_rss_kib: 9180
+        hwm_kib: 9180
+  otu_then_asv:
+    probe: "MemoryProbe 1"
+    interval_ms: 10
+    samples: 57
+    julia_allocated_bytes: 978720
+    julia_live_bytes_delta: 978832
+    child_peak_rss_kib: 9192
+    tasks:
+      - label: "vsearch:otu"
+        processes: 1
+        samples: 22
+        peak_rss_kib: 9192
+        hwm_kib: 9192
+      - label: "vsearch:asv"
+        processes: 1
+        samples: 33
+        peak_rss_kib: 9152
+        hwm_kib: 9152
+  concurrent:
+    probe: "MemoryProbe 1"
+    interval_ms: 10
+    samples: 33
+    julia_allocated_bytes: 978816
+    julia_live_bytes_delta: 978928
+    child_peak_rss_kib: 18380
+    tasks:
+      - label: "vsearch:asv"
+        processes: 1
+        samples: 30
+        peak_rss_kib: 9176
+        hwm_kib: 9176
+      - label: "vsearch:otu"
+        processes: 1
+        samples: 24
+        peak_rss_kib: 9204
+        hwm_kib: 9204

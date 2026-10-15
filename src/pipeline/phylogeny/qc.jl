@@ -1,7 +1,7 @@
 # © 2026 Joshua Benjamin Jewell. All rights reserved.
 # Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
-## Quality summaries of each step
+## Quality summaries of the align and trim steps
 # Written to qc/<step>.json after the step runs and read by the page.
 
     _is_gap(c::Char) = c == '-' || c == '.'
@@ -69,95 +69,20 @@
         out
     end
 
-    # Support values are the numbers just after a closing bracket; IQ-TREE writes
-    # "a/b" for two kinds of support, of which the first is kept.
-    function _supports(newick::AbstractString)
-        [parse(Float64, m.captures[1]) for m in eachmatch(r"\)([0-9]+(?:\.[0-9]+)?)(?:/[0-9.]+)?(?=[:,;)])", newick)]
-    end
-
-    function tree_qc(files)
-        report = isfile(files["reference.iqtree"]) ? read(files["reference.iqtree"], String) : ""
-        grab(re) = (m = match(re, report); isnothing(m) ? nothing : m.captures[1])
-        num(re) = (v = grab(re); isnothing(v) ? nothing : parse(Float64, v))
-        best = grab(r"Best-fit model according to \w+:\s*(\S+)")
-        Dict{String,Any}(
-            "kind"              => "tree",
-            "model"             => something(best, grab(r"Model of substitution:\s*(\S+)"), Some(nothing)),
-            "model_selected"    => !isnothing(best),
-            "log_likelihood"    => num(r"Log-likelihood of the tree:\s*(-?[0-9.]+)"),
-            "sequences"         => num(r"Input data:\s*(\d+) sequences"),
-            "sites"             => num(r"Input data:\s*\d+ sequences with (\d+)"),
-            "informative_sites" => num(r"Number of parsimony informative sites:\s*(\d+)"),
-            "constant_sites"    => num(r"Number of constant sites:\s*(\d+)"),
-            "supports"          => _supports(read(files["reference.treefile"], String)),
-        )
-    end
-
-    function _jplace_queries(path)
-        doc = JSON3.read(read(path, String))
-        fields = String.(collect(doc.fields))
-        lwr  = findfirst(==("like_weight_ratio"), fields)
-        edge = findfirst(==("edge_num"), fields)
-        out = Dict{String,Any}()
-        for pl in doc.placements
-            names = haskey(pl, :n) ? String.(collect(pl.n)) : [String(x[1]) for x in pl.nm]
-            rows = collect(pl.p)
-            best = isempty(rows) ? nothing : rows[argmax([Float64(r[lwr]) for r in rows])]
-            for n in names
-                out[n] = Dict{String,Any}(
-                    "placements" => length(rows),
-                    "best_lwr"   => isnothing(best) ? nothing : _round(Float64(best[lwr])),
-                    "edge"       => isnothing(best) ? nothing : Int(best[edge]))
-            end
-        end
-        out
-    end
-
-    function placement_qc(files)
-        placed = _jplace_queries(files["placement.jplace"])
-        raw = Dict(read_fasta(files["queries.fasta"]))
-        trimmed = Dict(read_aligned(files["combined.trim.fasta"]))
-        queries = map(sort(collect(keys(raw)))) do q
-            t = get(trimmed, q, nothing)
-            p = get(placed, q, nothing)
-            Dict{String,Any}("name" => q, "residues" => length(raw[q]),
-                             "trimmed_residues" => isnothing(t) ? 0 : count(!_is_gap, t),
-                             "placed" => !isnothing(p),
-                             "placements" => isnothing(p) ? 0 : p["placements"],
-                             "best_lwr" => isnothing(p) ? nothing : p["best_lwr"])
-        end
-        Dict{String,Any}("kind" => "placement", "queries" => queries,
-                         "placed" => count(q -> q["placed"], queries))
-    end
-
-    function accumulate_qc(files)
-        before = _jplace_queries(files["placement.jplace"])
-        after  = _jplace_queries(files["accumulated.jplace"])
-        Dict{String,Any}("kind" => "accumulate",
-                         "kept" => length(after),
-                         "dropped" => sort([q for q in keys(before) if !haskey(after, q)]))
-    end
+    const QC_STEPS = ("align", "trim")
 
     function step_qc(steps::Vector{Step}, dir, files, step::Step)
         placement = steps === PLACEMENT_STEPS
         queries = placement && isfile(files["queries.fasta"]) ?
                   Set(first.(read_fasta(files["queries.fasta"]))) : Set{String}()
-        if step.name == "align"
-            alignment_qc(files[step.outputs[1]]; queries)
-        elseif step.name == "trim"
-            src = placement ? "combined.aln.fasta" : "reference.aln.fasta"
-            alignment_qc(files[src]; trimmed=files[step.outputs[1]],
-                         columns=read_columns(files[step.outputs[2]]), queries)
-        elseif step.name == "tree"
-            tree_qc(files)
-        elseif step.name == "place"
-            placement_qc(files)
-        else
-            accumulate_qc(files)
-        end
+        step.name == "align" && return alignment_qc(files[step.outputs[1]]; queries)
+        src = placement ? "combined.aln.fasta" : "reference.aln.fasta"
+        alignment_qc(files[src]; trimmed=files[step.outputs[1]],
+                     columns=read_columns(files[step.outputs[2]]), queries)
     end
 
     function _write_qc(steps, dir, files, step::Step)
+        step.name in QC_STEPS || return
         try
             qc = step_qc(steps, dir, files, step)
             mkpath(joinpath(dir, "qc"))

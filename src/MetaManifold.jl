@@ -5,6 +5,8 @@ include("core/types.jl")
 include("core/r_runtime.jl")
 # Provenance probes R through the shared runtime lock, so it follows r_runtime.jl.
 include("core/provenance.jl")
+# Tools registers the children it starts with the probe, so it precedes pipeline/.
+include("core/memory_probe.jl")
 include("core/log.jl")
 include("core/config.jl")
 include("core/databases.jl")
@@ -29,6 +31,7 @@ include("pipeline/phylogeny.jl")
 # Analysis
 include("analysis/diversity.jl")
 include("analysis/analysis.jl")
+include("analysis/differential.jl")
 
 # Web server
 include("server/server.jl")

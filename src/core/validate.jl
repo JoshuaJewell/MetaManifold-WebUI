@@ -7,7 +7,7 @@ module Validation
 export validate_environment, validate_project, ValidationError,
        DENOVO_METHODS, REMOTE_STAGES, DADA2_REMOTE_STAGES, PHYLOGENY_REMOTE_STAGES,
        PHYLOGENY_ALIGN_STRATEGIES, PHYLOGENY_BOOTSTRAPS, PHYLOGENY_TRIM_METHODS, SAFE_NAME_RE, is_safe_name, is_shell_safe,
-       is_shell_safe_arg, primer_document_errors,
+       is_shell_safe_arg, remote_value_error, primer_document_errors,
        database_document_errors
 
     using YAML, Logging
@@ -338,12 +338,35 @@ export validate_environment, validate_project, ValidationError,
     end
 
     ## Pipeline Config Validation
-    function _validate_pipeline_cfg(errors::Vector{ValidationError}, cfg::Dict, ctx::String)
-        rt = get(cfg, "r_threads", nothing)
-        isnothing(rt) || _is_thread_count(rt) ||
-            _err(errors, ctx, "r_threads must be a Bool or positive integer (got: $(repr(rt)))")
+    """
+        _staging_dir_errors!(errors, sd, ctx)
 
-        rm_cfg = get(cfg, "remote", Dict())
+    Record why `sd` cannot be `remote.staging_dir`: it must be an absolute path
+    a remote login shell would pass through as one word.
+    """
+    function _staging_dir_errors!(errors::Vector{ValidationError}, sd, ctx::String)
+        if isnothing(sd) || !(sd isa AbstractString)
+            _err(errors, ctx, "remote.staging_dir must be set when remote.host is set")
+        else
+            startswith(sd, "/") ||
+                _err(errors, ctx, "remote.staging_dir must be an absolute path on the " *
+                                  "server (got: $(repr(sd)))")
+            # staging_dir is interpolated into the command string the
+            # remote sshd runs through a login shell, so it is gated here
+            # exactly as databases.yml gates dada2.remote_path.
+            is_shell_safe_arg(sd) ||
+                _err(errors, ctx, "remote.staging_dir may not contain shell " *
+                                  "metacharacters or spaces")
+        end
+    end
+
+    """
+        _validate_remote!(errors, rm_cfg, ctx)
+
+    Record what is wrong with the `remote` block `rm_cfg`: its host, stages,
+    threads, staging root (once a host is named) and tool names.
+    """
+    function _validate_remote!(errors::Vector{ValidationError}, rm_cfg, ctx::String)
         if rm_cfg isa Dict
             host = get(rm_cfg, "host", nothing)
             isnothing(host) || host isa AbstractString ||
@@ -370,20 +393,7 @@ export validate_environment, validate_project, ValidationError,
             # placeholder staging_dir, and refusing that would make every config
             # invalid until the user configures a server they may never want.
             if !isnothing(host)
-                sd = get(rm_cfg, "staging_dir", nothing)
-                if isnothing(sd) || !(sd isa AbstractString)
-                    _err(errors, ctx, "remote.staging_dir must be set when remote.host is set")
-                else
-                    startswith(sd, "/") ||
-                        _err(errors, ctx, "remote.staging_dir must be an absolute path on the " *
-                                          "server (got: $(repr(sd)))")
-                    # staging_dir is interpolated into the command string the
-                    # remote sshd runs through a login shell, so it is gated here
-                    # exactly as databases.yml gates dada2.remote_path.
-                    is_shell_safe_arg(sd) ||
-                        _err(errors, ctx, "remote.staging_dir may not contain shell " *
-                                          "metacharacters or spaces")
-                end
+                _staging_dir_errors!(errors, get(rm_cfg, "staging_dir", nothing), ctx)
             end
         else
             _err(errors, ctx, "remote must be a mapping (got: $(repr(rm_cfg)))")
@@ -400,6 +410,38 @@ export validate_environment, validate_project, ValidationError,
         elseif !isnothing(rt_tools)
             _err(errors, ctx, "remote.tools must be a mapping (got: $(repr(rt_tools)))")
         end
+    end
+
+    """
+        remote_value_error(key, value) -> Union{String,Nothing}
+
+    Why `value` cannot be stored as `remote.<key>` (e.g. `key = "tools.mafft"`),
+    or nothing. Runs the checks `validate_project` makes of the remote block on
+    that one key, so the config write gate refuses what validation would;
+    `staging_dir` is checked even when no host is named yet.
+    """
+    function remote_value_error(key::AbstractString, value)
+        errors = ValidationError[]
+        if key == "staging_dir"
+            _staging_dir_errors!(errors, value, "")
+        else
+            nested = foldr((k, inner) -> Dict{String,Any}(String(k) => inner), split(key, '.'); init=value)
+            _validate_remote!(errors, nested, "")
+        end
+        isempty(errors) ? nothing : join((e.message for e in errors), "; ")
+    end
+
+    """
+        _validate_pipeline_cfg(errors, cfg, ctx)
+
+    Record what is wrong with a merged pipeline config `cfg`, section by section.
+    """
+    function _validate_pipeline_cfg(errors::Vector{ValidationError}, cfg::Dict, ctx::String)
+        rt = get(cfg, "r_threads", nothing)
+        isnothing(rt) || _is_thread_count(rt) ||
+            _err(errors, ctx, "r_threads must be a Bool or positive integer (got: $(repr(rt)))")
+
+        _validate_remote!(errors, get(cfg, "remote", Dict()), ctx)
 
         ph = get(cfg, "phylogeny", nothing)
         ph isa Dict && _validate_phylogeny(errors, ph, ctx)

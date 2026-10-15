@@ -2,7 +2,7 @@
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { errorMessage } from '../api/errorMessage'
-import type { AccumulateQC, AlignmentQC, PhyloStep, PlacementQC, StepQC, TreeQC } from '../api/types'
+import type { AlignmentQC, PhyloStep } from '../api/types'
 import styles from './Phylo.module.css'
 
 const pct = (x: number) => `${(100 * x).toFixed(1)}%`
@@ -200,113 +200,33 @@ export function AlignmentQCView({ qc, threshold, loadAlignment }: {
   )
 }
 
-function TreeQCView({ qc }: { qc: TreeQC }) {
-  const s = qc.supports
-  const bins = Array.from({ length: 10 }, (_, i) => s.filter(v => Math.min(9, Math.floor(v / 10)) === i).length)
-  const max = Math.max(1, ...bins)
-  const sorted = [...s].sort((a, b) => a - b)
-  const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null
-  const W = 400, H = 110
-  return (
-    <div className={styles.qcBody}>
-      <div className={styles.stats}>
-        <span>Model <b>{qc.model ?? '?'}</b>{qc.model_selected ? ' (ModelFinder, BIC)' : ''}</span>
-        {qc.log_likelihood != null && <span>log-likelihood <b>{qc.log_likelihood}</b></span>}
-        {qc.sites != null && <span><b>{qc.sites}</b> sites, <b>{qc.informative_sites ?? '?'}</b> parsimony-informative</span>}
-        {median != null && <span>support median <b>{median}</b>, <b>{s.filter(v => v >= 70).length}</b> of {s.length} at 70 or above</span>}
-      </div>
-      {s.length > 0 && (
-        <svg className={styles.chart} viewBox={`0 0 ${W} ${H}`} style={{ maxWidth: 480 }} role="img" aria-label="Bootstrap support">
-          {bins.map((n, i) => {
-            const h = (n / max) * (H - 30)
-            return (
-              <g key={i}>
-                <rect x={10 + i * 38} y={H - 18 - h} width={32} height={h} fill={i >= 7 ? '#2f9e44' : '#adb5bd'} />
-                <text x={26 + i * 38} y={H - 20 - h} textAnchor="middle">{n || ''}</text>
-                <text x={26 + i * 38} y={H - 5} textAnchor="middle">{i * 10}</text>
-              </g>
-            )
-          })}
-        </svg>
-      )}
-      <div className={styles.muted}>Bootstrap support of the internal branches, in bins of 10.</div>
-    </div>
-  )
-}
-
-function PlacementQCView({ qc, acc }: { qc: PlacementQC; acc: AccumulateQC | null }) {
-  const dropped = new Set(acc?.dropped ?? [])
-  const rows = [...qc.queries].sort((a, b) => (a.best_lwr ?? -1) - (b.best_lwr ?? -1))
-  return (
-    <div className={styles.qcBody}>
-      <div className={styles.stats}>
-        <span><b>{qc.placed}</b> of {qc.queries.length} queries placed</span>
-        {acc && <span><b>{acc.kept}</b> kept by gappa accumulate, <b>{acc.dropped.length}</b> dropped</span>}
-      </div>
-      <div className={styles.scroll}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Query</th><th className={styles.num}>Length</th><th className={styles.num}>After trimming</th>
-              <th className={styles.num}>Best LWR</th><th className={styles.num}>Placements</th>{acc && <th>Accumulated</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(q => (
-              <tr key={q.name} className={!q.placed || dropped.has(q.name) ? styles.warn : undefined}>
-                <td>{q.name}</td>
-                <td className={styles.num}>{q.residues}</td>
-                <td className={styles.num}>{q.trimmed_residues}</td>
-                <td className={styles.num}>{q.best_lwr ?? 'not placed'}</td>
-                <td className={styles.num}>{q.placements}</td>
-                {acc && <td>{dropped.has(q.name) ? 'dropped' : q.placed ? 'kept' : ''}</td>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className={styles.muted}>
-        Best LWR is the likelihood weight of a query's most likely branch. gappa drops a query when no single clade,
-        counted from the root of the placement tree, holds the threshold share of its weight: typically weight split
-        between branches on either side of the root.
-      </div>
-    </div>
-  )
-}
-
-/** The QC of one step, loaded when it opens. */
+/** The QC of the align or trim step, loaded when it opens. */
 export function QCPanel({ step, label, loadQc, loadAlignment, threshold, version }: {
   step: PhyloStep
   label: string
-  loadQc: (step: PhyloStep) => Promise<StepQC>
+  loadQc: (step: PhyloStep) => Promise<AlignmentQC>
   loadAlignment: (which: 'raw' | 'trimmed') => Promise<string | null>
   threshold?: number | null
   version: string
 }) {
-  const [qc, setQc] = useState<StepQC | null>(null)
-  const [acc, setAcc] = useState<AccumulateQC | null>(null)
+  const [qc, setQc] = useState<AlignmentQC | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const wantsAcc = step === 'place' || step === 'accumulate'
   useEffect(() => {
     let cancelled = false
-    setQc(null); setError(null); setAcc(null)
-    const main = step === 'accumulate' ? 'place' : step
-    loadQc(main).then(q => { if (!cancelled) setQc(q) }).catch(e => { if (!cancelled) setError(errorMessage(e)) })
-    if (wantsAcc) loadQc('accumulate').then(a => { if (!cancelled) setAcc(a as AccumulateQC) }).catch(() => {})
+    setQc(null); setError(null)
+    loadQc(step).then(q => { if (!cancelled) setQc(q) }).catch(e => { if (!cancelled) setError(errorMessage(e)) })
     return () => { cancelled = true }
-  }, [step, loadQc, version, wantsAcc])
+  }, [step, loadQc, version])
 
   return (
     <div className={`${styles.section} ${styles.wide}`}>
       <div className={styles.heading}>QC: {label}</div>
       {error && <p className="error-msg">{error}</p>}
       {!qc && !error && <p className="loading">Loading…</p>}
-      {qc?.kind === 'alignment' && (
+      {qc && (
         <AlignmentQCView qc={qc} threshold={step === 'trim' ? threshold : null}
           loadAlignment={() => loadAlignment('raw')} />
       )}
-      {qc?.kind === 'tree' && <TreeQCView qc={qc} />}
-      {qc?.kind === 'placement' && <PlacementQCView qc={qc} acc={acc} />}
     </div>
   )
 }

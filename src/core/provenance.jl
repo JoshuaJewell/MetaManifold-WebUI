@@ -633,6 +633,19 @@ function strict_mode(config::AbstractDict)
     return get(section, "strict", true) === true
 end
 
+# FastQC is a Java application behind a Perl wrapper. Without a JRE the wrapper
+# prints "Can't exec java" to stderr and nothing to stdout, so the version probe
+# fails with an empty banner that never mentions Java. Name the real cause.
+function _diagnose_java(component::AbstractString, err::ProbeFailure,
+                        java_present::Function)
+    component == "fastqc" || return err
+    java_present() && return err
+    return ProbeFailure(err.component,
+        "no Java runtime on PATH. FastQC is a Java application and cannot run " *
+        "without one; install a JRE (11 or newer) and re-run install.sh, which " *
+        "prints the command for this system. ($(err.reason))")
+end
+
 """
     preflight(config; databases, strict, ...) -> CapturedEnvironment
 
@@ -658,7 +671,8 @@ function preflight(config::AbstractDict;
                    julia_prober::Function      = probe_julia,
                    r_prober::Function          = probe_r,
                    tool_prober::Function       = probe -> probe_tool(probe; bin_resolver, runner),
-                   database_prober::Function   = (name, specs) -> probe_database(name, specs))
+                   database_prober::Function   = (name, specs) -> probe_database(name, specs),
+                   java_present::Function      = () -> !isnothing(Sys.which("java")))
     julia    = nothing
     r        = nothing
     tools    = OrderedDict{String,ToolRecord}()
@@ -676,7 +690,8 @@ function preflight(config::AbstractDict;
             end
         catch err
             err isa ProbeFailure || rethrow()
-            strict && rethrow()
+            err = _diagnose_java(component, err, java_present)
+            strict && throw(err)
             push!(degraded, component)
             @warn "Provenance: '$component' could not be proved; this run is degraded" reason=err.reason
         end
@@ -803,10 +818,14 @@ _stage_index(att::Attestation, name::AbstractString) =
     findfirst(s -> get(s, "name", nothing) == String(name), stages(att))
 
 """
-    record_stage!(att, name, env; started, finished, status, commands, outputs) -> Attestation
+    record_stage!(att, name, env; started, finished, status, commands, outputs, occupancy) -> Attestation
 
 Record one stage's own captured environment, replacing any earlier record of that
 stage.
+
+`occupancy` is the stage's `MemoryProbe` record. It is stored under the stage's
+`occupancy` key only when given, so a stage recorded without the probe has
+exactly the keys it always had.
 
 Re-running a single stage of an existing run must update that stage alone, because
 a run directory is an accretion and the other stages' records remain true. The
@@ -817,7 +836,8 @@ function record_stage!(att::Attestation, name::AbstractString, env::CapturedEnvi
                        finished::AbstractString = timestamp(),
                        status::AbstractString   = "ok",
                        commands::AbstractVector = String[],
-                       outputs::AbstractVector  = OrderedDict{String,Any}[])
+                       outputs::AbstractVector  = OrderedDict{String,Any}[],
+                       occupancy::Union{AbstractDict,Nothing} = nothing)
     stage = OrderedDict{String,Any}(
         "name"                => String(name),
         "started"             => String(started),
@@ -832,6 +852,7 @@ function record_stage!(att::Attestation, name::AbstractString, env::CapturedEnvi
         "outputs"             => Any[OrderedDict{String,Any}(string(k) => v for (k, v) in o)
                                      for o in outputs],
     )
+    isnothing(occupancy) || (stage["occupancy"] = occupancy)
     index = _stage_index(att, name)
     isnothing(index) ? push!(stages(att), stage) : (stages(att)[index] = stage)
     return summarise!(att)

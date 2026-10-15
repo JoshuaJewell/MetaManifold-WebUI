@@ -13,17 +13,22 @@ databases:
     # interrupted download is otherwise indistinguishable from a complete one -
     # R reads the readable prefix of a truncated FASTA and classifies against a
     # partial reference set, silently.
+    # The sha256/size values are those of the v5.1.1 .gz assets, computed on
+    # 2026-09-30 from the bytes each uri served and corroborated by the digest
+    # GitHub's release API reports for the same asset. They apply to a `local:`
+    # file as well, so pointing either format at another release means updating
+    # its uri, sha256 and size together (or setting sha256/size to ~).
     dada2:
       uri: "https://github.com/pr2database/pr2database/releases/download/v5.1.1/pr2_version_5.1.1_SSU_dada2.fasta.gz"
       local: ~                # set to a local path to skip download
       remote_path: ~          # pre-existing path on remote host (avoids transferring the file)
-      sha256: ~               # optional: expected digest, checked on every resolve
-      size: ~                 # optional: expected byte count, checked on every resolve
+      sha256: "0c8728abcbb2126eed2c7e587f820cbce39c138cdfdb51239bbf18621498462d"  # expected digest, checked on every resolve
+      size: 54833479          # expected byte count, checked on every resolve
     vsearch:
       uri: "https://github.com/pr2database/pr2database/releases/download/v5.1.1/pr2_version_5.1.1_SSU_taxo_long.fasta.gz"
       local: ~                # set to a local path to skip download
-      sha256: ~               # optional: expected digest, checked on every resolve
-      size: ~                 # optional: expected byte count, checked on every resolve
+      sha256: "b9cef85537b49bf54d1033ad38a6cce1875123fb9f7c7c8f442aadccd2bbb8f5"  # expected digest, checked on every resolve
+      size: 59640632          # expected byte count, checked on every resolve
     levels:
       - Domain
       - Supergroup

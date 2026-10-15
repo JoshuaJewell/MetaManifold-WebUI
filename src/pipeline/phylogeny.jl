@@ -27,7 +27,7 @@ module Phylogeny
 export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
        reference_files, placement_files, read_fasta, parse_fasta, safe_name,
        write_fasta, read_aligned, step_commands, trim_args, remote_step_target,
-       read_status, trim_preview, step_qc, check_reference, check_placement
+       read_status, trim_preview, step_qc, QC_STEPS, check_reference, check_placement
 
     using SHA, JSON3, Dates, Logging, OrderedCollections
     using ..PipelineLog
@@ -532,8 +532,8 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
     """
         run_workflow(steps, dir, files, full_cfg; overrides, seed, run, emit)
 
-    Run the steps that are not current, in order, writing each step's QC to
-    `dir/qc/<step>.json` and its record to `dir/attestation.yml` whether it
+    Run the steps that are not current, in order, writing the align and trim
+    QC to `dir/qc/<step>.json` and each step's record to `dir/attestation.yml` whether it
     succeeds or not.
     """
     function run_workflow(steps::Vector{Step}, dir::AbstractString, files::AbstractDict,

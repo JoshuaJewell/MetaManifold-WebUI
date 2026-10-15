@@ -1,6 +1,6 @@
 // © 2026 Joshua Benjamin Jewell. All rights reserved.
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { AnalysisChart } from './AnalysisChart'
 import { useAlphaMetricSelection, AlphaMetricToggles, ALPHA_METRICS, extractAlphaPanel } from './alphaMetrics'
@@ -22,10 +22,26 @@ export function DiversityPanel({ study, runs, option, aggregate }: {
   const [permanova, setPermanova] = useState<PermanovaResult | null>(null)
   const [loading, setLoading]     = useState<string | null>(null)
   const [rAvailable, setRAvailable] = useState<boolean | null>(null)
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null)
+  // Only the response to the latest request, for the current inputs, is shown.
+  const request = useRef(0)
 
+  // A failed check is reported as such, not as "R is unavailable".
   useEffect(() => {
-    api.analysis.capabilities().then(c => setRAvailable(c.r_available)).catch(() => setRAvailable(false))
+    api.analysis.capabilities()
+      .then(c => setRAvailable(c.r_available))
+      .catch(err => setCapabilitiesError(errorMessage(err)))
   }, [])
+
+  // Results answer the inputs they were computed from; new inputs discard them,
+  // along with any request still in flight for the old ones.
+  useEffect(() => {
+    request.current++
+    setAlphaFig(null)
+    setNmdsFig(null)
+    setPermanova(null)
+    setLoading(null)
+  }, [study, runs, option?.table, aggregate])
 
   const body = option && runs.length >= 2
     ? {
@@ -36,22 +52,33 @@ export function DiversityPanel({ study, runs, option, aggregate }: {
       }
     : null
 
+  /** Compute one analysis for the current inputs and show it, unless the inputs changed meanwhile. */
   const run = async (type: 'alpha' | 'nmds' | 'permanova') => {
     if (!body) return
+    const req = ++request.current
+    const current = () => req === request.current
     setLoading(type)
     try {
       if (type === 'alpha') {
-        setAlphaFig(await api.analysis.compareAlpha(study, body))
+        const fig = await api.analysis.compareAlpha(study, body)
+        if (current()) setAlphaFig(fig)
       } else if (type === 'nmds') {
-        setNmdsFig(await api.analysis.nmds(study, body))
+        const fig = await api.analysis.nmds(study, body)
+        if (current()) setNmdsFig(fig)
       } else {
-        setPermanova(await api.analysis.permanova(study, body))
+        const res = await api.analysis.permanova(study, body)
+        if (current()) setPermanova(res)
       }
     } catch (err) {
+      if (!current()) return
+      // A failed rerun must not leave the previous result looking current.
+      if (type === 'alpha') setAlphaFig(null)
+      else if (type === 'nmds') setNmdsFig(null)
+      else setPermanova(null)
       const label = type === 'alpha' ? 'Alpha comparison' : type === 'nmds' ? 'NMDS' : 'PERMANOVA'
       toast.error(`${label} failed: ${errorMessage(err)}`)
     } finally {
-      setLoading(null)
+      if (current()) setLoading(null)
     }
   }
 
@@ -82,6 +109,11 @@ export function DiversityPanel({ study, runs, option, aggregate }: {
             NMDS and PERMANOVA need R with vegan.
           </span>
         )}
+        {capabilitiesError && (
+          <span className="error-msg" style={{ margin: 0 }}>
+            Could not check whether R is available: {capabilitiesError}
+          </span>
+        )}
       </div>
 
       {alphaFig != null && (
@@ -99,18 +131,19 @@ export function DiversityPanel({ study, runs, option, aggregate }: {
         <div className="card" style={{ fontFamily: 'monospace', fontSize: '.82rem', whiteSpace: 'pre-wrap' }}>
           <div className="card-title">PERMANOVA Results</div>
           <pre style={{ margin: 0 }}>{permanova.text}</pre>
-          {(permanova.terms?.length
-            ? permanova.terms
-            : permanova.p_value != null
-              ? [{ term: 'model', r2: permanova.r2 ?? NaN, f_statistic: permanova.f_statistic, p_value: permanova.p_value }]
-              : []
-          ).map(t => (
+          {(permanova.terms ?? []).map(t => (
             <p key={t.term} style={{ marginTop: 8, fontFamily: 'inherit' }}>
-              {t.term}: R&sup2; = {t.r2.toFixed(3)} · F = {t.f_statistic?.toFixed(2) ?? 'n/a'} · p = {t.p_value?.toFixed(4) ?? 'n/a'}
+              {t.term}: R&sup2; = {t.r2.toFixed(3)} · F = {t.f_statistic?.toFixed(2) ?? 'n/a'} ·{' '}
+              {t.untestable_reason ? `p not reported: ${t.untestable_reason}` : `p = ${t.p_value?.toFixed(4) ?? 'n/a'}`}
             </p>
           ))}
           {(permanova.terms?.length ?? 0) > 1 && (
             <p style={{ marginTop: 4, fontFamily: 'inherit' }}>Terms are tested in order, each after the ones above it.</p>
+          )}
+          {permanova.permutations != null && permanova.min_p_value != null && (
+            <p style={{ marginTop: 4, fontFamily: 'inherit' }}>
+              {permanova.permutations} permutations; the smallest attainable p is {permanova.min_p_value.toFixed(4)}.
+            </p>
           )}
           {permanova.blocked && (
             <p style={{ marginTop: 4, fontFamily: 'inherit' }}>Permutations restricted within individuals.</p>

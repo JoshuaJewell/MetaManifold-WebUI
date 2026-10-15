@@ -1,0 +1,160 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+#
+# The occupancy reading of the vsearch stage (docs/occupancy-2026-10.adoc):
+#   * the two-thread disagreement test (test/occupancy_disagreement_test.jl) on
+#     the pinned vsearch, and
+#   * Session IR's counted bytes against the typed peak computed in Agda from
+#     the pinned proof siblings (scripts/check-occupancy.sh).
+#
+# This account allows only GitHub's own actions and its own, pinned by SHA, so
+# everything here installs from pinned URLs checked against pinned SHA256s, as
+# ci.yml now does too. The disagreement test also runs in ci.yml's full suite;
+# it runs here as well so that a change to the probe gets its own check.
+name: Occupancy reading
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/core/memory_probe.jl
+      - src/core/provenance.jl
+      - src/pipeline/tools.jl
+      - src/server/routes/pipeline.jl
+      - test/occupancy_disagreement_test.jl
+      - test/unit/test_occupancy_grade.jl
+      - scripts/check-occupancy-grades.jl
+      - scripts/lint-occupancy-readings.sh
+      - docs/occupancy/**
+      - docs/occupancy-2026-10.adoc
+      - scripts/check-occupancy.sh
+      - scripts/fetch-siblings.sh
+      - .github/workflows/occupancy.yml
+  # Any base branch, so a PR stacked on another one is checked too.
+  pull_request:
+    paths:
+      - src/core/memory_probe.jl
+      - src/core/provenance.jl
+      - src/pipeline/tools.jl
+      - src/server/routes/pipeline.jl
+      - test/occupancy_disagreement_test.jl
+      - test/unit/test_occupancy_grade.jl
+      - scripts/check-occupancy-grades.jl
+      - scripts/lint-occupancy-readings.sh
+      - docs/occupancy/**
+      - docs/occupancy-2026-10.adoc
+      - scripts/check-occupancy.sh
+      - scripts/fetch-siblings.sh
+      - .github/workflows/occupancy.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+env:
+  # Julia 1.12.5, the version Manifest.toml was resolved with. The checksum is
+  # julialang's own (bin/checksums/julia-1.12.5.sha256), as the official Docker
+  # image (docker-library/julia a39df01) records it.
+  JULIA_URL: https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.5-linux-x86_64.tar.gz
+  JULIA_SHA256: 41b84d727e4e96fbf3ed9e92fa195d773d247b9097f73fad688f8b699758bae7
+
+jobs:
+  disagreement:
+    name: Occupancy disagreement test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # As in ci.yml: the root .Rprofile would otherwise bootstrap renv.
+      RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Julia
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$JULIA_URL" julia.tar.gz
+          echo "$JULIA_SHA256  julia.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/julia
+          sudo tar xzf julia.tar.gz -C /opt/julia --strip-components=1
+          rm julia.tar.gz
+          echo /opt/julia/bin >> "$GITHUB_PATH"
+
+      # RCall builds against R. The occupancy test uses no R package.
+      - name: Install R
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends r-base-core
+
+      - name: Instantiate the project
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+
+      # The pinned vsearch (config/defaults/tool_versions.yml), refused unless it
+      # hashes to the pinned SHA256, as ci.yml installs it.
+      - name: Install vsearch
+        run: |
+          eval "$(julia --project=. -e '
+            using YAML
+            v = YAML.load_file("config/defaults/tool_versions.yml")["tools"]["vsearch"]
+            a = v["archives"]["linux-x86_64"]
+            println("VSEARCH_VERSION=", v["version"]); println("VSEARCH_URL=", a["url"]); println("VSEARCH_SHA256=", a["sha256"])')"
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$VSEARCH_URL" vsearch.tar.gz
+          echo "$VSEARCH_SHA256  vsearch.tar.gz" | sha256sum -c -
+          tar xzf vsearch.tar.gz --warning=no-unknown-keyword
+          sudo mv "vsearch-$VSEARCH_VERSION-linux-x86_64/bin/vsearch" /usr/local/bin/vsearch
+          rm -rf vsearch.tar.gz "vsearch-$VSEARCH_VERSION-linux-x86_64"
+          vsearch --version
+
+      - name: Three orders of the vsearch stage
+        run: julia --project=. -t 2 test/occupancy_disagreement_test.jl
+
+      # Fork issue #105: the grades the recorded run's windows imply, read back
+      # against its own measurement (docs/occupancy/schedules.yml).
+      - name: Graded reading of the recorded run
+        run: julia --project=. scripts/check-occupancy-grades.jl
+
+      # And no production code reads a peak without those grades.
+      - name: Occupancy readings are graded
+        run: bash scripts/lint-occupancy-readings.sh
+
+  typed-peak:
+    name: Occupancy typed peak
+    runs-on: ubuntu-24.04
+    # The Agda 2.6.4.3 Debian trixie packages, in a digest-pinned image, as the
+    # upstream proof job uses. The siblings need no standard library.
+    container: debian:trixie-20250929-slim@sha256:1caf1c703c8f7e15dcf2e7769b35000c764e6f50e4d7401c355fb0248f3ddfdb
+    timeout-minutes: 20
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      # git before checkout, so the checkout is a repository and the siblings can be fetched.
+      - name: Install git, curl and Agda
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends ca-certificates curl git agda-bin=2.6.4.3-1+b2
+          agda --version | grep -qx 'Agda version 2.6.4.3'
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # the siblings are public; nothing here pushes
+
+      # The Session IR stepper is Julia (standard library only).
+      - name: Install Julia
+        shell: bash
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$JULIA_URL" julia.tar.gz
+          echo "$JULIA_SHA256  julia.tar.gz" | sha256sum -c -
+          mkdir -p /opt/julia
+          tar xzf julia.tar.gz -C /opt/julia --strip-components=1
+          rm julia.tar.gz
+          echo /opt/julia/bin >> "$GITHUB_PATH"
+
+      - name: Counted bytes against typed peak
+        shell: bash
+        run: bash scripts/check-occupancy.sh

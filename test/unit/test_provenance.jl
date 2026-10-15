@@ -308,6 +308,47 @@ canned(out::String, err::String = "", code::Int = 0) =
         end
     end
 
+    @testset "a FastQC probe failure without Java names Java" begin
+        # FastQC without a JRE prints nothing to stdout, so its probe fails on an
+        # empty banner. Every other tool proves fine, so fastqc is what aborts.
+        empty_banner = PV.ProbeFailure("fastqc", "no version in the probe output: \"\"")
+        tool_prober(probe) = probe.name == "fastqc" ? throw(empty_banner) :
+            PV.ToolRecord(probe.name, "1.0", "/bin/$(probe.name)", "00", "x --version")
+        abort_reason(java) = try
+            PV.preflight(minimal;
+                         tool_prober  = tool_prober,
+                         julia_prober = fake_julia,
+                         r_prober     = fake_r,
+                         java_present = () -> java)
+            nothing
+        catch err
+            err isa PV.ProbeFailure || rethrow()
+            @test err.component == "fastqc"
+            err.reason
+        end
+
+        without = abort_reason(false)
+        @test without !== nothing
+        @test occursin("no Java runtime on PATH", without)
+        # The original reason is kept, not replaced.
+        @test occursin(empty_banner.reason, without)
+
+        # Control: with Java present the failure is something else, and it must
+        # not be relabelled as a Java problem.
+        @test abort_reason(true) == empty_banner.reason
+
+        # Under the override the run is degraded on fastqc alone.
+        env = Logging.with_logger(Logging.NullLogger()) do
+            PV.preflight(minimal;
+                         strict       = false,
+                         tool_prober  = tool_prober,
+                         julia_prober = fake_julia,
+                         r_prober     = fake_r,
+                         java_present = () -> false)
+        end
+        @test env.degraded_components == ["fastqc"]
+    end
+
     ## Environments to attest with, standing in for probed ones.
     function env_with(cutadapt_version::String; degraded = String[])
         tools = OrderedDict("cutadapt" => PV.ToolRecord(

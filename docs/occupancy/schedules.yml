@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+#
+# The interleaving each order in results-2026-10-14.yml ran with, as the sample
+# window [first, last] of each of its tasks, in the task order the record keeps.
+# These are the same schedules the Session IR texts in this directory state
+# (vsearch-concurrent.sir runs the two searches together; the other two run them
+# one after the other), expressed in the probe's own sample indices: the windows
+# of a serial order do not overlap, and the concurrent order's do.
+#
+# Read by test/unit/test_occupancy_grade.jl and scripts/check-occupancy-grades.jl,
+# so the two cannot disagree about what the recorded run did.
+asv_then_otu:
+  - [1, 2]
+  - [3, 4]
+otu_then_asv:
+  - [1, 2]
+  - [3, 4]
+concurrent:
+  - [1, 4]
+  - [2, 5]

@@ -6,7 +6,7 @@
 # required R packages. Writes resolved tool paths to config/tools.yml.
 #
 # Usage via install.sh, or directly by:
-#   julia --project=. install.jl [--update] [--modify] [--sysimage]
+#   julia --project=. scripts/install.jl [--update] [--modify] [--sysimage]
 #
 # Options:
 #   --update    Re-assert the pinned tool versions and refresh managed binaries in bin/
@@ -41,7 +41,7 @@ import Downloads
 const UPDATE_MODE   = "--update"   in ARGS
 const MODIFY_MODE   = "--modify"   in ARGS
 const SYSIMAGE_MODE = "--sysimage" in ARGS
-const PROJECT_ROOT  = @__DIR__
+const PROJECT_ROOT  = normpath(dirname(@__DIR__))
 const BIN_DIR       = joinpath(PROJECT_ROOT, "bin")
 const CONFIG_DIR    = joinpath(PROJECT_ROOT, "config")
 const TOOLS_CONFIG  = joinpath(CONFIG_DIR, "tools.yml")
@@ -674,7 +674,7 @@ function install_r_sysdeps()
     # System libraries required to compile Bioconductor / tidyverse packages from source.
     # Package names differ across distro families; each list maps to the same underlying
     # libraries (bzip2, xz, zlib, curl, openssl, libxml2, freetype, libpng, libjpeg,
-    # libtiff, fontconfig, harfbuzz, fribidi, hdf5).
+    # libtiff, fontconfig, harfbuzz, fribidi).
 
     apt_deps = [
         "pkg-config",
@@ -685,7 +685,6 @@ function install_r_sysdeps()
         "libjpeg-dev", "libtiff5-dev",
         "libfontconfig1-dev",
         "libharfbuzz-dev", "libfribidi-dev",
-        "libhdf5-dev",
     ]
 
     dnf_deps = [
@@ -697,7 +696,6 @@ function install_r_sysdeps()
         "libjpeg-turbo-devel", "libtiff-devel",
         "fontconfig-devel",
         "harfbuzz-devel", "fribidi-devel",
-        "hdf5-devel",
     ]
 
     pacman_deps = [
@@ -709,7 +707,6 @@ function install_r_sysdeps()
         "libjpeg-turbo", "libtiff",
         "fontconfig",
         "harfbuzz", "fribidi",
-        "hdf5",
     ]
 
     zypper_deps = [
@@ -721,7 +718,6 @@ function install_r_sysdeps()
         "libjpeg8-devel", "libtiff-devel",
         "fontconfig-devel",
         "harfbuzz-devel", "fribidi-devel",
-        "hdf5-devel",
     ]
 
     OS_TYPE != "linux" && return
@@ -738,7 +734,7 @@ function install_r_sysdeps()
         @warn "Could not detect a supported package manager (apt, dnf, pacman, zypper). " *
               "Some R packages may fail to compile. Install the development headers for: " *
               "bzip2, xz, zlib, curl, openssl, libxml2, freetype, libpng, libjpeg, " *
-              "libtiff, fontconfig, harfbuzz, fribidi, hdf5"
+              "libtiff, fontconfig, harfbuzz, fribidi"
     end
 end
 
@@ -773,7 +769,8 @@ end
 # header test covers libraries that ship none (libbz2-dev on Debian has no .pc),
 # and libraries whose headers sit on a non-default include path (libxml2,
 # freetype2, harfbuzz, fribidi) are left as pc: since a bare #include would
-# wrongly report them absent.
+# wrongly report them absent. libjpeg is pc: for the same reason: jpeglib.h uses
+# size_t without including <stddef.h>, so it does not compile on its own.
 const R_SYSDEP_TABLE = [
     #  probe             apt                     dnf                pacman        zypper
     ("pc:libcurl",     "libcurl4-openssl-dev", "libcurl-devel",    "curl",       "libcurl-devel"),
@@ -784,6 +781,7 @@ const R_SYSDEP_TABLE = [
     ("h:lzma.h",       "liblzma-dev",          "xz-devel",         "xz",         "xz-devel"),
     ("pc:freetype2",   "libfreetype6-dev",     "freetype-devel",   "freetype2",  "freetype2-devel"),
     ("h:png.h",        "libpng-dev",           "libpng-devel",     "libpng",     "libpng16-devel"),
+    ("pc:libjpeg",     "libjpeg-dev",          "libjpeg-turbo-devel", "libjpeg-turbo", "libjpeg8-devel"),
     ("h:tiff.h",       "libtiff5-dev",         "libtiff-devel",    "libtiff",    "libtiff-devel"),
     ("pc:fontconfig",  "libfontconfig1-dev",   "fontconfig-devel", "fontconfig", "fontconfig-devel"),
     ("pc:harfbuzz",    "libharfbuzz-dev",      "harfbuzz-devel",   "harfbuzz",   "harfbuzz-devel"),
@@ -1027,7 +1025,7 @@ end
 ## Sysimage creation
 const SYSIMAGE_EXT  = Sys.isapple() ? ".dylib" : ".so"
 const SYSIMAGE_PATH = joinpath(PROJECT_ROOT, "MetaManifold$(SYSIMAGE_EXT)")
-const PRECOMPILE_EXEC_PATH = joinpath(PROJECT_ROOT, "precompile_exec.jl")
+const PRECOMPILE_EXEC_PATH = joinpath(@__DIR__, "precompile_exec.jl")
 
 function build_sysimage()
     # PackageCompiler is a project dependency, installed by Pkg.instantiate().
@@ -1249,7 +1247,7 @@ function main()
             record!("Julia sysimage", STEP_OK, SYSIMAGE_PATH)
         catch e
             @error "Sysimage build failed: $e"
-            record!("Julia sysimage", STEP_FAILED, "rerun: julia --project=. install.jl --sysimage")
+            record!("Julia sysimage", STEP_FAILED, "rerun: julia --project=. scripts/install.jl --sysimage")
         end
     else
         record!("Julia sysimage", STEP_OK, "not requested (pass --sysimage to build one)")

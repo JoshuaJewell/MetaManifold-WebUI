@@ -16,6 +16,12 @@ import type {
 // Fixed colour of the catch-all "Unassigned" bucket, mirroring the backend.
 const UNASSIGNED_COLOUR = '#95a5a6'
 
+/**
+ * Browse a run's composition by taxonomy rank or category, with sub-group and
+ * results-table selectors and controls to save category colours. The analysis
+ * context's annotation source takes precedence over `source`; absent both,
+ * VSEARCH is used. A failed table lookup clears the options and shows a toast.
+ */
 export function CompositionPanel({
   study, run, group, subgroups, source: configuredSource,
 }: {
@@ -53,6 +59,10 @@ export function CompositionPanel({
       setTableOptions(opts)
       setTable(current => opts.some(o => o.key === current) ? current
         : opts.some(o => o.key === 'merged') ? 'merged' : opts[0]?.key ?? current)
+    }).catch(err => {
+      if (cancelled) return
+      setTableOptions([])
+      toast.error(`Could not list the results tables: ${errorMessage(err)}`)
     })
     return () => { cancelled = true }
   }, [study, run, group])
