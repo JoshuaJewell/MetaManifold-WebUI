@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest a new feature or a change to an existing one.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search the existing issues first. To change an architectural decision, describe the change
+        here before writing any code. The settled decisions in CONTRIBUTING.md can be discussed in an
+        issue, but a pull request does not reopen them.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do, and what stops you now.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What MetaManifold should do instead. For a statistical method, name the method and a reference for it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Pipeline stages
+        - Analysis and statistics
+        - Web interface
+        - Configuration
+        - Installation and toolchain
+        - Other
+    validations:
+      required: true
