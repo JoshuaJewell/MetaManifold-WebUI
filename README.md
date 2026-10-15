@@ -94,7 +94,7 @@ bash install.sh
 ```
 
 `install.sh` installs Julia (via juliaup) if missing, checks for R, then hands
-off to `install.jl`, which installs the Julia dependencies, locates or downloads
+off to `scripts/install.jl`, which installs the Julia dependencies, locates or downloads
 each external tool (cutadapt, FastQC, MultiQC, vsearch, cd-hit-est, and the
 phylogeny tools MAFFT, trimAl, IQ-TREE, RAxML and gappa), and reproduces the R
 environment from `renv.lock`. It ends with a summary listing every dependency as

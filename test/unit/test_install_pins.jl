@@ -14,7 +14,7 @@ using SHA
 
 const REPO_ROOT   = normpath(joinpath(@__DIR__, "..", ".."))
 const PINS_PATH   = joinpath(REPO_ROOT, "config", "defaults", "tool_versions.yml")
-const INSTALL_JL  = joinpath(REPO_ROOT, "install.jl")
+const INSTALL_JL  = joinpath(REPO_ROOT, "scripts", "install.jl")
 const CI_PATH     = joinpath(REPO_ROOT, ".github", "workflows", "ci.yml")
 const WORKFLOWS   = joinpath(REPO_ROOT, ".github", "workflows")
 const MANIFEST    = joinpath(REPO_ROOT, "Manifest.toml")
@@ -307,4 +307,42 @@ allowed_action(uses) =
             @test !haskey(get(job, "strategy", Dict{String,Any}()), "matrix")
         end
     end
+end
+
+@testset "the root keeps its shape" begin
+    # Adapted from the RSR root-cleanup doctrine (rsr-template-repo,
+    # docs/proposals/root-cleanup.adoc): the repository root holds authority
+    # files, the entry points a newcomer runs, tool-mandated build metadata, and
+    # one directory per concern -- nothing else. The check is BIDIRECTIONAL,
+    # because a one-directional allowlist only ever ratchets open: a tracked
+    # root entry that is not listed here is drift, and a listed entry that has
+    # gone missing is drift too. The tracked tree is what is checked, so local
+    # untracked build output (bin/, web/) does not fail a developer's run. To
+    # add a root entry, add it here with its reason in the same commit.
+    root_entries = [
+        # Authority files. GitHub reads CITATION.cff from the default-branch
+        # root only, so it cannot move.
+        "README.md", "LICENSE", "CITATION.cff",
+        # The two entry points a newcomer runs (the launcher stays at the
+        # root); the installer itself lives under scripts/.
+        "install.sh", "start.sh",
+        # Build metadata rooted by its tooling: Julia Pkg, and renv, which
+        # also scans R/ for dependency discovery.
+        "Project.toml", "Manifest.toml", "renv.lock", "renv", ".Rprofile", "R",
+        # One directory per concern. Health files (CONTRIBUTING.md) and CI
+        # configs (codecov.yml) live under .github/.
+        ".github", "bench", "config", "data", "docs", "frontend",
+        "proofs", "scripts", "src", "test",
+        # VCS housekeeping.
+        ".gitignore",
+    ]
+    tracked = Set(split(readchomp(`git -C $(REPO_ROOT) ls-tree --name-only HEAD`), "\n"))
+    for entry in root_entries
+        @test entry in tracked
+    end
+    extras = sort(collect(setdiff(tracked, Set(root_entries))))
+    if !isempty(extras)
+        println("root entries outside the allowlist: ", join(extras, ", "))
+    end
+    @test isempty(extras)
 end
