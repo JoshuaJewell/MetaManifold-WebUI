@@ -14,6 +14,15 @@
 # allowlist policy, asserted by test/unit/test_install_pins.jl). Dependabot
 # advances those pins to the current SHA of the tracked version, so the
 # pinning policy itself survives updates.
+#
+# The #124 rule: minor and patch updates are batched, because they are
+# interchangeable in kind; a MAJOR (React 18->19, vite 6->8, TypeScript
+# 5->7 -- which #124 landed as one grouped PR, with the build already red
+# until #140 repaired it) is a migration, not an update. Every group below
+# therefore names its update-types as minor and patch ONLY: an update that
+# matches no group opens its own PR, carrying its own review and its own CI
+# run. test/unit/test_install_pins.jl asserts this shape, so a new group
+# cannot silently go back to batching majors.
 version: 2
 updates:
   # The frontend is Bun-managed: package.json plus bun.lock, no npm/yarn/pnpm
@@ -25,8 +34,10 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      frontend:
+      # Minor and patch in one weekly PR; majors arrive one PR each.
+      frontend-minor-and-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -35,5 +46,8 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      actions:
+      # Same rule as the frontend: a new major of an action (checkout
+      # v4.4.0 -> v7.0.1 came through #123) gets a PR of its own.
+      actions-minor-and-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
