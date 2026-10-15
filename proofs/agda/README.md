@@ -126,6 +126,25 @@ returns.
 | `constant-in-blocks`, `varies-in-a-block` | The two direct cases in the test, by evaluation. | `_varies_within_any_block` | lines 49–50 |
 | `fixture-group-withheld`, `fixture-run-tested` | On the test's twelve samples (six individuals, two runs each, three individuals per group), `group` is never exchanged and `run` is. | `run_permanova` | lines 83–98 |
 
+### Significance reporting (`Significance`)
+
+The Observational Null Disclosure discipline (hyperpolymath/absolute-zero, OND
+pillar) applied to `run_alpha_significance`'s reporting rule: a test that did
+not run reveals nothing, and must never be published as a null result. The
+numbers exist only in the constructor whose status is `computed`; every other
+status carries a proof it is not `computed` and a reader-facing reason.
+
+| Agda theorem | Plain statement | Julia | Test (`test/unit/test_r_runtime.jl`) |
+|---|---|---|---|
+| `publish` | The omnibus p-value is readable only from a result whose test ran, with evidence it ran; the unrun branch cannot produce a number (the typechecker refuses it). | `was_computed` guards | lines 100–124 |
+| `pairwise-published` | The pairwise table, same discipline. | `was_computed` guards | lines 125–152 |
+| `reason` | The dual: the reader-facing explanation is readable only from a result that did not run. | the `reason` field | lines 153–175 |
+| `unrun-status-not-computed`, `computed-status` | A result is readable as numbers or as a reason, never both: the two constructors cannot meet. | the `AlphaSignificance` struct | lines 176+ |
+
+What is modelled: the four statuses exactly; the omnibus p-value as an exact
+rational; the pairwise table as its list of p-values. What is not: the
+statistics themselves, and the DataFrame shape.
+
 ## Corrections to the requirement wording
 
 - **R-BH-2a is true for the procedure.** An earlier archived note recorded
