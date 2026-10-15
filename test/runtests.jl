@@ -45,6 +45,7 @@ const UNIT_FILES = [
     "test_remote_stages.jl",
     "test_jobs.jl",
     "test_provenance.jl",
+    "test_occupancy_grade.jl",
     "test_install_pins.jl",
     "test_migrate_composition.jl",
     "test_sample_reads.jl",
@@ -53,6 +54,7 @@ const UNIT_FILES = [
     "test_permanova.jl",
     "test_write_gates.jl",
     "test_server_security.jl",
+    "test_canonical.jl",
 ]
 
 # The files named on the command line ("test_routes.jl", "routes" or

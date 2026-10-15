@@ -54,6 +54,9 @@ log-ratios, which are already free of library size.
 have at least one read to be tested. `replacement_delta`, in (0, 1), is the
 `frac` passed to `zCompositions::cmultRepl` by `clr_welch`: an imputed proportion
 above its taxon's smallest observed proportion is lowered to this fraction of it.
+Method and offset names are stripped and lowercased. Throws `ArgumentError`
+for unsupported names or out-of-range fractions, including settings unused by
+the selected method.
 """
 struct DifferentialConfig
     method            :: String
@@ -365,7 +368,8 @@ end
 
 Centred log-ratio of each row (sample) of the samples x taxa matrix `x`:
 `log(x_ij)` minus the mean of `log(x_i·)`, so every row sums to zero. Every
-value must be positive; replace zeros first.
+value must be finite and positive or an `ArgumentError` is thrown; replace
+zeros first.
 """
 function clr_transform(x::AbstractMatrix{<:Real})
     all(v -> isfinite(v) && v > 0, x) || throw(ArgumentError(
@@ -398,8 +402,9 @@ da_out <- tryCatch(
 
 Check that cmultRepl's output `out` is one valid composition per sample: the
 same shape as the input whose zeros `zero_mask` marks, and every row finite,
-positive and summing to 1. Throws `ArgumentError` naming the first sample that
-fails, pointing at `min_prevalence`.
+positive and summing to 1 within an absolute tolerance of 1e-8. Throws
+`ErrorException` if the shapes differ, or `ArgumentError` naming the first
+invalid sample and pointing at `min_prevalence`. Returns `out` unchanged.
 """
 function _check_compositions(out::AbstractMatrix{<:Real}, zero_mask::AbstractMatrix{Bool},
                              samples::AbstractVector{<:AbstractString})
@@ -427,6 +432,9 @@ data. Returns `(proportions, zeros_replaced, imputed_mass, warnings)`:
 `proportions` has the same shape as `counts`, each row summing to 1 with no
 zero left; `imputed_mass` is the share of each sample's total held by replaced
 values; `warnings` is whatever R warned.
+`frac` controls the fraction of a taxon's smallest observed proportion used
+to lower an excessive imputed proportion (see [`DifferentialConfig`](@ref)).
+Without zeros, returns row-normalised counts, but still requires zCompositions.
 
 The caller chooses the taxa: everything passed in is replaced and kept, none is
 dropped. Throws `ArgumentError` when there are fewer than 2 taxa, when a taxon
@@ -434,7 +442,8 @@ has reads in fewer than 2 samples (the GBM prior is then undefined), when a
 sample has no reads, or when cmultRepl refuses or returns a value that is not a
 positive proportion; the messages name the taxon or sample and point at
 `min_prevalence`. Throws `ZCompositionsUnavailable` when zCompositions cannot
-be loaded and `RBusyError` when the R runtime stays busy.
+be loaded and `RBusyError` when the R runtime stays busy. Mismatched sample or
+taxon labels raise `ArgumentError`; a changed output shape raises `ErrorException`.
 """
 function replace_zeros(counts::AbstractMatrix{<:Real};
                        frac::Real=DEFAULT_DELTA,
@@ -540,7 +549,10 @@ the mean of `contrast` minus the mean of `reference`; the variances of the two
 groups are not assumed equal, since the groups often differ in size. Returns
 one row per taxon with `status` (`ok` or `failed`), `note`, `estimate`, `se`,
 `statistic` (Welch's t) and `pvalue`; a failed taxon has `nothing` for every
-statistic. Throws `RBusyError` when the R runtime stays busy.
+statistic. Errors from an individual R test become failed rows with a reason
+in `note`. Throws `ArgumentError` if the group labels do not match the number
+of samples and `RBusyError` when the R runtime stays busy; other R evaluation
+or conversion errors propagate.
 """
 function fit_welch(values::AbstractMatrix{<:Real}, groups::AbstractVector{<:AbstractString};
                    levels::NTuple{2,String})
@@ -601,19 +613,23 @@ every observed taxon first would let imputed values for rare taxa take over
 the samples of a sparse table. The estimate is the difference in mean CLR,
 contrast minus reference: a difference in centred-log-ratio units, not a fold
 change, relative to the geometric mean of the tested taxa. Replaced zeros are
-not measurements; `diagnostics.zero_replacement` reports their share of each
-sample. Each group needs at least 2 samples.
+not measurements; `diagnostics.zero_replacement` reports the median and maximum
+share of sample mass held by replaced zeros. Each group needs at least 2 samples.
 
 For both methods, taxa present in fewer than `config.min_prevalence` of the
 samples are reported as `filtered` and not fitted, and the Benjamini-Hochberg
 family is the fitted taxa that produced a p-value; failed and filtered taxa
 carry `padj = nothing`. The result's `effect` names the row key that holds the
 effect size and its label.
+Rows are sorted by adjusted p-value, raw p-value and taxon name, with missing
+p-values last. The overall status is `partial` if any taxon failed, otherwise `ok`.
 
 Throws `ArgumentError` for unusable input (including a zero replacement that
 cannot be made), `ScalingRefusal` when the offset cannot be computed,
 `MASSUnavailable` or `ZCompositionsUnavailable` when the R package a method
-needs is missing, and an `ErrorException` when no taxon could be fitted at all.
+needs is missing, `RBusyError` when the R runtime stays busy, and an
+`ErrorException` when no taxon could be fitted at all or zero replacement changes
+the table's shape. Other R evaluation or conversion errors propagate.
 """
 function differential_abundance(counts::AbstractMatrix{<:Real},
                                 samples::AbstractVector{<:AbstractString},
@@ -750,8 +766,9 @@ end
 A Plotly volcano plot of a `differential_abundance` result: the effect named by
 `result["effect"]` (log2 fold change, or CLR difference) against -log10 of the
 raw p-value, coloured by whether the BH-adjusted p-value is below `alpha`. Taxa
-without a p-value are omitted here; they remain in the results table with their
-reason.
+without an adjusted p-value are omitted here; they remain in the results table
+with their reason. Without `effect`, uses log2 fold change. Zero raw p-values
+are plotted at the smallest positive normal `Float64` and identified in hover text.
 """
 function volcano_chart(result::AbstractDict; alpha::Real=0.05)
     ref = result["groups"]["reference"]

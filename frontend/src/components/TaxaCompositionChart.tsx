@@ -24,6 +24,13 @@ const LABEL_STYLE: React.CSSProperties = {
   gap: 4,
 }
 
+/**
+ * Select and compute a taxon or category bar chart for one run, or for `runs`
+ * when that list is non-empty, with optional facets across runs. `table`
+ * defaults to merged. Providing `subgroup`, including null for all sub-groups,
+ * controls that selection and hides the internal selector; facets set their
+ * own scope. Changed inputs clear the figure; chart failures show a toast.
+ */
 export function TaxaCompositionChart({
   study,
   run,

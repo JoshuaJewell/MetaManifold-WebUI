@@ -33,6 +33,9 @@ include("analysis/diversity.jl")
 include("analysis/analysis.jl")
 include("analysis/differential.jl")
 
+# Canonical JSON: deterministic bytes for hashing and content-addressing.
+include("canonical.jl")
+
 # Web server
 include("server/server.jl")
 

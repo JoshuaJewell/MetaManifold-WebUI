@@ -34,6 +34,14 @@ end
     SV.ServerState.set_root!(tmp)
     SV._bound_host[] = "127.0.0.1"
     SV._bound_port[] = 8080
+    # The baseline assertions below hold only with no extra origins
+    # configured. JULIA_METAMANIFOLD_ALLOWED_ORIGINS is a supported
+    # deployment setting (split deployments, tunnels), and a developer
+    # running the suite with it set would otherwise fail them, so it is
+    # cleared here and restored in the finally.
+    saved_origins = get(ENV, "JULIA_METAMANIFOLD_ALLOWED_ORIGINS", nothing)
+    haskey(ENV, "JULIA_METAMANIFOLD_ALLOWED_ORIGINS") &&
+        delete!(ENV, "JULIA_METAMANIFOLD_ALLOWED_ORIGINS")
     mkpath(joinpath(tmp, "data", "StudyS", "run1"))
     touch(joinpath(tmp, "data", "StudyS", "run1", "s1_R1.fastq.gz"))
     mkpath(joinpath(tmp, "projects", "StudyS", "run1"))
@@ -75,6 +83,43 @@ end
             end
             # The Host check still applies first.
             @test _ss_request("GET", studies, ["Host" => "evil.example:8080"]).status == 403
+        end
+
+        @testset "Wildcard bind serves, and admits only, the reached IP" begin
+            studies = "/api/v1/studies"
+            SV._bound_host[] = "0.0.0.0"
+            lan = "Host" => "192.168.1.10:8080"
+            ui = "Origin" => "http://192.168.1.10:8080"
+            # The UI served at the machine's address: its origin is admitted,
+            # with CORS headers, a preflight answer, and writes that reach the
+            # route (this one fails in the route itself, not in the guard).
+            r = _ss_request("GET", studies, [lan, ui])
+            @test r.status == 200
+            @test SV.HTTP.header(r, "Access-Control-Allow-Origin") == "http://192.168.1.10:8080"
+            @test _ss_request("OPTIONS", studies, [lan, ui]).status == 204
+            @test _ss_request("POST", "/api/v1/studies/StudyS/report?kind=bogus&ext=.txt",
+                              [lan, ui, "Content-Type" => "text/plain"], "x").status == 400
+            @test !isdir(joinpath(tmp, "projects", "StudyS", "report"))
+            # An IPv6 literal that matches its Host is admitted the same way.
+            @test _ss_request("GET", studies,
+                              ["Host" => "[fd00::10]:8080", "Origin" => "http://[fd00::10]:8080"]).status == 200
+            # Another address, another port, or another scheme: still refused.
+            for o in ("http://192.168.1.11:8080", "http://192.168.1.10:9090",
+                      "https://192.168.1.10:8080")
+                @test _ss_request("GET", studies, [lan, "Origin" => o]).status == 403
+            end
+            # A DNS-rebinding page: the domain matches its own Host, but a
+            # name is not an IP literal, so it is still refused.
+            @test _ss_request("GET", studies,
+                              ["Host" => "evil.example:8080", "Origin" => "http://evil.example:8080"]).status == 403
+            # A hostname the machine is reached by still has to be listed.
+            withenv("JULIA_METAMANIFOLD_ALLOWED_ORIGINS" => "http://lab-box:8080") do
+                @test _ss_request("GET", studies,
+                                  ["Host" => "lab-box:8080", "Origin" => "http://lab-box:8080"]).status == 200
+            end
+            @test _ss_request("GET", studies,
+                              ["Host" => "lab-box:8080", "Origin" => "http://lab-box:8080"]).status == 403
+            SV._bound_host[] = "127.0.0.1"
         end
 
         @testset "Oxygen docs and metrics are not served" begin
@@ -121,6 +166,8 @@ end
             @test SV.HTTP.header(f, "Content-Security-Policy") == ""
         end
     finally
+        saved_origins === nothing ||
+            (ENV["JULIA_METAMANIFOLD_ALLOWED_ORIGINS"] = saved_origins)
         SV.ServerState._root[] = old_root
         SV._bound_host[], SV._bound_port[] = old_host, old_port
         rm(tmp; recursive=true, force=true)
