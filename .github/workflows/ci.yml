@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
