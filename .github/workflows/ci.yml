@@ -1,10 +1,20 @@
 name: CI
 
+# This fork's account allows only GitHub's own actions (actions/*) and its own,
+# each pinned to a full commit SHA. Upstream's julia-actions, oven-sh/setup-bun
+# and codecov/codecov-action are none of these, and with them this workflow
+# ended in startup_failure on every run. So Julia and Bun are installed here
+# from the archives config/defaults/tool_versions.yml pins, each refused unless
+# it hashes to the pinned SHA256, and the Julia depot is cached with
+# actions/cache. Coverage is kept as a workflow artifact, since the Codecov
+# project is upstream's. test/unit/test_install_pins.jl asserts that every
+# `uses:` in .github/workflows is allowed by that policy.
+
 on:
   push:
     branches: [main]
+  # Any base branch, so a PR stacked on another one is tested too.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -16,6 +26,95 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
+  # A pull request that touches nothing the suite exercises -- a README edit, a
+  # wiki page, a template, a licence record -- does not need the ~19-minute
+  # Julia suite or the proof checker to pass over it. The gate decides, and the
+  # two jobs below carry `if:` on its output; when it says not relevant, GitHub
+  # posts `skipped` for them, and a skipped check satisfies a required one. The
+  # gate itself must never be skipped -- it is the check that vouches for the
+  # others' absence, so Branch-Floor requires it too.
+  #
+  # The trigger stays unfiltered for a reason this repository has already
+  # sprang once (#116): a path-filtered `pull_request` trigger does not run at
+  # all on a PR that matches no path, so a required check from that workflow
+  # never posts and can never be satisfied. Running the cheap gate on every PR
+  # and letting it skip the heavy work is the pattern the occupancy workflow
+  # (#125) established; this applies it to the main suite.
+  #
+  # The relevant-path list is deliberately the positive form: anything not
+  # listed is not relevant, so a new directory joins the suite by being added
+  # here, not by being forgotten. These tests also read the repository's own
+  # shape -- the pin tests parse `.github/workflows/`, the root-shape guard
+  # reads the tracked tree, and the occupancy reading's Agda tree lives under
+  # `docs/occupancy/` -- so those paths are relevant even though they are
+  # documentation-shaped. In a `case` pattern, `*` crosses `/`.
+  gate:
+    name: Code relevance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      relevant: ${{ steps.push.outputs.relevant || steps.pr.outputs.relevant }}
+    steps:
+      # A push only starts this workflow on main (the branch filter above), so
+      # the gate has nothing to decide: every push is relevant.
+      - name: A push is already branch-filtered
+        id: push
+        if: github.event_name == 'push'
+        run: echo 'relevant=true' >> "$GITHUB_OUTPUT"
+
+      # Full history, because the three-dot diff names the merge base of the
+      # PR's base tip and its merge commit, and a stacked PR's merge base sits
+      # further back still.
+      - name: Checkout the change
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # nothing here pushes
+          fetch-depth: 0
+
+      # --no-renames, so a file renamed out of a listed path is reported as a
+      # deletion under its original name and still counts. -z with a
+      # NUL-delimited read, so a pathname Git would quote or that contains a
+      # newline arrives raw and matches the pattern. The base SHA travels
+      # through env, not template interpolation into the script.
+      - name: Does the change touch anything the suite exercises?
+        id: pr
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          relevant=false
+          # Every pattern is quoted, so the glob survives array assignment and
+          # fires at `case` time, against the diff -- an unquoted `src/*` would
+          # expand against the checkout the runner happens to be standing in.
+          patterns=('src/*' 'test/*' 'scripts/*' 'frontend/*' 'config/*'
+                    'bench/*' 'data/*' 'proofs/*' 'R/*' 'renv/*' 'Project.toml'
+                    'Manifest.toml' 'renv.lock' '.Rprofile' 'install.sh'
+                    'start.sh' 'docs/occupancy/*' 'docs/occupancy-2026-10.adoc'
+                    '.github/workflows/*')
+          # The diff goes to a file first because a process substitution hides
+          # git diff's exit status: an unavailable comparison SHA (a force-push
+          # on the base branch, for instance) or a repository error would read
+          # as "no changes", and the gate would post relevant=false -- skipping
+          # the Julia suite and the proof checker, whose `skipped` conclusion
+          # satisfies a required check -- so a relevant PR would pass silently.
+          # A failed diff must fail the gate itself: that is the one failure
+          # the required-check design cannot afford to skip. As in the
+          # occupancy gate, which this mirrors.
+          changed="$RUNNER_TEMP/ci-changed-files"
+          if ! git diff --no-renames --name-only -z "$BASE_SHA...HEAD" > "$changed"; then
+            echo "ERROR: git diff $BASE_SHA...HEAD failed" >&2
+            exit 1
+          fi
+          while IFS= read -r -d '' file; do
+            for pattern in "${patterns[@]}"; do
+              case "$file" in
+                $pattern) relevant=true; break 2 ;;
+              esac
+            done
+          done < "$changed"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+
   test:
     # The name is a fixed string, it carries no version, and the job has NO matrix.
     # Both are required, and the first without the second is a trap that has already
@@ -40,6 +139,10 @@ jobs:
     # silently. If a matrix is ever genuinely wanted here, the required context must move
     # to a matrix-free aggregator job first.
     name: Julia tests
+    # Runs only when the gate above found a relevant path; on a docs-only PR
+    # this job posts `skipped`, which satisfies the required check.
+    needs: gate
+    if: needs.gate.outputs.relevant == 'true'
     # Explicit, not ubuntu-latest: the R pin below names an apt package revision built
     # for 24.04, and a runner that silently rolled to the next LTS would take that pin
     # with it. `runs-on` cannot read `env`, so this is a literal.
@@ -53,22 +156,45 @@ jobs:
     # the environment, so those commands pass --no-init-file instead.
     env:
       RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
+      # Pinned rather than tracking latest stable, because a pinned Manifest.toml
+      # resolved by an unpinned Julia is not a reproducible build. These must equal
+      # runtimes.julia.archives.linux-x86_64 in the pin file, whose version must
+      # equal julia_version in Manifest.toml; they cannot be read from the pin
+      # file, since nothing can be read before Julia exists.
+      # test/unit/test_install_pins.jl fails if any of them disagree.
+      JULIA_URL: https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.5-linux-x86_64.tar.gz
+      JULIA_SHA256: 41b84d727e4e96fbf3ed9e92fa195d773d247b9097f73fad688f8b699758bae7
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-
-      - name: Set up Julia
-        uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9  # v2.7.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # Pinned rather than tracking latest stable, because a pinned Manifest.toml
-          # resolved by an unpinned Julia is not a reproducible build. This must equal
-          # julia_version in Manifest.toml; it cannot be read from the pin file, since
-          # nothing can be read before Julia exists. test/unit/test_install_pins.jl
-          # fails if the three ever disagree.
-          version: "1.12.5"
+          persist-credentials: false   # nothing here pushes
 
-      - name: Cache Julia packages
-        uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9  # v2.1.0
+      - name: Install Julia
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$JULIA_URL" julia.tar.gz
+          echo "$JULIA_SHA256  julia.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/julia
+          sudo tar xzf julia.tar.gz -C /opt/julia --strip-components=1
+          rm julia.tar.gz
+          echo /opt/julia/bin >> "$GITHUB_PATH"
+
+      # The registry, packages, artifacts and precompiled caches, keyed on the
+      # Manifest (which also names the Julia version). Saved once instantiation
+      # has succeeded, so a failed run cannot store a half-built depot.
+      - name: Restore the Julia depot
+        id: julia-depot
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.julia/registries
+            ~/.julia/packages
+            ~/.julia/artifacts
+            ~/.julia/compiled
+          key: julia-depot-${{ runner.os }}-${{ hashFiles('Manifest.toml') }}
+          restore-keys: |
+            julia-depot-${{ runner.os }}-
 
       # Every external version CI installs is read from the committed pin file, so CI
       # and a developer's machine cannot drift apart. A temporary environment is used
@@ -84,7 +210,10 @@ jobs:
             pins = YAML.load_file("config/defaults/tool_versions.yml")
             open(ENV["GITHUB_ENV"], "a") do io
                 println(io, "R_APT_VERSION=", pins["runtimes"]["r"]["apt_version"])
-                println(io, "BUN_VERSION=", pins["toolchain"]["bun"]["version"])
+                bun = pins["toolchain"]["bun"]
+                println(io, "BUN_VERSION=", bun["version"])
+                println(io, "BUN_URL=", bun["archives"]["linux-x86_64"]["url"])
+                println(io, "BUN_SHA256=", bun["archives"]["linux-x86_64"]["sha256"])
                 println(io, "CUTADAPT_SPEC=cutadapt==", pins["tools"]["cutadapt"]["version"])
                 println(io, "MULTIQC_SPEC=multiqc==", pins["tools"]["multiqc"]["version"])
                 fastqc = pins["tools"]["fastqc"]["archives"]["any"]
@@ -139,7 +268,7 @@ jobs:
       # the restore runs as root. The run id makes each key unique so every attempt
       # saves its progress; restore-keys picks the newest match.
       - name: Restore the renv cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: /opt/renv-cache
           key: renv-${{ runner.os }}-R${{ env.R_APT_VERSION }}-${{ hashFiles('renv.lock') }}-${{ github.run_id }}
@@ -166,7 +295,7 @@ jobs:
 
       - name: Save the renv cache
         if: always()
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: /opt/renv-cache
           key: renv-${{ runner.os }}-R${{ env.R_APT_VERSION }}-${{ hashFiles('renv.lock') }}-${{ github.run_id }}
@@ -221,10 +350,28 @@ jobs:
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
+      - name: Save the Julia depot
+        if: steps.julia-depot.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          bun-version: ${{ env.BUN_VERSION }}
+          path: |
+            ~/.julia/registries
+            ~/.julia/packages
+            ~/.julia/artifacts
+            ~/.julia/compiled
+          key: julia-depot-${{ runner.os }}-${{ hashFiles('Manifest.toml') }}
+
+      # Downloaded against the pinned URL and refused unless it hashes to the pinned
+      # SHA256, as install.jl does when no bun of this version is on PATH.
+      - name: Install Bun
+        run: |
+          source scripts/ci/fetch_pinned.sh
+          fetch_pinned "$BUN_URL" bun.zip
+          echo "$BUN_SHA256  bun.zip" | sha256sum -c -
+          unzip -q bun.zip
+          sudo mv bun-linux-x64/bun /usr/local/bin/bun
+          rm -rf bun.zip bun-linux-x64
+          test "$(bun --version)" = "$BUN_VERSION"
 
       - name: Build frontend
         working-directory: frontend
@@ -289,19 +436,29 @@ jobs:
           fi
           exit "$status"
 
+      # What julia-processcoverage did: the .cov files under src/ to lcov.info, with
+      # CoverageTools pinned to an exact release.
       - name: Process coverage
-        uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38  # v1.2.2
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.activate(temp = true)
+            Pkg.add(name = "CoverageTools", version = "1.4.2")
+            using CoverageTools
+            LCOV.writefile("lcov.info", process_folder("src"))'
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v6.0.2
+      # The Codecov project (codecov.yml, the README badge) is upstream's, so the fork
+      # keeps its coverage as an artifact of the run instead.
+      - name: Keep coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: JoshuaJewell/MetaManifold-WebUI
-          fail_ci_if_error: false
+          name: lcov
+          path: lcov.info
+          retention-days: 14
 
-  # Machine-checked proofs of the Benjamini-Hochberg adjustment and the TSS/RLE
-  # scaling algebra (proofs/agda, proofs/agda/README.md).
+  # Machine-checked proofs of the Benjamini-Hochberg adjustment, the TSS/RLE
+  # scaling algebra, PERMANOVA's permutation bookkeeping and the significance
+  # reporting discipline (proofs/agda, proofs/agda/README.md).
   # Agda publishes no 2.6.4.3 binary, and agda-stdlib 2.1 requires Agda 2.6.4.x,
   # so the pair comes from Debian trixie, which packages exactly that pair with
   # pre-built library interfaces. The image is pinned by digest and the two
@@ -311,13 +468,18 @@ jobs:
   # reads them.
   agda:
     name: Agda proofs
+    # As the Julia suite above: only when the gate found a relevant path.
+    needs: gate
+    if: needs.gate.outputs.relevant == 'true'
     runs-on: ubuntu-24.04
     container: debian:trixie-20250929-slim@sha256:1caf1c703c8f7e15dcf2e7769b35000c764e6f50e4d7401c355fb0248f3ddfdb
     timeout-minutes: 30
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # nothing here pushes
 
       - name: Install Agda and the standard library
         run: |

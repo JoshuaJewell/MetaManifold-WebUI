@@ -1212,7 +1212,11 @@ end
 Run a differential abundance test between exactly two conditions (runs or
 pooled-run sub-groups) and return the per-taxon table with a volcano plot. The
 first condition is the reference, so a positive estimate means more abundant in
-the second. Every refusal is an explicit JSON error.
+the second: a natural-log fold change for `nb_glm`, or a mean CLR difference for
+`clr_welch`. `ArgumentError`s from config construction or the test return 400;
+scaling refusals and analysis `ErrorException`s return 422, and missing MASS or
+zCompositions returns 503. Missing studies or results return 404.
+`RBusyError` and other uncaught errors propagate to the caller.
 """
 function _differential(study::String, body)
     study in _study_names() || return json_error(404, "study_not_found",

@@ -15,6 +15,13 @@ end
 # Read the document; an unparseable file becomes a 400 naming it. DatabasesLibrary.load
 # raises on a bad file because an empty document would pass validation and the next
 # Save would overwrite the real config. Returns the document, or an HTTP.Response error.
+"""
+    _read_databases() -> Union{Dict,HTTP.Response}
+
+Read the canonical databases document, or an empty document if the file is absent.
+Loading errors become a 400 `databases_unreadable` response naming the file and
+reason; the file is not modified.
+"""
 function _read_databases()
     try
         DatabasesLibrary.load(_databases_path())

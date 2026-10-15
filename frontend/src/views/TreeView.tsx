@@ -183,7 +183,9 @@ function TreeCanvas({ source, tree, src, toast }: {
 
   // Autosave the view document.
   const firstSave = useRef(true)
-  const saveTimer = useRef<number>()
+  // React 19's types dropped the zero-argument useRef overload, so the timer
+  // id starts as an explicit undefined instead.
+  const saveTimer = useRef<number | undefined>(undefined)
   const saveNow = useCallback(() => {
     const doc: TreeViewDoc = {
       version: 1,
@@ -228,7 +230,7 @@ function TreeCanvas({ source, tree, src, toast }: {
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
-  const scrollTimer = useRef<number>()
+  const scrollTimer = useRef<number | undefined>(undefined)
   const onScroll = () => {
     const el = scrollRef.current
     if (!el) return

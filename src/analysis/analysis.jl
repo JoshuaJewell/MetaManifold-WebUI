@@ -950,14 +950,25 @@ _not_computed(status::Symbol, reason::AbstractString;
 """
     was_computed(r::AlphaSignificance) -> Bool
 
-Whether `r` holds an actual test result. False means no test was performed, so
+Whether `r` has status `:computed`. False means no omnibus result is available, so
 neither `omnibus` nor `pairwise` may be presented as a finding.
 """
 was_computed(r::AlphaSignificance) = r.status === :computed
 
 """
 Run the omnibus (and optionally pairwise) alpha-diversity test, returning an
-`AlphaSignificance` whose status says whether a test was actually performed.
+`AlphaSignificance` whose status distinguishes a computed omnibus result from
+an unavailable or failed test.
+
+`values`, group `labels` and `sample_ids` describe the same samples. Unpaired
+data use Kruskal-Wallis; `paired_samples` uses common sample IDs across all
+groups, averaging repeated IDs within a group, with paired Wilcoxon for two
+groups or Friedman for more. `pairwise` requests Wilcoxon comparisons with
+Benjamini-Hochberg adjusted p-values.
+
+Unavailable R/vegan, no common IDs for pairing, or an omnibus R error converted
+to a missing p-value return statuses `:r_unavailable`, `:no_paired_samples` or
+`:test_failed`, respectively. A failed omnibus result retains any pairwise rows.
 
 Waits for the R runtime like the other R analyses. While a pipeline run holds
 it, `RBusyError` reaches the server, which reports the chart as unavailable
@@ -1163,6 +1174,22 @@ function _add_pairwise_annotations!(layout::Dict{String,Any},
     layout[yaxis_layout_key] = axis
 end
 
+"""
+    alpha_boxplot(groups; show_points=true, annotate_significance=false,
+                  pairwise_brackets=false, paired_samples=false,
+                  paired_lines=false, significance_test="kruskal_wallis") -> Dict
+
+Build a Plotly figure with richness, Shannon and Gini-Simpson boxplot panels.
+Each group is `(label, sample_ids, richness, shannon, simpson)`, with metric
+values aligned to its sample IDs. `paired_lines` joins matching IDs across
+groups and disables point jitter. `paired_samples` selects paired tests when
+an ID is shared by every group; otherwise tests are unpaired.
+
+With at least two group labels and `significance_test == "kruskal_wallis"`,
+tests run even when neither annotation option is enabled. The options display
+omnibus captions or pairwise brackets, including notices for unavailable or
+failed tests. `RBusyError` propagates when the R runtime stays busy.
+"""
 function alpha_boxplot(groups::AbstractVector{<:Tuple{String, Vector{String}, AbstractVector{<:Real}, Vector{Float64}, Vector{Float64}}};
                        show_points::Bool=true,
                        annotate_significance::Bool=false,
@@ -1442,11 +1469,13 @@ end
 
 PERMANOVA via vegan::adonis2 with up to 999 permutations.
 `metadata` is a DataFrame with one row per sample and covariate columns.
-Each covariate is tested as its own term (`by = "terms"`), sequentially in
+Columns named `sample` (case-insensitive) and constant columns are excluded.
+Each remaining covariate is tested as its own term (`by = "terms"`), sequentially in
 column order, so each row is conditioned on the terms before it. The top-level
 `term`, `r2`, `f_statistic` and `p_value` are those of the first term.
 `blocks`, one label per sample (e.g. the individual a sample came from),
-restricts permutations to within blocks. It is ignored when no label repeats,
+restricts permutations to within blocks. It is ignored when its length does
+not match the sample count or when no label repeats,
 since singleton blocks admit no permutation at all. A term that is constant
 within every block cannot be tested by within-block permutation (each sample
 never leaves its block, so the permutations never exchange that term's labels
@@ -1456,6 +1485,12 @@ and the p-value does not test it), so its p-value is withheld and
 than 999 when the blocks admit fewer, and `min_p_value` the smallest p-value
 that number can produce.
 `transform` is applied before `vegdist`; see [`run_nmds`](@ref).
+
+Returns `nothing` when R/vegan is unavailable or no covariates remain. An
+`adonis2` error becomes a named tuple containing `message`; on success,
+`dispersion` contains PERMDISP results for the combined covariate groups or
+an `error` message. `RBusyError`, transformation errors and R errors outside
+these caught tests propagate.
 """
 function run_permanova(mat::Matrix{Float64}, metadata::DataFrame; seed::Integer=123,
                        transform::String="none",

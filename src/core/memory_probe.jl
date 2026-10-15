@@ -50,8 +50,16 @@ mutable struct TaskTrace
     samples   :: Int           # samples that found at least one live process
     peak_kib  :: Int
     hwm_kib   :: Int
+    # The sample window the task's children were live in: the index of the first
+    # sample taken after the first of them started, and the last taken before
+    # the last was waited for. 0 means never. Two tasks overlap when the later
+    # one's `first_sample` falls at or before the earlier one's `last_sample`,
+    # which is the interleaving the grade algebra sequences over.
+    first_sample :: Int
+    last_sample  :: Int
 end
-TaskTrace(label::AbstractString) = TaskTrace(String(label), Int[], 0, 0, 0, 0)
+TaskTrace(label::AbstractString) =
+    TaskTrace(String(label), Int[], 0, 0, 0, 0, 0, 0)
 
 mutable struct Probe
     interval    :: Float64
@@ -269,7 +277,10 @@ function watch!(proc::Base.Process)
     end
     lock(p.lock) do
         t.processes += 1
-        pid === nothing || push!(t.live, pid)
+        t.processes == 1 && (t.first_sample = p.samples + 1)
+        if pid !== nothing
+            push!(t.live, pid)
+        end
     end
     pid === nothing || _sample!(p)
     pid
@@ -301,8 +312,225 @@ function unwatch!(pid::Int)
     p === nothing && return nothing
     lock(p.lock) do
         filter!(!=(pid), t.live)
+        isempty(t.live) && (t.last_sample = p.samples)
     end
     nothing
+end
+
+## Grading a stage against the high-water-mark algebra
+# `docs/occupancy` reads a stage as a timeline of grades and checks the peak the
+# algebra predicts against the one the probe measured. The grade is the pinned
+# HWM instance's (`occupancy-types`' sibling `resource-algebra`,
+# `ResourceAlgebra.Instances.HWM`; both are fetched by `scripts/fetch-siblings.sh`):
+#
+#     hwm peak drift        with   drift ≤ peak
+#
+#   * `peak`  — the high-water mark this interaction reached, in KiB;
+#   * `drift` — the change in the live peak sum across the interaction's
+#     boundary, so a boundary that also releases an earlier task is negative;
+#   * `release` = peak − drift — everything freed between the interaction's start
+#     and the next boundary, which can exceed the interaction's own peak.
+#
+# A task's drift subtracts earlier tasks that exited before the next start, so it
+# can be negative — the signed-drift extension `Instances/HWM`'s header records
+# as H-2. The folded drift is the sum of peaks still live at the stage's end.
+#
+# A task's drift subtracts earlier tasks that exited before the next start, so
+# it can be negative. The folded drift is the sum of peaks still live there.
+#
+# Sequencing starts the next interaction from the previous one's drift:
+#
+#     hwm p₁ n₁ ⊗ hwm p₂ n₂ = hwm (max p₁ (n₁ + p₂)) (n₁ + n₂)
+#
+# and `OccupancyTypes.Reclaim` proves of that definition
+#
+#     peak (a ⊗ b) = max (peak a) (drift a + peak b)           (reclaim-law)
+#     peak (a ⊗ b) ≤ peak a + peak b                           (occupancy≤cost)
+#     drift a = peak a  ⇒  peak (a ⊗ c) = peak a + peak c       (no-reclaim)
+#     drift a < peak a, 0 < peak c  ⇒  peak (a ⊗ c) < peak a + peak c (reclaimed)
+#
+# The last two are the two shapes a stage actually has. Run together, the first
+# task is still resident when the second starts (drift = peak) and the stage peak
+# is the sum; run one after the other it has exited (drift = 0) and the stage peak
+# is the larger. The samples already tell the two apart, so the drift is read from
+# the task windows and never assumed.
+#
+# The prediction is an upper bound on the measurement: at a handover the task
+# still live holds at most its peak, so the drift the algebra adds is at least
+# what a sample could have seen. `disagreement` therefore reports only what that
+# bound forbids — a measured stage peak above the prediction — which is the "one
+# of them is a bug" the occupancy reading asks about.
+
+const GRADE_ALGEBRA = "ResourceAlgebra.Instances.HWM"
+
+"A grade of the pinned high-water-mark algebra: a peak and a net memory change."
+struct Grade
+    peak  :: Int
+    drift :: Int
+    function Grade(peak::Integer, drift::Integer)
+        drift <= peak || throw(ArgumentError(
+            "a grade holds at most what it reached: drift $drift > peak $peak"))
+        new(Int(peak), Int(drift))
+    end
+end
+
+"`release(grade)` — `peak − drift`: everything freed by the interaction's boundary."
+release(g::Grade) = g.peak - g.drift
+
+"`seq(a, b)` — sequence `b` after `a`: the suffix starts from `a`'s drift."
+seq(a::Grade, b::Grade) = Grade(max(a.peak, a.drift + b.peak), a.drift + b.drift)
+
+"`alt(a, b)` — the larger grade, componentwise (what the timeline never needs, kept for the pair of laws)."
+alt(a::Grade, b::Grade) = Grade(max(a.peak, b.peak), max(a.drift, b.drift))
+
+"Nothing allocated and nothing held: the algebra's unit."
+const NO_GRADE = Grade(0, 0)
+
+# The trace's sample window, or `nothing` for a record that carries none (one
+# written before the windows were sampled).
+function _window(rec::AbstractDict)
+    first_seen = get(rec, "first_sample", nothing)
+    last_seen  = get(rec, "last_sample", nothing)
+    (first_seen isa Integer && last_seen isa Integer) ? (Int(first_seen), Int(last_seen)) : nothing
+end
+
+_is_windowed(rec::AbstractDict) = _window(rec) !== nothing
+
+# Whether `prev` was still live when `next` started, so the handover hands its
+# peak on rather than reclaiming it. A started `prev` never unwatched (window
+# end 0) was still live; a task that never started (window start 0) never overlapped.
+_overlaps(prev::Tuple{Int,Int}, next::Tuple{Int,Int}) =
+    prev[1] != 0 && next[1] != 0 && (prev[2] == 0 || next[1] <= prev[2])
+
+# Grades and labels in sampled order, or `nothing` when the record carries no
+# windows: a comparison is then skipped rather than made on an assumed order.
+function _grades_and_labels(occ::AbstractDict)
+    recs = get(occ, "tasks", nothing)
+    recs isa AbstractVector || return Grade[], String[]
+    all(_is_windowed, recs) || return nothing
+    # Sampled order, ties broken by record order so the result never depends on
+    # the sort's stability.
+    order  = sort(collect(eachindex(recs)); by = i -> (_window(recs[i])[1], i))
+    ordered = collect(recs)[order]
+    windows = [_window(r) for r in ordered]
+    peaks   = [Int(get(r, "peak_rss_kib", 0)) for r in ordered]
+    grades  = Grade[]
+    labels  = String[]
+    live    = Int[]
+    held    = 0
+    for (i, rec) in enumerate(ordered)
+        push!(live, i)
+        if i == length(ordered)
+            # The stage waits for its children: a task still resident at the end
+            # keeps its peak in the folded drift, an exited one holds nothing.
+            filter!(j -> windows[j][1] != 0 && windows[j][2] == 0, live)
+        else
+            filter!(j -> _overlaps(windows[j], windows[i + 1]), live)
+        end
+        remaining = sum(j -> peaks[j], live; init = 0)
+        # seq adds drifts, so reclaim expired predecessors as well as this task.
+        push!(grades, Grade(peaks[i], remaining - held))
+        held = remaining
+        push!(labels, String(get(rec, "label", "?")))
+    end
+    grades, labels
+end
+
+"""
+    task_grades(occupancy) -> Union{Vector{Grade},Nothing}
+
+One grade per task of a stage's `occupancy` record, in sampled order. Its drift
+is the change in the live peak sum by the next task's start, including releases
+of earlier tasks; the final boundary retains only unclosed windows. Folding
+with `seq` carries exactly the peaks still live at each boundary. `nothing` when
+the record carries no sample windows.
+"""
+function task_grades(occ::AbstractDict)
+    graded = _grades_and_labels(occ)
+    graded === nothing ? nothing : graded[1]
+end
+
+"""
+    stage_grade(occupancy) -> Union{Grade,Nothing}
+
+The stage's grade: its tasks' grades folded with `seq`, the algebra's sequencing.
+`nothing` when the record carries no sample windows.
+"""
+function stage_grade(occ::AbstractDict)
+    grades = task_grades(occ)
+    grades === nothing && return nothing
+    isempty(grades) ? NO_GRADE : foldl(seq, grades)
+end
+
+"`predicted_peak_rss_kib(occupancy)` — the peak the algebra predicts, or `nothing`."
+function predicted_peak_rss_kib(occ::AbstractDict)
+    g = stage_grade(occ)
+    g === nothing ? nothing : g.peak
+end
+
+"`cost_bound_rss_kib(occupancy)` — the peaks added: the peak if no cut reclaimed anything (occupancy≤cost's right-hand side)."
+function cost_bound_rss_kib(occ::AbstractDict)
+    grades = task_grades(occ)
+    grades === nothing ? nothing : sum(g -> g.peak, grades; init = 0)
+end
+
+"`reclaimed_kib(occupancy)` — the slack between the cost bound and the predicted peak: what the cuts reclaim."
+function reclaimed_kib(occ::AbstractDict)
+    cost = cost_bound_rss_kib(occ)
+    predicted = predicted_peak_rss_kib(occ)
+    (cost === nothing || predicted === nothing) ? nothing : cost - predicted
+end
+
+"""
+    disagreement(occupancy) -> Union{String,Nothing}
+
+Why the measured stage peak contradicts the grade algebra, or `nothing` when it
+does not. The prediction is an upper bound, so the one contradiction is a
+measured peak above it: a sample then saw more resident memory than the timed
+timeline of tasks can hold, and one of the two is wrong. A record with no
+windows, or none the probe graded, gives `nothing`: not measured is not a
+disagreement.
+"""
+function disagreement(occ::AbstractDict)
+    predicted = predicted_peak_rss_kib(occ)
+    measured  = get(occ, "child_peak_rss_kib", nothing)
+    (predicted === nothing || !(measured isa Integer)) && return nothing
+    measured > predicted && return "measured $(measured) KiB above the predicted $(predicted) KiB"
+    nothing
+end
+
+"""
+    graded(occupancy) -> Union{OrderedDict,Nothing}
+
+The grades of a stage's `occupancy` record, ready to sit beside it in the
+attestation: per task `peak_kib`/`drift_kib`/`release_kib`, the stage's
+`predicted_peak_kib`, the `cost_bound_kib` (its peaks added) and the
+`reclaimed_kib` slack between the two, the `measured_peak_kib` it is checked
+against, and the `disagreement` between them or `nothing`. `nothing` when the
+record carries no sample windows.
+"""
+function graded(occ::AbstractDict)
+    graded_pair = _grades_and_labels(occ)
+    graded_pair === nothing && return nothing
+    grades, labels = graded_pair
+    stage = isempty(grades) ? NO_GRADE : foldl(seq, grades)
+    cost  = sum(g -> g.peak, grades; init = 0)
+    OrderedDict{String,Any}(
+        "algebra"          => GRADE_ALGEBRA,
+        "tasks"            => Any[OrderedDict{String,Any}(
+                                      "label"   => labels[i],
+                                      "peak_kib"    => grades[i].peak,
+                                      "drift_kib"   => grades[i].drift,
+                                      "release_kib" => release(grades[i]))
+                                  for i in eachindex(grades)],
+        "predicted_peak_kib" => stage.peak,
+        "drift_kib"          => stage.drift,
+        "release_kib"        => release(stage),
+        "cost_bound_kib"     => cost,
+        "reclaimed_kib"      => cost - stage.peak,
+        "measured_peak_kib"  => get(occ, "child_peak_rss_kib", nothing),
+        "disagreement"       => disagreement(occ),
+    )
 end
 
 _task_record(t::TaskTrace) = OrderedDict{String,Any}(
@@ -311,6 +539,8 @@ _task_record(t::TaskTrace) = OrderedDict{String,Any}(
     "samples"      => t.samples,
     "peak_rss_kib" => t.peak_kib,
     "hwm_kib"      => t.hwm_kib,
+    "first_sample" => t.first_sample,
+    "last_sample"  => t.last_sample,
 )
 
 """
@@ -337,6 +567,11 @@ function finish!(p::Probe)
         "tasks"                  => Any[_task_record(t) for t in traces],
     )
     p.error === nothing || (p.record["error"] = p.error)
+    # The grades the sample windows imply, beside the samples they came from. A
+    # record whose tasks carry no windows cannot be graded, and is left as it is
+    # rather than graded on an assumed order.
+    g = graded(p.record)
+    g === nothing || (p.record["grades"] = g)
     p.record
 end
 

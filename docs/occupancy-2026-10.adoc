@@ -1,0 +1,167 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+= Occupancy of the vsearch stage
+:revdate: 2026-10-14
+
+The vsearch stage runs two independent searches, ASV and OTU. The full
+pipeline spawns them together; a single-stage re-run runs them one after the
+other. The high-water-mark (HWM) algebra of occupancy-types predicts that the
+stage's cost is the same in every order but its memory peak is not: serially
+the peak is the larger search's, concurrently it can be their sum
+(choreographic-types A-2 and A-3). This page records one measurement of that,
+on 2026-10-14, and checks it against the typed reading.
+
+== What was measured
+
+`MemoryProbe` (`src/core/memory_probe.jl`), off unless a pipeline.yml sets
+`occupancy_probe.enabled: true`, records for each attested stage:
+
+* `julia_allocated_bytes`: the `Base.gc_num()` delta over the stage (cost);
+* per task (one spawned search): the largest sampled VmRSS of the child
+  process it started (`peak_rss_kib`), the kernel's own VmHWM for it
+  (`hwm_kib`), and the sample window its children were live in — `first_sample`,
+  the first sample taken after its first child started, and `last_sample`, the
+  last taken before its last was waited for, 0 for never — which its grade is
+  read from;
+* `child_peak_rss_kib`: the largest sum of the stage's children's VmRSS at
+  one sampling instant (the stage's occupancy).
+
+The run: `test/occupancy_disagreement_test.jl`, which runs the same two searches
+in three orders under the probe, on a fixture it generates: 1000 reference
+sequences of 400 bp, 300 ASV and 150 OTU queries. Linux 6.18 with 4 CPUs,
+Julia 1.12.5 with 2 threads, vsearch 2.30.5 with `--threads 1`. Sampling
+interval 10 ms.
+
+== Results
+
+[cols="2,1,1,1,1,1,1",options="header"]
+|===
+| Order | ASV peak (KiB) | OTU peak (KiB) | Stage peak, measured (KiB) | Counted bytes, Session IR | Typed peak, HWM | Julia allocation (bytes)
+| ASV then OTU | 9204 | 9180 | 9204 | 9204 | 9204 | 978432
+| OTU then ASV | 9152 | 9192 | 9192 | 9192 | 9192 | 978720
+| Concurrent   | 9176 | 9204 | 18380 | 18380 | 18380 | 978816
+|===
+
+* *Cost commutes.* The allocation totals agree to 0.04%. The test asserts
+  agreement within 1%; a planted extra search in one order breaks it (spread
+  25%).
+* *Each search's peak is the same in every order*, to within 0.6%
+  (9152-9204 KiB). Each search's VmHWM equals its sampled peak, so the
+  sampling caught the peaks.
+* *The stage peak is not the same.* Serially it is the larger search's
+  (9192-9204 KiB); concurrently it is 18380 KiB, twice that. This is the A-3
+  order dependence, and nothing in the stage's outputs shows it: the hits are
+  byte-identical in all three orders. The prediction would have been falsified
+  had the concurrent peak matched the serial one; it did not.
+* *Counted bytes equal the typed peak*, in all three orders. The counted bytes
+  come from occupancy-types' Session IR stepper running
+  `docs/occupancy/vsearch-*.sir`, one buffer per search. The typed peak is
+  computed, by `refl`, from occupancy-types' `Timeline` over resource-algebra's
+  HWM grade (`docs/occupancy/TypedPeak.agda`). A search alone exits holding
+  nothing (drift 0); in the concurrent order the first is still resident
+  when the second starts (drift = peak). The sequence law
+  `max (peak a) (drift a + peak b)` then gives the larger peak serially and the
+  sum concurrently.
+* *The measured stage peak also equals the typed peak* here. For the concurrent
+  order the typed peak is the interleaving in which both are resident at once;
+  a measurement could come in lower if the two searches' peaks did not
+  coincide. Here they did: each search's memory plateaus once its database is
+  loaded.
+
+== Reading the numbers
+
+A recorded `peak_rss_kib` is a reading, not an occupancy: what a stage occupied
+depends on what the next stage inherits from it. So the probe grades a stage's
+whole window (`MemoryProbe`'s `task_grades`, `stage_grade`,
+`predicted_peak_rss_kib`, `cost_bound_rss_kib`, `reclaimed_kib`) and attaches the
+result to a recorded stage as `grades`; a record with no sample windows is left
+ungraded rather than graded on an assumed order. Tasks are read in sampled order
+(first sample, ties by record order). Each handover keeps only the tasks still
+live at it, so a task's `drift_kib` is the change in the live peak sum across its
+boundary — negative when the boundary also releases an earlier task — and
+`release_kib` is everything freed between its start and the next boundary, which
+can exceed that task's own peak. The folded drift is the sum of the peaks still
+live when the stage ends; the pinned instance's own `drift` is that non-negative
+live sum, the signed per-task delta being the extension its header records as
+H-2.
+
+For the three orders above, the algebra's predicted peak reproduces the measured
+stage peak exactly — 9204, 9192 and 18380 KiB — and the slack against the cost
+bound is what the cuts reclaimed: 9180, 9152 and 0 KiB.
+`scripts/check-occupancy-grades.jl` checks that equality, occupancy≤cost and
+non-negative reclamation against this page's raw record, rebuilding each order's
+windows from `docs/occupancy/schedules.yml` (the file records no windows of its
+own; the Session IR texts in this directory state the same interleavings). The
+reclamation readings are theorems over the pinned siblings at these numbers:
+`docs/occupancy/GradedStages.agda` — `no-reclaim` for the concurrent stage,
+`reclaimed` for the serial one, where 9204 KiB are released at the frontier and
+the cost reading counts them — and the two protocol-level statements
+(`occupancy-at-cut`, `protocol-occupancy≤cost`) as the siblings' own two-step
+over the stage's timeline. `docs/occupancy/reject` gains a fourth rejection, for
+reading the concurrent stage's drift as 0.
+
+`scripts/lint-occupancy-readings.sh` keeps production code from reading the key
+directly: outside `src/core/memory_probe.jl`, an occupancy figure must go through
+those helpers.
+
+== Status
+
+[cols="1,3,1,2",options="header"]
+|===
+| ID | Claim | Status | Artefact
+| MMW-01.1 | With the flag off, a stage record has exactly its earlier keys; with it on, it gains `occupancy`; old records still parse and merge | TESTED | `test/occupancy_disagreement_test.jl` ("flag off", "round trip", "through the pipeline's _attest")
+| MMW-01.2 | For this workload, the vsearch stage's cost (Julia allocation) is the same in all three orders | TESTED | same file, "two-thread disagreement" (asserted, within 1%)
+| MMW-01.3 | For this workload, the stage peak depends on the order (A-3), and each search's own peak does not | TESTED | same file, recorded in the test log; table above
+| MMW-01.4 | For the three Session IR texts, the stepper's counted bytes equal the HWM typed peak | TESTED | `scripts/check-occupancy.sh` (stepper output against `TypedPeak.agda`; three rejections in `docs/occupancy/reject`)
+| MMW-01.5 | The recorded run's grades reproduce its measured stage peaks, and the reclamation the pinned siblings' laws read off them is what the cuts freed | TESTED | `scripts/check-occupancy-grades.jl` (the recorded record), `docs/occupancy/GradedStages.agda` (`no-reclaim`, `reclaimed`, `occupancy-at-cut` at the measured numbers), `test/unit/test_occupancy_grade.jl`
+| bridge | Counted bytes are bounded by the typed peak in general (occupancy-types' v0 → typed bridge) | OPEN | unchanged; this page gives three instances, not a proof
+|===
+
+== Limits
+
+* *Sampled.* A per-task peak is the largest VmRSS seen at 10 ms intervals. VmHWM
+  is exact up to the last sample, but growth after it is not seen. A child that
+  lives for less than one interval may not be sampled at all (`samples: 0`).
+* *Child memory only.* The children are counted; the Julia process is not. Its
+  `julia_live_bytes_delta` is recorded, but without a forced collection it
+  reflects when the GC last ran, not what the stage kept.
+* *Allocation is process-wide.* While the study loop runs several runs'
+  pipelines at once, a stage's `julia_allocated_bytes` includes the others'
+  allocations too. The child figures are per stage, since each stage samples
+  only the children it started.
+* *Linux only*, since it reads /proc. For a stage offloaded with `remote:`,
+  the local child is an ssh client, so its memory says nothing about the work.
+* *One thread for vsearch.* With several threads, vsearch writes its hits in
+  whatever order the threads finish. `_sort_hits_by_query!` then does a
+  different amount of work, because its sort key splits each line on every
+  comparison. That moved the stage's allocation total by up to 12% between
+  repeats of the same order. So in production the cost is order-independent
+  only up to that noise; precomputing the sort key would remove it. This PR
+  does not change it.
+* *One host, one day.* CI runs the same test on every push and logs its own
+  numbers; they are not compared with these.
+
+== Reproducing
+
+----
+julia --project=. -t 2 test/occupancy_disagreement_test.jl   # set OCCUPANCY_RESULTS=<file> for YAML
+bash scripts/check-occupancy.sh                               # needs julia and agda 2.6.4.x
+julia --project=. scripts/check-occupancy-grades.jl           # the recorded run's grades
+bash scripts/lint-occupancy-readings.sh                       # no ungraded readings in src/
+----
+
+`scripts/fetch-siblings.sh` fetches the siblings at their pins into
+`_build/dependencies`: occupancy-types `af95728` and resource-algebra
+`cf9235c`.
+
+== As the proofs progress
+
+* *Per-buffer (n-ary) occupancy* in occupancy-types: each search is already one
+  buffer in the Session IR texts, so the typed peak could then be read per
+  search.
+* *Signed drift*: frees could be graded as negative drift, so the Julia side's
+  collections (the pipeline's `GC.gc(false)` hints) become modelled
+  reclamation rather than unmodelled noise.
+* *choreographic-types' operational `step` as a function*: the three orders
+  become three traces of one typed protocol. The frontier certificate its
+  two-thread application note describes could then be displayed in the WebUI.
