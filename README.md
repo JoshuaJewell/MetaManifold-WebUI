@@ -187,6 +187,18 @@ precompile_workload = false
 
 The server then makes those requests itself in the background as it starts, so the first page visit does not wait on compilation.
 
+## Community
+
+[Discussions](https://github.com/hyperpolymath/MetaManifold-WebUI/discussions) are open, and they are where the tool's direction is argued out:
+
+- [Introduce yourself](https://github.com/hyperpolymath/MetaManifold-WebUI/discussions/148) — what you run through MetaManifold, and how it went.
+- [Ideas](https://github.com/hyperpolymath/MetaManifold-WebUI/discussions/150) — what the tool should do next; small conveniences and whole methods both welcome.
+- [The mathematical foundations thread](https://github.com/hyperpolymath/MetaManifold-WebUI/discussions/149) — the statistics underneath the analyses: what is proved, what is questionable, what deserves a proof.
+- [Show and tell](https://github.com/hyperpolymath/MetaManifold-WebUI/discussions/151) — figures, publication tables and placement trees that came out of a run.
+- [Q&A](https://github.com/hyperpolymath/MetaManifold-WebUI/discussions/152) — setup, usage and interpretation. A reproducible defect is a bug report, not a Q&A.
+
+One house norm: runs record their exact toolchain in `attestation.yml`; paste its versions block when asking why results differ.
+
 ## Web interface
 
 The browser interface is the primary way to drive MetaManifold. Beyond creating studies and launching runs, it offers the following:
