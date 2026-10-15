@@ -235,4 +235,74 @@
         end
     end
 
+    ## The server's own entry points, on the run directories the loop above built.
+    # Nothing up to here has called them: the loop drives the stages by hand, which
+    # is not what pressing a stage in the UI does. The full pipeline runs the
+    # vsearch stage's two searches concurrently and a single-stage re-run runs them
+    # one after the other (_vsearch_searches) - the two shapes whose peaks the
+    # occupancy probe exists to tell apart - and these calls are the only callers of
+    # that helper outside test/occupancy_disagreement_test.jl.
+    #
+    # Each vsearch output is removed first. A stage whose outputs are current skips
+    # before doing any work, and a stage that skips records nothing: a re-run that
+    # skipped would exercise the skip guard rather than the stage. The stages before
+    # vsearch still skip on their own guards, so neither call redoes the DADA2 work.
+    #
+    # The probe is switched on for both, at the narrowest level of the config
+    # cascade (the run's own pipeline.yml) - the way the factory defaults file says
+    # to switch it on, since the config editor offers only keys that have a factory
+    # default. It sits in no stage's hashed section, so turning it on marks nothing
+    # stale, and it is on only here: every other call in the suite records exactly
+    # the stage keys it always did.
+    @testset "Pipeline and stage routes (vsearch re-run)" begin
+        SV = MetaManifold.Server
+        PV = MetaManifold.Provenance
+        MP = MetaManifold.MemoryProbe
+        run_dir(run) = joinpath(PROJECT_ROOT, "projects", PROJECT_NAME, run)
+        probe_cfg = Dict("occupancy_probe" => Dict("enabled" => true, "interval_ms" => 10))
+        old_root  = SV.ServerState._root[]
+        written   = String[]
+        try
+            SV.ServerState.set_root!(PROJECT_ROOT)
+
+            # run_A: one stage on its own - the serial shape.
+            rm(joinpath(run_dir("run_A"), "vsearch"); recursive=true, force=true)
+            rm(joinpath(run_dir("run_A"), "swarm", "vsearch"); recursive=true, force=true)
+            yaml_a = joinpath(PROJECT_ROOT, "data", PROJECT_NAME, "run_A", "pipeline.yml")
+            YAML.write_file(yaml_a, probe_cfg)
+            push!(written, yaml_a)
+            SV._run_stage(PROJECT_NAME, "run_A", "vsearch", db_config, dbs_loaded)
+            @test isfile(joinpath(run_dir("run_A"), "vsearch", "taxonomy.tsv"))
+            @test isfile(joinpath(run_dir("run_A"), "swarm", "vsearch", "taxonomy.tsv"))
+
+            # run_B: the whole pipeline - the concurrent shape.
+            rm(joinpath(run_dir("run_B"), "vsearch"); recursive=true, force=true)
+            rm(joinpath(run_dir("run_B"), "swarm", "vsearch"); recursive=true, force=true)
+            yaml_b = joinpath(PROJECT_ROOT, "data", PROJECT_NAME, "run_B", "pipeline.yml")
+            YAML.write_file(yaml_b, probe_cfg)
+            push!(written, yaml_b)
+            merged = SV._run_full_pipeline(PROJECT_NAME, "run_B", db_config, dbs_loaded)
+            @test haskey(merged.tables, "merged")
+            @test isfile(joinpath(run_dir("run_B"), "vsearch", "taxonomy.tsv"))
+            @test isfile(joinpath(run_dir("run_B"), "swarm", "vsearch", "taxonomy.tsv"))
+
+            # What each run recorded: its vsearch stage, and - the probe being on -
+            # that stage's occupancy, one labelled task per search.
+            for run in ("run_A", "run_B")
+                att   = PV.read_attestation(joinpath(run_dir(run), "attestation.yml"))
+                stage = only([s for s in att.doc["stages"] if s["name"] == "vsearch"])
+                @test haskey(stage, "occupancy")
+                occ = get(stage, "occupancy", nothing)
+                isnothing(occ) && continue
+                @test occ["probe"] == MP.PROBE
+                @test occ["interval_ms"] == 10
+                labels = sort([String(t["label"]) for t in occ["tasks"]])
+                @test labels == ["vsearch:asv", "vsearch:otu"]
+            end
+        finally
+            foreach(p -> rm(p; force=true), written)
+            SV.ServerState._root[] = old_root
+        end
+    end
+
 end
