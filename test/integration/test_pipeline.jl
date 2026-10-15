@@ -261,7 +261,7 @@
         run_dir(run) = joinpath(PROJECT_ROOT, "projects", PROJECT_NAME, run)
         probe_cfg = Dict("occupancy_probe" => Dict("enabled" => true, "interval_ms" => 10))
         old_root  = SV.ServerState._root[]
-        written   = String[]
+        original_configs = Dict{String,Union{Nothing,Vector{UInt8}}}()
         try
             SV.ServerState.set_root!(PROJECT_ROOT)
 
@@ -269,9 +269,18 @@
             rm(joinpath(run_dir("run_A"), "vsearch"); recursive=true, force=true)
             rm(joinpath(run_dir("run_A"), "swarm", "vsearch"); recursive=true, force=true)
             yaml_a = joinpath(PROJECT_ROOT, "data", PROJECT_NAME, "run_A", "pipeline.yml")
+            original_configs[yaml_a] = isfile(yaml_a) ? read(yaml_a) : nothing
             YAML.write_file(yaml_a, probe_cfg)
-            push!(written, yaml_a)
-            SV._run_stage(PROJECT_NAME, "run_A", "vsearch", db_config, dbs_loaded)
+            response = SV.Oxygen.internalrequest(SV.HTTP.Request(
+                "POST", "/api/v1/studies/$PROJECT_NAME/runs/run_A/stages/vsearch"))
+            @test response.status == 200
+            job = SV.JobQueue.get_job(String(JSON3.read(String(response.body)).id))
+            @test !isnothing(job)
+            task = lock(SV.JobQueue._jobs_lock) do
+                job.task
+            end
+            isnothing(task) || wait(task)
+            @test job.status == SV.JobQueue.complete
             @test isfile(joinpath(run_dir("run_A"), "vsearch", "taxonomy.tsv"))
             @test isfile(joinpath(run_dir("run_A"), "swarm", "vsearch", "taxonomy.tsv"))
 
@@ -279,8 +288,8 @@
             rm(joinpath(run_dir("run_B"), "vsearch"); recursive=true, force=true)
             rm(joinpath(run_dir("run_B"), "swarm", "vsearch"); recursive=true, force=true)
             yaml_b = joinpath(PROJECT_ROOT, "data", PROJECT_NAME, "run_B", "pipeline.yml")
+            original_configs[yaml_b] = isfile(yaml_b) ? read(yaml_b) : nothing
             YAML.write_file(yaml_b, probe_cfg)
-            push!(written, yaml_b)
             merged = SV._run_full_pipeline(PROJECT_NAME, "run_B", db_config, dbs_loaded)
             @test haskey(merged.tables, "merged")
             @test isfile(joinpath(run_dir("run_B"), "vsearch", "taxonomy.tsv"))
@@ -300,7 +309,9 @@
                 @test labels == ["vsearch:asv", "vsearch:otu"]
             end
         finally
-            foreach(p -> rm(p; force=true), written)
+            for (path, contents) in original_configs
+                isnothing(contents) ? rm(path; force=true) : write(path, contents)
+            end
             SV.ServerState._root[] = old_root
         end
     end
