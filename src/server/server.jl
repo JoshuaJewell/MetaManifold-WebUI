@@ -245,15 +245,43 @@ module Server
         allowed
     end
 
+    _is_wildcard(h::AbstractString) = lowercase(h) in ("0.0.0.0", "::", "[::]")
+
+    """
+        _bound_ip_origin(origin, host_header) -> Bool
+
+    Whether `origin` names the exact IP address the browser reached a wildcard
+    bind on: an `http://` origin whose host is an IP literal (not a name), whose
+    port is the bound port, and whose host-and-port equals the request's `Host`
+    header. A browser only sends such an `Origin` for a page it loaded from that
+    address, so the request is same-origin by construction. A DNS-rebinding page
+    arrives with the attacker's domain as both `Host` and `Origin`; a name is not
+    an IP literal, so it is refused here as before. Hostnames (e.g.
+    `http://lab-box:8080`) and any address behind a proxy on another port must be
+    listed in `JULIA_METAMANIFOLD_ALLOWED_ORIGINS`.
+    """
+    function _bound_ip_origin(origin::AbstractString, host_header::AbstractString)
+        o = _normalise_origin(origin)
+        startswith(o, "http://") || return false
+        hostport = o[length("http://") + 1:end]
+        hostport == lowercase(strip(host_header)) || return false
+        m = match(r"^(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\]):(\d+)$"i, hostport)
+        !isnothing(m) && parse(Int, m.captures[1]) == _bound_port[]
+    end
+
     """
         _cors_middleware(next)
 
     Return a request handler that answers 403 for a non-empty, non-loopback Host
     on a loopback bind, or a non-empty `Origin` outside `_allowed_origins()` after
-    normalisation. The Host check also applies to requests without an Origin.
-    Allowed origins get CORS headers echoing the supplied Origin; OPTIONS gets
-    204 without calling `next`. Otherwise call `next(req)`, adding CORS headers
-    only when the Origin is non-empty. Errors from `next` propagate.
+    normalisation. On a wildcard bind an origin naming the request's own IP host
+    on the bound port is also admitted (`_bound_ip_origin`): the UI is then
+    served, and writable, at whatever address the machine is reached on, without
+    trusting a hostname from the `Host` header. The Host check also applies to
+    requests without an Origin. Allowed origins get CORS headers echoing the
+    supplied Origin; OPTIONS gets 204 without calling `next`. Otherwise call
+    `next(req)`, adding CORS headers only when the Origin is non-empty. Errors
+    from `next` propagate.
     """
     function _cors_middleware(next)
         function(req::HTTP.Request)
@@ -268,6 +296,8 @@ module Server
                 return next(req)
             end
             _normalise_origin(origin) in _allowed_origins() ||
+                (_is_wildcard(_bound_host[]) &&
+                 _bound_ip_origin(origin, HTTP.header(req, "Host", ""))) ||
                 return HTTP.Response(403, "Forbidden: origin not allowed")
             cors_headers = [
                 "Access-Control-Allow-Origin"  => origin,
