@@ -30,10 +30,11 @@ const EXPECTED_PLATFORMS = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "ma
 
 is_sha256(s) = s isa AbstractString && occursin(r"^[0-9a-f]{64}$", s)
 
-# This fork's account allows only GitHub's own actions and its own, each pinned to a
-# full commit SHA.
+# Allow GitHub's own actions, this fork's actions, and Claude Code, each pinned to
+# a full commit SHA.
 allowed_action(uses) =
-    occursin(r"^(actions|hyperpolymath)/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-f]{40}$", uses)
+    occursin(r"^(actions|hyperpolymath)/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-f]{40}$", uses) ||
+    occursin(r"^anthropics/claude-code-action@[0-9a-f]{40}$", uses)
 
 
 @testset "install pins" begin
