@@ -215,12 +215,17 @@ write_fasta <- function(seq_table, tables_dir, prefix) {
 #
 # dplyr::left_join(x, y, by) keeps x's rows in x's order with x's columns first
 # and then y's (the key once). merge() alone sorts the rows and reorders the
-# columns, so both are restored explicitly: sort = FALSE keeps x's row order,
-# and the column order is rebuilt from x's columns plus y's non-key ones. The
-# CI oracle checks the written CSVs byte-for-byte against the previous output.
+# columns, so both are restored explicitly: a temporary position column restores
+# x's row order, and the column order is rebuilt from x's columns plus y's non-key
+# ones. The CI oracle checks the written CSVs byte-for-byte against the previous output.
 base_left_join <- function(x, y, by) {
+  x_cols <- colnames(x)
+  position <- ".left_join_position"
+  while (position %in% c(colnames(x), colnames(y))) position <- paste0(position, "_")
+  x[[position]] <- seq_len(nrow(x))
   joined <- merge(x, y, by = by, all.x = TRUE, sort = FALSE)
-  joined <- joined[, c(colnames(x), setdiff(colnames(y), by)), drop = FALSE]
+  joined <- joined[order(joined[[position]]),
+                   c(x_cols, setdiff(colnames(y), by)), drop = FALSE]
   rownames(joined) <- NULL
   joined
 }
