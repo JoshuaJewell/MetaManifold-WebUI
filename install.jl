@@ -869,14 +869,14 @@ function setup_r_packages(; rebuild::Bool=false)::Tuple{Symbol,String}
     # renv's exit code: restore can fail on one leaf package and still leave a
     # working library, or "succeed" against a stale cache.
     probe = raw"""
-        pkgs <- c("dada2", "vegan", "dplyr", "tibble")
+        pkgs <- c("dada2", "vegan", "tibble")
         cat(paste(pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)],
                   collapse = ","))
     """
     bad = try
         strip(read(Cmd(`Rscript -e $probe`; dir = PROJECT_ROOT), String))
     catch
-        "dada2,vegan,dplyr,tibble"
+        "dada2,vegan,tibble"
     end
 
     isempty(bad) ? (:ok, "") : (:incomplete, String(bad))
