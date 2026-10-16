@@ -15,8 +15,6 @@
 # https://creativecommons.org/licenses/by/4.0/.
 
 library(dada2)
-library(dplyr)
-library(tibble)
 # library(yaml)
 
 # BiocParallel defaults to MulticoreParam, which forks. ShortRead::qa(), reached
@@ -214,10 +212,37 @@ write_fasta <- function(seq_table, tables_dir, prefix) {
 # Writes taxonomy assignments to CSV. Bootstrap confidence values (0-100 per
 # taxonomic rank)
 # Returns taxa_df (SeqName + Sequence + taxonomy), used by write_combined_table().
+#
+# Preserve left-row order, right-row order within matches, and the original
+# column order when assembling the taxonomy and count tables.
+base_left_join <- function(x, y, by) {
+  x_cols <- names(x)
+  y_cols <- names(y)
+  used <- c(x_cols, y_cols)
+  fresh <- function(name) {
+    while (name %in% used) name <- paste0(name, "_")
+    name
+  }
+  left_pos <- fresh(".left_join_position")
+  used <- c(used, left_pos)
+  right_pos <- fresh(".right_join_position")
+  x[[left_pos]] <- seq_len(nrow(x))
+  y[[right_pos]] <- seq_len(nrow(y))
+  joined <- merge(x, y, by = by, all.x = TRUE, sort = FALSE)
+  overlap <- intersect(setdiff(x_cols, by), setdiff(y_cols, by))
+  x_out <- ifelse(x_cols %in% overlap, paste0(x_cols, ".x"), x_cols)
+  y_out <- setdiff(y_cols, by)
+  y_out <- ifelse(y_out %in% overlap, paste0(y_out, ".y"), y_out)
+  joined <- joined[order(joined[[left_pos]], joined[[right_pos]]),
+                   c(x_out, y_out), drop = FALSE]
+  rownames(joined) <- NULL
+  joined
+}
+
 write_taxa_table <- function(tax_matrix, boot_matrix, index, tables_dir, prefix) {
   taxa_df <- as.data.frame(tax_matrix, stringsAsFactors = FALSE)
   taxa_df$Sequence <- rownames(taxa_df)
-  taxa_df <- dplyr::left_join(index, taxa_df, by = "Sequence")
+  taxa_df <- base_left_join(index, taxa_df, by = "Sequence")
 
   write.csv(taxa_df, file.path(tables_dir, paste0(prefix, ".csv")),
             quote = FALSE, row.names = FALSE)
@@ -225,11 +250,11 @@ write_taxa_table <- function(tax_matrix, boot_matrix, index, tables_dir, prefix)
   boot_df <- as.data.frame(boot_matrix, stringsAsFactors = FALSE)
   colnames(boot_df) <- paste0(colnames(boot_df), "_boot")
   boot_df$Sequence <- rownames(boot_matrix)
-  boot_df <- dplyr::left_join(index, boot_df, by = "Sequence")
+  boot_df <- base_left_join(index, boot_df, by = "Sequence")
   write.csv(boot_df, file.path(tables_dir, paste0(prefix, "_bootstraps.csv")),
             quote = FALSE, row.names = FALSE)
 
-  combined_df <- dplyr::left_join(taxa_df, boot_df, by = c("SeqName", "Sequence"))
+  combined_df <- base_left_join(taxa_df, boot_df, by = c("SeqName", "Sequence"))
   write.csv(combined_df, file.path(tables_dir, paste0(prefix, "_combined.csv")),
             quote = FALSE, row.names = FALSE)
 
@@ -239,10 +264,13 @@ write_taxa_table <- function(tax_matrix, boot_matrix, index, tables_dir, prefix)
 # Joins taxonomy with per-sample counts
 write_combined_table <- function(taxa_df, index, seq_table, tables_dir, tax_filename, asv_filename) {
   seq_t <- as.data.frame(t(seq_table), stringsAsFactors = FALSE)
-  seq_t <- tibble::rownames_to_column(seq_t, "Sequence")
-  write.csv(dplyr::left_join(taxa_df, seq_t, by = "Sequence"),
+  # tibble::rownames_to_column(seq_t, "Sequence") put the row names in a leading
+  # column and dropped them from the row names; data.frame() does the same.
+  seq_t <- data.frame(Sequence = rownames(seq_t), seq_t, row.names = NULL,
+                      check.names = FALSE, stringsAsFactors = FALSE)
+  write.csv(base_left_join(taxa_df, seq_t, by = "Sequence"),
             file.path(tables_dir, tax_filename), quote = FALSE, row.names = FALSE)
-  write.csv(dplyr::left_join(index, seq_t, by = "Sequence"),
+  write.csv(base_left_join(index, seq_t, by = "Sequence"),
             file.path(tables_dir, asv_filename), quote = FALSE, row.names = FALSE)
   invisible(NULL)
 }
