@@ -240,6 +240,33 @@ The composition view classifies each ASV/OTU into a biological category and rend
   <img src=".github/screenshots/composition.png" width="800" alt="Organism-category composition of two runs as stacked bars">
 </p>
 
+### Differential abundance
+
+In a study's analysis workspace, select two conditions (runs or pooled-run
+subgroups), a results table and a shared taxonomic rank. The first condition
+is the reference. Counts are aggregated by taxon after the selected read-count
+bounds and applicable `analysis.exclude_categories` filters.
+
+`analysis.differential.method` chooses the method:
+
+- `nb_glm` (default): a negative-binomial GLM per taxon using `MASS::glm.nb`,
+  with a library-size offset. The effect is log2 fold change; positive values
+  indicate greater abundance in the second condition. `offset` selects `tss`
+  (default) or `rle` scaling.
+- `clr_welch`: Welch's t-test on centred log-ratios after multiplicative zero
+  replacement with `zCompositions::cmultRepl`. The effect is a CLR difference,
+  not a fold change. `replacement_delta` controls the replacement fraction
+  (default 0.65); `offset` is not used.
+
+For either method, `min_prevalence` (default 0) filters taxa by the fraction of
+samples with nonzero counts. Benjamini–Hochberg adjustment includes only taxa
+that produced a p-value. Failed or filtered taxa have no substitute p-value;
+inspect their status and note in the results table. Invalid input or an
+unavailable required R package produces an explicit error.
+
+Implementation and reference tests: `src/analysis/differential.jl`,
+`src/server/routes/analysis.jl`, and `test/unit/test_differential.jl`.
+
 ### Figures and report
 
 The Figures tab lays analysis charts out on a page (A4, letter or a journal
