@@ -244,8 +244,10 @@ The composition view classifies each ASV/OTU into a biological category and rend
 
 In a study's analysis workspace, select two conditions (runs or pooled-run
 subgroups), a results table and a shared taxonomic rank. The first condition
-is the reference. Counts are aggregated by taxon after the selected read-count
-bounds and applicable `analysis.exclude_categories` filters.
+is the reference. Counts are aggregated by taxon after applicable
+`analysis.exclude_categories` filters. This workspace does not pass sample
+read-count bounds to the differential-abundance request, so those bounds do
+not exclude samples from this analysis.
 
 `analysis.differential.method` chooses the method:
 
