@@ -249,6 +249,11 @@ is the reference. Counts are aggregated by taxon after applicable
 read-count bounds to the differential-abundance request, so those bounds do
 not exclude samples from this analysis.
 
+All `analysis.differential` options below (`method`, `offset`,
+`min_prevalence` and `replacement_delta`) are resolved at study scope.
+Set them in the study configuration; group and run overrides are not used
+by this endpoint, including when called from a group Analysis workspace.
+
 `analysis.differential.method` chooses the method:
 
 - `nb_glm` (default): a negative-binomial GLM per taxon using `MASS::glm.nb`,
