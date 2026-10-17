@@ -14,9 +14,20 @@
 # stays live.
 module RRuntime
 
-export RBusyError, with_r_lock, r_busy
+import RCall
+
+export RBusyError, with_r_lock, r_busy, REQUIRED_R_PACKAGES, missing_r_packages
 
 const _R_LOCK = ReentrantLock()
+
+# The R packages the app loads, each with what stops working without it. install.jl
+# checks the same list after restoring (test_r_runtime.jl keeps the two equal).
+const REQUIRED_R_PACKAGES = [
+    "dada2"         => "the DADA2 stages that run on this machine",
+    "vegan"         => "NMDS, PERMANOVA and PERMDISP",
+    "MASS"          => "negative-binomial differential abundance",
+    "zCompositions" => "CLR differential abundance (clr_welch)",
+]
 
 # Thrown when a caller that declines to wait indefinitely gives up on the runtime.
 struct RBusyError <: Exception
@@ -56,6 +67,32 @@ function with_r_lock(f::Function; timeout::Union{Real,Nothing}=nothing)
         end
         time() >= deadline && throw(RBusyError(Float64(timeout)))
         sleep(0.05)
+    end
+end
+
+"""
+    missing_r_packages(packages=first.(REQUIRED_R_PACKAGES); timeout=nothing) -> Vector{String}
+
+The named packages that the embedded R cannot load, in the order given.
+
+Each is loaded, not merely looked up: a package can be listed in the library yet
+fail to load, as when renv's links into an emptied cache dangle or a build no
+longer matches the installed R.
+"""
+function missing_r_packages(packages::AbstractVector{<:AbstractString} = first.(REQUIRED_R_PACKAGES);
+                            timeout::Union{Real,Nothing} = nothing)
+    isempty(packages) && return String[]
+    with_r_lock(; timeout) do
+        RCall.globalEnv[:mm_required_pkgs] = String.(packages)
+        try
+            missing = RCall.rcopy(RCall.reval("""
+                paste(mm_required_pkgs[!vapply(mm_required_pkgs, function(p)
+                    suppressWarnings(suppressMessages(requireNamespace(p, quietly = TRUE))),
+                    logical(1))], collapse = "\\n")"""))
+            isempty(missing) ? String[] : String.(split(missing, '\n'))
+        finally
+            RCall.reval("rm(mm_required_pkgs)")
+        end
     end
 end
 

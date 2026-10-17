@@ -349,6 +349,29 @@ module Server
         end
     end
 
+    ## Startup R package check
+    # Nothing else notices a missing R package until an analysis or pipeline stage
+    # needs it and fails, possibly hours into a run. Checked in the background, so
+    # the server is answering while R loads them; a request needing R meanwhile
+    # waits on the runtime lock as it would behind any other R work.
+    function _report_r_packages()
+        missing = try
+            MetaManifold.RRuntime.missing_r_packages()
+        catch e
+            @warn "Could not check the R packages" exception=e
+            return nothing
+        end
+        if isempty(missing)
+            @info "R packages: all required packages load"
+            return nothing
+        end
+        needed = Dict(MetaManifold.RRuntime.REQUIRED_R_PACKAGES)
+        affected = unique(needed[p] for p in missing)
+        @warn "R packages missing: $(join(missing, ", ")). Unavailable until restored: " *
+              "$(join(affected, "; ")). Restore them with: Rscript -e 'renv::restore(prompt = FALSE)'"
+        nothing
+    end
+
     ## Startup warm-up
     # The precompile workload (precompile.jl) compiles the routes a first visit
     # uses into the package cache. A developer who turns it off in
@@ -408,6 +431,7 @@ module Server
         isempty(initialised) || @info "Initialised projects" initialised
 
         listen || return nothing
+        errormonitor(@async _report_r_packages())
         _workload_enabled() || errormonitor(@async _warm_routes(host, port))
         serve(; host, port, middleware=_MIDDLEWARE, _SERVE_OPTIONS...)
     end

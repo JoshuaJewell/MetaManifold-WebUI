@@ -855,6 +855,17 @@ function r_sysdep_hint(missing::Vector{NTuple{5,String}})::String
     join([pre; unique(row[col] for row in missing)], " ")
 end
 
+# Run R code from the project root and return only what it printed between two
+# markers. Rscript started there sources .Rprofile, and renv's autoloader prints
+# its status (e.g. "The project is out-of-sync") to stdout, which a bare read of
+# stdout would take for the answer. Returns nothing if no marked value came back.
+function r_value(code::AbstractString)::Union{String,Nothing}
+    wrapped = "cat('<<MM>>'); local({ $code }); cat('<</MM>>')"
+    out = read(Cmd(`Rscript -e $wrapped`; dir = PROJECT_ROOT), String)
+    m = match(r"<<MM>>(.*?)<</MM>>"s, out)
+    m === nothing ? nothing : String(strip(m.captures[1]))
+end
+
 # Reproduce renv/library from renv.lock. Returns (:ok, "") or (:incomplete, "pkg,pkg").
 function setup_r_packages(; rebuild::Bool=false)::Tuple{Symbol,String}
     restore_call = rebuild ? "renv::restore(prompt = FALSE, rebuild = TRUE)" :
@@ -868,16 +879,14 @@ function setup_r_packages(; rebuild::Bool=false)::Tuple{Symbol,String}
     # Verdict is whether the packages the pipeline loads are actually usable, not
     # renv's exit code: restore can fail on one leaf package and still leave a
     # working library, or "succeed" against a stale cache.
-    probe = raw"""
-        pkgs <- c("dada2", "vegan", "tibble")
+    # MASS and zCompositions back the differential abundance methods.
+    pkgs = ["dada2", "vegan", "MASS", "zCompositions"]
+    probe = """
+        pkgs <- c($(join(repr.(pkgs), ", ")))
         cat(paste(pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)],
                   collapse = ","))
     """
-    bad = try
-        strip(read(Cmd(`Rscript -e $probe`; dir = PROJECT_ROOT), String))
-    catch
-        "dada2,vegan,tibble"
-    end
+    bad = something(try r_value(probe) catch; nothing end, join(pkgs, ","))
 
     isempty(bad) ? (:ok, "") : (:incomplete, String(bad))
 end
@@ -1193,7 +1202,7 @@ function main()
         record!("R packages", STEP_SKIPPED, "blocked on the R runtime above")
     else
         rver = try
-            strip(read(`Rscript -e "cat(as.character(getRversion()))"`, String))
+            something(r_value("cat(as.character(getRversion()))"), "unknown")
         catch
             "unknown"
         end

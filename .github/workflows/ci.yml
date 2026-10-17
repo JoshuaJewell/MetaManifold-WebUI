@@ -250,7 +250,7 @@ jobs:
           julia --project=. -e '
             using RCall
             R"cat(.libPaths(), sep=\"\n\")"
-            for pkg in ["dada2", "vegan", "tibble", "MASS", "zCompositions"]
+            for pkg in ["dada2", "vegan", "MASS", "zCompositions"]
               R"if (!require($pkg, character.only=TRUE, quietly=TRUE)) stop($pkg, \" not found\")"
             end
           '

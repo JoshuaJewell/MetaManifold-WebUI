@@ -194,4 +194,29 @@ const RR = MetaManifold.RRuntime
         end
     end
 
+    ## The startup check: a package the embedded R cannot load is reported, one it
+    # can is not, and the order given is kept. `stats` ships with R and the other
+    # name exists nowhere, so neither depends on what the library holds.
+    @testset "missing_r_packages reports only what will not load" begin
+        @test RR.missing_r_packages(String[]) == String[]
+        @test RR.missing_r_packages(["stats"]) == String[]
+        @test RR.missing_r_packages(["mmNoSuchPackage1", "stats", "mmNoSuchPackage2"]) ==
+              ["mmNoSuchPackage1", "mmNoSuchPackage2"]
+        # Its helper variable does not outlive the call in R's global environment.
+        @test !RR.RCall.rcopy(Bool,
+                  RR.RCall.reval("exists('mm_required_pkgs')"))
+        @test !RR.r_busy()
+    end
+
+    ## install.jl verifies the same packages after restoring that the server checks
+    # at startup. It is a standalone script and cannot import the list, so the two
+    # copies are compared here.
+    @testset "the installer checks the packages the server requires" begin
+        src = read(joinpath(@__DIR__, "..", "..", "install.jl"), String)
+        m = match(r"pkgs = \[([^\]]*)\]", src)
+        @test !isnothing(m)
+        installer = isnothing(m) ? String[] : [String(x.captures[1]) for x in eachmatch(r"\"([^\"]+)\"", m.captures[1])]
+        @test sort(installer) == sort(first.(RR.REQUIRED_R_PACKAGES))
+    end
+
 end
