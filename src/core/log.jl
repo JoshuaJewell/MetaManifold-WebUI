@@ -177,21 +177,32 @@ export pipeline_log, log_written, reset_tool_logs, log_command
     const _TOOL_SECTION_CLOSE = "--- End of tool logs ---"
 
     # Drop any tool-log section a previous finalise_log left behind, keeping every
-    # timestamped narrative line before it. Without this the section is appended
-    # afresh on each re-run, and a run directory that has been re-run k times carries
-    # k copies of every tool log (fastqc.log for a 300-sample run is not small).
-    # The narrative IS a ledger and must accrete; the tool-log dump is a snapshot of
-    # the current files and must not.
+    # timestamped narrative line before and after it. Without this the section is
+    # appended afresh on each re-run, and a run directory that has been re-run k
+    # times carries k copies of every tool log (fastqc.log for a 300-sample run is
+    # not small). The narrative IS a ledger and must accrete; the tool-log dump is a
+    # snapshot of the current files and must not. A re-run's narrative lands after
+    # the previous section, so only the section itself, open marker to close
+    # marker, is removed; a section never closed (finalise_log interrupted) runs
+    # to the end of the file.
     function _strip_tool_section!(dir::String)
         path = joinpath(dir, "pipeline.log")
         isfile(path) || return nothing
         lines = readlines(path)
-        cut = findfirst(l -> endswith(l, _TOOL_SECTION_OPEN), lines)
-        isnothing(cut) && return nothing
-        open(path, "w") do io
-            for l in lines[1:cut-1]
-                println(io, l)
+        any(l -> endswith(l, _TOOL_SECTION_OPEN), lines) || return nothing
+        kept = String[]
+        inside = false
+        for l in lines
+            if inside
+                endswith(l, _TOOL_SECTION_CLOSE) && (inside = false)
+            elseif endswith(l, _TOOL_SECTION_OPEN)
+                inside = true
+            else
+                push!(kept, l)
             end
+        end
+        open(path, "w") do io
+            foreach(l -> println(io, l), kept)
         end
         nothing
     end

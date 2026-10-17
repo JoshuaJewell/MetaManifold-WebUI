@@ -94,6 +94,10 @@
     asvs_results   = Vector{Union{ASVResult,Nothing}}(undef, length(projects))
 
     ## Run pipeline for each project
+    # Runs share one process, so no stage may change its working directory: two
+    # runs doing so in parallel left the server in one run's folder, where every
+    # later relative path (./databases among them) resolved.
+    start_dir = pwd()
     Threads.@threads for (i, project) in collect(enumerate(projects))
         n_samples = length(filter(f -> endswith(f, ".fastq.gz"), readdir(project.data_dir))) ÷ 2
 
@@ -205,6 +209,8 @@
             @test "Domain" in levels
         end
     end
+
+    @test pwd() == start_dir
 
     ## Differential abundance route on the two runs. run_A has 2 samples and
     # run_B 1, so this checks only that the route answers with a well-formed

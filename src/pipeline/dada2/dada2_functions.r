@@ -34,7 +34,16 @@ BiocParallel::register(BiocParallel::SerialParam())
 
 # Saves per-base quality score profiles for up to 3 forward and 3 reverse
 # samples. Inspect before and after filtering to guide truncLen / maxEE choices.
+# Files with no reads are skipped: plotQualityProfile() stops on one, and a
+# sample emptied by primer trimming (e.g. a blank control) is not an error.
 plot_quality_profiles <- function(fwd_files, rev_files, output_pdf) {
+  has_reads <- function(f) {
+    con <- gzfile(f, "r")
+    on.exit(close(con))
+    length(readLines(con, n = 1L, warn = FALSE)) > 0L
+  }
+  if (!is.null(fwd_files)) fwd_files <- Filter(has_reads, fwd_files)
+  if (!is.null(rev_files)) rev_files <- Filter(has_reads, rev_files)
   pdf(output_pdf, width = 8, height = 6)
   if (!is.null(fwd_files) && length(fwd_files) > 0) {
     print(plotQualityProfile(fwd_files[seq_len(min(3L, length(fwd_files)))]))

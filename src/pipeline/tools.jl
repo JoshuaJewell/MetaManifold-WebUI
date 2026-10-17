@@ -77,7 +77,11 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _run_killa
                                "raxml" => "raxmlHPC-PTHREADS-SSE3")
     tool_bin(key) = get(_tools, key, get(_BIN_DEFAULTS, key, key))
 
-    const _tools = load_tools()
+    # Filled in __init__, not at definition: a top-level load_tools() runs once at
+    # precompile time and bakes that tools.yml into the package cache, so an install
+    # that rewrote tool paths afterwards went unseen until something forced a recompile.
+    const _tools = Dict{String,String}()
+    __init__() = merge!(empty!(_tools), load_tools())
 
     ## Argument sanitisation
     # optional_args are interpolated into shell commands; reject shell metacharacters.
@@ -345,9 +349,11 @@ export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _run_killa
             "> $(_sq(summary_basename))"
 
         log_command(cmd, cmd_log)
-        cd(log_dir) do
-            run(pipeline(`bash -lc $cmd`))
-        end
+        # The directory is the command's, not the process's: runs execute on
+        # parallel threads, and two interleaved cd(log_dir) blocks restore each
+        # other's directory, leaving the server in one run's logs folder so every
+        # relative path after it (./databases among them) resolves from there.
+        run(Cmd(`bash -lc $cmd`; dir = log_dir))
 
         @info("Cutadapt: Complete. Output available in $cutadapt_dir.")
         return cutadapt_dir

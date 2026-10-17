@@ -184,6 +184,10 @@ function load_results_db(merge_dir::String;
             if !isnothing(tagging)
                 _apply_tagging!(con, tagging)
             end
+            # Write the WAL into the file now. Closing checkpoints only when no
+            # other handle is still open, and a database renamed with its data
+            # still in the WAL arrives empty: the WAL keeps its .building name.
+            DBInterface.execute(con, "FORCE CHECKPOINT")
             ok = true
         finally
             DBInterface.close!(con)
@@ -191,6 +195,9 @@ function load_results_db(merge_dir::String;
             if ok
                 rm(db_path * ".wal"; force=true)
                 mv(tmp_path, db_path; force=true)
+                # Should the checkpoint not have emptied it, the WAL travels with
+                # its database, where the next open replays it.
+                isfile(tmp_path * ".wal") && mv(tmp_path * ".wal", db_path * ".wal"; force=true)
             else
                 rm(tmp_path; force=true)
                 rm(tmp_path * ".wal"; force=true)

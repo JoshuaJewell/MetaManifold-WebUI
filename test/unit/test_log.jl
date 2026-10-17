@@ -69,6 +69,32 @@
         rm(dir; recursive=true)
     end
 
+    @testset "a re-run keeps its narrative and one tool section" begin
+        dir = mktempdir()
+        PipelineLog.reset_log(dir)
+        mkpath(joinpath(dir, "cutadapt", "logs"))
+        stats = joinpath(dir, "cutadapt", "logs", "cutadapt_primer_trimming_stats.txt")
+        ctx = ProjectCtx(dir, "", "", "", "")
+
+        PipelineLog.pipeline_log(dir, "first run complete")
+        write(stats, "first stats\n")
+        PipelineLog.finalise_log(ctx)
+        # The re-run's narrative is appended after the first run's tool section.
+        PipelineLog.pipeline_log(dir, "second run complete")
+        write(stats, "second stats\n")
+        PipelineLog.finalise_log(ctx)
+
+        content = read(joinpath(dir, "pipeline.log"), String)
+        @test occursin("first run complete", content)
+        @test occursin("second run complete", content)
+        @test count("Tool logs appended", content) == 1
+        @test !occursin("first stats", content)
+        @test occursin("second stats", content)
+        # The narrative precedes the single, current tool section.
+        @test findfirst("second run complete", content)[1] < findfirst("Tool logs appended", content)[1]
+        rm(dir; recursive=true)
+    end
+
     ## Drift guard
     # A realistic populated run directory. Every path here was observed in a real
     # run (projects/Nutria_CvL/Multiplex, read-only) or is written by a code path
