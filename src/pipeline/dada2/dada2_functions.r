@@ -218,23 +218,36 @@ write_fasta <- function(seq_table, tables_dir, prefix) {
 base_left_join <- function(x, y, by) {
   x_cols <- names(x)
   y_cols <- names(y)
-  used <- c(x_cols, y_cols)
-  fresh <- function(name) {
-    while (name %in% used) name <- paste0(name, "_")
-    name
+  stopifnot(!anyDuplicated(x_cols), !anyDuplicated(y_cols),
+            all(by %in% x_cols), all(by %in% y_cols))
+  suffix_names <- function(values, reserved, suffix) {
+    out <- c(reserved, values)
+    while (anyDuplicated(out)) {
+      duplicate <- which(duplicated(out))
+      out[duplicate] <- paste0(out[duplicate], suffix)
+    }
+    tail(out, length(values))
   }
-  left_pos <- fresh(".left_join_position")
-  used <- c(used, left_pos)
-  right_pos <- fresh(".right_join_position")
-  x[[left_pos]] <- seq_len(nrow(x))
-  y[[right_pos]] <- seq_len(nrow(y))
-  joined <- merge(x, y, by = by, all.x = TRUE, sort = FALSE)
-  overlap <- intersect(setdiff(x_cols, by), setdiff(y_cols, by))
-  x_out <- ifelse(x_cols %in% overlap, paste0(x_cols, ".x"), x_cols)
-  y_out <- setdiff(y_cols, by)
-  y_out <- ifelse(y_out %in% overlap, paste0(y_out, ".y"), y_out)
-  joined <- joined[order(joined[[left_pos]], joined[[right_pos]]),
-                   c(x_out, y_out), drop = FALSE]
+  # Match left_join's repeated suffixing, including names such as Species.x.
+  x_out <- x_cols
+  x_aux <- !x_cols %in% by
+  y_aux <- !y_cols %in% by
+  x_out[x_aux] <- suffix_names(x_cols[x_aux], c(by, y_cols[y_aux]), ".x")
+  y_out <- suffix_names(y_cols, x_cols, ".y")[y_aux]
+
+  # Merge only unique internal names, so character selection can never confuse
+  # a taxonomy column with a sample whose name resembles a generated suffix.
+  x_ids <- paste0(".x", seq_along(x_cols))
+  y_ids <- paste0(".y", seq_along(y_cols))
+  names(x) <- x_ids
+  names(y) <- y_ids
+  x$.left_position <- seq_len(nrow(x))
+  y$.right_position <- seq_len(nrow(y))
+  joined <- merge(x, y, by.x = x_ids[match(by, x_cols)],
+                  by.y = y_ids[match(by, y_cols)], all.x = TRUE, sort = FALSE)
+  joined <- joined[order(joined$.left_position, joined$.right_position),
+                   c(x_ids, y_ids[y_aux]), drop = FALSE]
+  names(joined) <- c(x_out, y_out)
   rownames(joined) <- NULL
   joined
 }

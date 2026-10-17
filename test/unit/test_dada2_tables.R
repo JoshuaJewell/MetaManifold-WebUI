@@ -32,6 +32,19 @@ b <- data.frame(id = c("a", "b"), key = c("y", "x"), other = 3:4)
 stopifnot(identical(base_left_join(a, b, c("id", "key"))$other,
                     c(NA_integer_, 3L)))
 
+# Rank names and their suffixed variants are also valid sample IDs.
+# Repeated suffixing must preserve both the taxonomy strings and count columns.
+tax_collision <- data.frame(Sequence = c("AA", "GG"), Species = c("taxA", "taxG"))
+count_collision <- data.frame(Sequence = c("GG", "AA"), Species = c(10L, 20L),
+                              Species.x = c(30L, 40L), Species.x.x = c(50L, 60L))
+collision <- base_left_join(tax_collision, count_collision, "Sequence")
+stopifnot(identical(names(collision),
+                    c("Sequence", "Species.x.x.x", "Species.y", "Species.x", "Species.x.x")),
+          identical(collision[[2]], c("taxA", "taxG")),
+          identical(collision[[3]], c(20L, 10L)),
+          identical(collision[[4]], c(40L, 30L)),
+          identical(collision[[5]], c(60L, 50L)))
+
 # Fixed expected CSV bytes cover every writer output, including non-syntactic
 # sample names and an unmatched taxonomy row. No sequencing dependencies needed.
 out <- tempfile("dada2-tables-")
