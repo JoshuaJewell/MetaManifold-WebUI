@@ -15,5 +15,6 @@
 
 - [ ] I followed [CONTRIBUTING.md](https://github.com/JoshuaJewell/MetaManifold-WebUI/blob/main/CONTRIBUTING.md).
 - [ ] This branch starts at current upstream main and contains no merges from fork main.
+- [ ] Every commit is signed and shows as Verified.
 - [ ] CI has run and passes.
 - [ ] Existing licensing, citation and acknowledgement text is unchanged.

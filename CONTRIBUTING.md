@@ -28,18 +28,35 @@ Each requirement is checked before the code is read.
    ```
 
    `behind_by` must be `0`. Rebase when it is not.
-2. **No merge commits from `main`** and no automated conflict-resolution commits.
-   A branch that cannot be re-applied cleanly on top of `main` is not ready.
-3. **One logical change per PR.**
-4. **CI must run and pass.** A PR with no reported checks is not reviewed.
-5. **Write the description:** what the change does, the issues it closes, how to
+2. **No merge commits,** whether from this repository's `main` or a fork's, and
+   no automated conflict-resolution commits. A branch that cannot be re-applied
+   cleanly on top of `main` is not ready.
+3. **Sign every commit.** Each commit must show as Verified on GitHub, signed
+   with a GPG, SSH or S/MIME key registered to your account. Check before
+   pushing:
+
+   ```
+   git log --format='%h %G? %s' main..HEAD
+   ```
+
+   `N` means unsigned. (`E` usually means your local git cannot check the
+   signature, for example SSH signing without `gpg.ssh.allowedSignersFile`;
+   GitHub's Verified badge is what counts.) Unsigned commits are re-signed with
+   `git rebase --exec 'git commit --amend --no-edit -S' main`.
+4. **One logical change per PR.**
+5. **CI must run and pass.** A PR with no reported checks is not reviewed.
+6. **Write the description:** what the change does, the issues it closes, how to
    run its tests, what it leaves out, and the Julia, R and bun versions you tested
    with.
-6. **No generated or vendored files:** build output, `node_modules`, downloaded
+7. **No generated or vendored files:** build output, `node_modules`, downloaded
    tool archives, or lockfile changes the work does not need. When a lockfile
    change is needed, the description says why.
-7. **Once review has started, add commits,** and rebase only when asked to.
-   Squashing happens on merge.
+8. **Merging is by fast-forward only.** The commits on your branch are the
+   commits that land on `main`, unchanged: nothing is squashed or rebased on
+   merge, so every commit must build, pass the tests and carry a message that
+   stands on its own. Once review has started, add commits, and rebase only when
+   asked to. If `main` moves before the merge, you will be asked to rebase onto
+   it and re-sign.
 
 ## Licence and copyright
 
