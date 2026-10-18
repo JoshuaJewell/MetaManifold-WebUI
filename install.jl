@@ -879,8 +879,8 @@ function setup_r_packages(; rebuild::Bool=false)::Tuple{Symbol,String}
     # Verdict is whether the packages the pipeline loads are actually usable, not
     # renv's exit code: restore can fail on one leaf package and still leave a
     # working library, or "succeed" against a stale cache.
-    # MASS and zCompositions back the differential abundance methods.
-    pkgs = ["dada2", "vegan", "MASS", "zCompositions"]
+    # MASS, zCompositions and glmGamPoi back the differential abundance methods.
+    pkgs = ["dada2", "vegan", "MASS", "zCompositions", "glmGamPoi"]
     probe = """
         pkgs <- c($(join(repr.(pkgs), ", ")))
         cat(paste(pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)],

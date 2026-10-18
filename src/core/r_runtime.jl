@@ -25,6 +25,7 @@ const _R_LOCK = ReentrantLock()
 const REQUIRED_R_PACKAGES = [
     "dada2"         => "the DADA2 stages that run on this machine",
     "vegan"         => "NMDS, PERMANOVA and PERMDISP",
+    "glmGamPoi"     => "shared dispersion-trend differential abundance",
     "MASS"          => "negative-binomial differential abundance",
     "zCompositions" => "CLR differential abundance (clr_welch)",
 ]

@@ -156,7 +156,7 @@ jobs:
           sudo chmod 777 "$RENV_PATHS_CACHE"
           sudo env R_CLI_DYNAMIC=false TERM=dumb Rscript --no-init-file -e 'install.packages(c("renv", "BiocManager"), repos="https://cloud.r-project.org", lib=.Library)'
           sudo env RENV_PATHS_CACHE="$RENV_PATHS_CACHE" R_CLI_DYNAMIC=false TERM=dumb Rscript --no-init-file -e 'renv::restore(project=".", library=.Library, prompt=FALSE)'
-          Rscript --no-init-file -e 'for (pkg in c("dada2","Biostrings","ShortRead","vegan","MASS","zCompositions")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
+          Rscript --no-init-file -e 'for (pkg in c("dada2","Biostrings","ShortRead","vegan","MASS","zCompositions","glmGamPoi")) if (!require(pkg,character.only=TRUE,quietly=TRUE)) stop(pkg, " failed to install")'
 
       - name: Check DADA2 CSV assembly
         run: Rscript --vanilla test/unit/test_dada2_tables.R
@@ -250,7 +250,7 @@ jobs:
           julia --project=. -e '
             using RCall
             R"cat(.libPaths(), sep=\"\n\")"
-            for pkg in ["dada2", "vegan", "MASS", "zCompositions"]
+            for pkg in ["dada2", "vegan", "MASS", "zCompositions", "glmGamPoi"]
               R"if (!require($pkg, character.only=TRUE, quietly=TRUE)) stop($pkg, \" not found\")"
             end
           '
