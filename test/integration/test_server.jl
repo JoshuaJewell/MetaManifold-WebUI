@@ -70,6 +70,21 @@
                           status_exception=false)
             @test r5.status in (403, 404)
 
+            ## PATCH /api/v1/config stores the dispersion spelling over the
+            ## real listener and refuses the pre-release "ml".
+            r6 = HTTP.patch("http://localhost:$port/api/v1/config",
+                            ["Content-Type" => "application/json"],
+                            JSON3.write(Dict("analysis.differential.dispersion" => "glmGamPoi"));
+                            status_exception=false)
+            @test r6.status == 200
+            saved = YAML.load_file(joinpath(tmp_root, "config", "pipeline.yml"))
+            @test saved["analysis"]["differential"]["dispersion"] == "glmGamPoi"
+            r7 = HTTP.patch("http://localhost:$port/api/v1/config",
+                            ["Content-Type" => "application/json"],
+                            JSON3.write(Dict("analysis.differential.dispersion" => "ml"));
+                            status_exception=false)
+            @test r7.status == 400
+
             @info "Server smoke tests passed on port $port"
         end
     finally

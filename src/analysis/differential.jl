@@ -22,12 +22,22 @@ using DataFrames, RCall
 using ..RRuntime: with_r_lock
 using ..Analysis: _palette_hex, R_WAIT_SECONDS
 export DifferentialConfig, ScalingRefusal, MASSUnavailable, ZCompositionsUnavailable,
-       OFFSET_METHODS, METHODS, tss_factors, rle_factors, size_factors, bh_adjust,
-       validate_counts, replace_zeros, clr_transform, fit_nb, fit_welch,
-       differential_abundance, volcano_chart
+       GlmGamPoiUnavailable, OFFSET_METHODS, METHODS, DISPERSIONS, tss_factors,
+       rle_factors, size_factors, bh_adjust, validate_counts, replace_zeros,
+       clr_transform, fit_nb, fit_welch, differential_abundance, volcano_chart
 
 # Methods accepted under `analysis.differential.method`.
 const METHODS = ("nb_glm", "clr_welch")
+
+# What `nb_glm` does and how it tests, accepted under
+# `analysis.differential.dispersion`: `"glm_nb"` fits each taxon with
+# MASS::glm.nb and its maximum-likelihood theta; `"glmGamPoi"` fits one
+# glmGamPoi::glm_gp across the taxa and reports glmGamPoi::test_de's own
+# quasi-likelihood F-test on that fit, with each taxon's dispersion shrunk
+# toward the cross-taxon trend. The second shares information across taxa,
+# which steadies low-count taxa and small studies. `"glmGamPoi"` is refused
+# for `clr_welch`.
+const DISPERSIONS = ("glm_nb", "glmGamPoi")
 
 # Offset (size factor) methods accepted under `analysis.differential.offset`.
 const OFFSET_METHODS = ("tss", "rle")
@@ -43,7 +53,7 @@ const DEFAULT_DELTA = 0.65
 
 """
     DifferentialConfig(offset="tss", min_prevalence=0.0; method="nb_glm",
-                       replacement_delta=0.65)
+                       replacement_delta=0.65, dispersion="glm_nb")
 
 Settings for one differential abundance analysis, read from
 `analysis.differential` in the pipeline config. `method` is `"nb_glm"` or
@@ -54,26 +64,49 @@ log-ratios, which are already free of library size.
 have at least one read to be tested. `replacement_delta`, in (0, 1), is the
 `frac` passed to `zCompositions::cmultRepl` by `clr_welch`: an imputed proportion
 above its taxon's smallest observed proportion is lowered to this fraction of it.
+`dispersion` names what `nb_glm` does and how it tests (`"glm_nb"` or
+`"glmGamPoi"`): `"glm_nb"` (the default) fits `MASS::glm.nb` per taxon with
+its maximum-likelihood theta and Wald-tests the group coefficient;
+`"glmGamPoi"` fits one `glmGamPoi::glm_gp` across the taxa passing
+`min_prevalence`, with overdispersion shrinkage toward the cross-taxon trend,
+and reports `glmGamPoi::test_de`'s quasi-likelihood F-test of the group
+contrast — glmGamPoi's own published inference (Lund et al., 2012) — with its
+log2 fold changes. `"glmGamPoi"` is refused for `clr_welch`.
+Method and offset names are stripped and lowercased; dispersion names are
+stripped and matched without regard to case, then stored as `"glm_nb"` or
+`"glmGamPoi"`. Throws `ArgumentError` for unsupported names, incompatible
+method and dispersion choices, or non-finite or out-of-range fractions,
+including settings unused by the selected method.
 """
 struct DifferentialConfig
     method            :: String
     offset            :: String
     min_prevalence    :: Float64
     replacement_delta :: Float64
+    dispersion        :: String
     function DifferentialConfig(offset::AbstractString="tss", min_prevalence::Real=0.0;
                                 method::AbstractString="nb_glm",
-                                replacement_delta::Real=DEFAULT_DELTA)
+                                replacement_delta::Real=DEFAULT_DELTA,
+                                dispersion::AbstractString="glm_nb")
         m = lowercase(strip(String(method)))
         m in METHODS || throw(ArgumentError(
             "analysis.differential.method must be one of $(join(METHODS, ", ")), not '$method'"))
         o = lowercase(strip(String(offset)))
         o in OFFSET_METHODS || throw(ArgumentError(
             "analysis.differential.offset must be one of $(join(OFFSET_METHODS, ", ")), not '$offset'"))
+        d = strip(String(dispersion))
+        di = findfirst(s -> lowercase(s) == lowercase(d), DISPERSIONS)
+        di === nothing && throw(ArgumentError(
+            "analysis.differential.dispersion must be one of $(join(DISPERSIONS, ", ")), not '$dispersion'"))
+        d = DISPERSIONS[di]
+        (d == "glm_nb" || m == "nb_glm") || throw(ArgumentError(
+            "analysis.differential.dispersion is a negative-binomial setting, but method is " *
+            "'$m'; only nb_glm has a dispersion to choose"))
         (isfinite(min_prevalence) && 0 <= min_prevalence <= 1) || throw(ArgumentError(
             "analysis.differential.min_prevalence must be a fraction in [0, 1], not $min_prevalence"))
         (isfinite(replacement_delta) && 0 < replacement_delta < 1) || throw(ArgumentError(
             "analysis.differential.replacement_delta must be in (0, 1), not $replacement_delta"))
-        new(m, o, Float64(min_prevalence), Float64(replacement_delta))
+        new(m, o, Float64(min_prevalence), Float64(replacement_delta), d)
     end
 end
 
@@ -114,6 +147,21 @@ struct ZCompositionsUnavailable <: Exception end
 Base.showerror(io::IO, ::ZCompositionsUnavailable) = print(io,
     "the R package zCompositions is not available, so zeros cannot be replaced for " *
     "clr_welch; restore the R library from renv.lock (Rscript -e 'renv::restore()')")
+
+"""
+    GlmGamPoiUnavailable()
+
+Raised when the R package glmGamPoi, which provides the shrunken dispersion
+trend that `analysis.differential.dispersion: glmGamPoi` asks for, cannot be
+loaded. There is no fallback to another dispersion estimator: the method is
+refused outright.
+"""
+struct GlmGamPoiUnavailable <: Exception end
+
+Base.showerror(io::IO, ::GlmGamPoiUnavailable) = print(io,
+    "the R package glmGamPoi is not available, so the shrunken dispersion cannot be " *
+    "fitted; restore the pinned R library (Rscript -e 'renv::restore()') " *
+    "or use analysis.differential.dispersion: glm_nb")
 
 """
     _geomean(x) -> Float64
@@ -243,7 +291,43 @@ da_result <- data.frame(status = rep("ok", da_n), note = rep("", da_n),
                         estimate = rep(NA_real_, da_n), se = rep(NA_real_, da_n),
                         statistic = rep(NA_real_, da_n), pvalue = rep(NA_real_, da_n),
                         theta = rep(NA_real_, da_n), stringsAsFactors = FALSE)
+# "glmGamPoi": one glmGamPoi::glm_gp fit across all taxa supplies each taxon's
+# "glmGamPoi": one glmGamPoi::glm_gp fit across all taxa, with each taxon's
+# overdispersion shrunk toward the cross-taxon trend, supplies glmGamPoi's own
+# published inference -- glmGamPoi::test_de's quasi-likelihood F-test of the
+# group coefficient. Its genes x samples convention, so
+# the counts are transposed, and size_factors takes the linear size factor
+# (the per-taxon fits below use its log as their offset). A fit- or test-level
+# error fails every taxon. No fallback to another dispersion estimator or
+# significance test is permitted.
+da_glp <- NULL
+da_glp_failed <- ""
+if (da_use_glp) {
+  da_gp <- tryCatch(
+    glmGamPoi::glm_gp(t(da_counts), design = model.matrix(~ da_g),
+                      size_factors = exp(da_offset), overdispersion_shrinkage = TRUE),
+    error = function(e) e)
+  if (inherits(da_gp, "error")) {
+    da_glp_failed <- paste("glm_gp stopped with an error:", conditionMessage(da_gp))
+  } else {
+    da_glp <- tryCatch(
+      glmGamPoi::test_de(da_gp, contrast = da_term, max_lfc = Inf, compute_lfc_se = TRUE),
+      error = function(e) e)
+    if (inherits(da_glp, "error")) {
+      da_glp_failed <- paste("test_de stopped with an error:", conditionMessage(da_glp))
+      da_glp <- NULL
+    } else if (nrow(da_glp) != da_n) {
+      da_glp_failed <- "test_de returned no row for each taxon"
+      da_glp <- NULL
+    }
+  }
+}
 for (da_j in seq_len(da_n)) {
+  if (nzchar(da_glp_failed)) {
+    da_result[da_j, "status"] <- "failed"
+    da_result[da_j, "note"] <- da_glp_failed
+    next
+  }
   da_y <- da_counts[, da_j]
   if (length(unique(da_y)) < 2L) {
     da_result[da_j, "status"] <- "failed"
@@ -251,62 +335,98 @@ for (da_j in seq_len(da_n)) {
     next
   }
   # Complete separation: with no reads in every sample of one group the group
-  # coefficient runs off to infinity, its standard error with it, and the Wald
-  # p-value collapses towards 1 although the fit reports convergence. That p is
+  # coefficient runs off to infinity and its test loses its footing. That p is
   # not evidence of no difference, so the taxon is refused with its reason.
   da_absent <- levels(da_g)[vapply(levels(da_g), function(l) all(da_y[da_g == l] == 0), logical(1))]
   if (length(da_absent) > 0L) {
     da_result[da_j, "status"] <- "failed"
     da_result[da_j, "note"] <- paste0("no reads in any '", da_absent[[1]], "' sample (complete ",
-                                      "separation): the fold change is unbounded and the Wald test ",
+                                      "separation): the fold change is unbounded and its test ",
                                       "is undefined, so no p-value is reported")
     next
   }
-  da_warns <- character(0)
-  da_fit <- tryCatch(
-    withCallingHandlers(
-      MASS::glm.nb(da_y ~ da_g + offset(da_offset), control = glm.control(maxit = 100)),
-      warning = function(w) {
-        da_warns <<- c(da_warns, conditionMessage(w))
-        invokeRestart("muffleWarning")
-      }),
-    error = function(e) e)
-  if (inherits(da_fit, "error")) {
-    da_result[da_j, "status"] <- "failed"
-    da_result[da_j, "note"] <- paste("glm.nb stopped with an error:", conditionMessage(da_fit))
-    next
-  }
-  da_warns <- unique(da_warns)
-  if (!isTRUE(da_fit[["converged"]]) || !is.null(da_fit[["th.warn"]]) ||
-      any(grepl("iteration limit|alternation limit|did not converge|NaNs produced", da_warns))) {
-    da_result[da_j, "status"] <- "failed"
-    da_result[da_j, "note"] <- paste("the fit did not converge:",
-                                     paste(c(da_fit[["th.warn"]], da_warns), collapse = "; "))
-    next
-  }
-  da_co <- summary(da_fit)[["coefficients"]]
-  if (!(da_term %in% rownames(da_co))) {
-    da_result[da_j, "status"] <- "failed"
-    da_result[da_j, "note"] <- "the group coefficient is not estimable (aliased)"
-    next
-  }
-  da_row <- da_co[da_term, ]
-  if (!all(is.finite(da_row)) || da_row[[4]] < 0 || da_row[[4]] > 1) {
-    da_result[da_j, "status"] <- "failed"
-    da_result[da_j, "note"] <- "the fit returned a non-finite estimate, standard error or p-value"
-    next
-  }
-  da_theta <- da_fit[["theta"]]
-  da_result[da_j, c("estimate", "se", "statistic", "pvalue")] <- unname(da_row[1:4])
-  da_result[da_j, "theta"] <- da_theta
-  if (!is.finite(da_theta) || da_theta >= da_theta_upper) {
-    da_result[da_j, "status"] <- "boundary"
-    da_result[da_j, "note"] <- "the dispersion parameter theta reached its upper bound: these counts show no overdispersion, so the fit is effectively Poisson"
-  } else if (da_theta <= da_theta_lower) {
-    da_result[da_j, "status"] <- "boundary"
-    da_result[da_j, "note"] <- "the dispersion parameter theta reached its lower bound: the variance is extreme relative to the mean"
-  } else if (length(da_warns) > 0L) {
-    da_result[da_j, "note"] <- paste("R warned:", paste(da_warns, collapse = "; "))
+  if (da_use_glp) {
+    # glmGamPoi's own test on its own fit. `lfc` is the log2 fold change of
+    # the group contrast and `lfc_se` its standard error; both are converted
+    # to the natural-log scale so every method reports one effect scale. The
+    # per-taxon scale the test used is the shrunken quasi-likelihood
+    # dispersion `ql_disp_shrunken`, whose inverse is reported as the
+    # dispersion theta. Zero dispersion is the Poisson boundary, where the F
+    # ratio would report p = 0 for the wrong reason, so inference is withheld;
+    # an unusable dispersion fails only its own taxon.
+    da_ql <- da_gp[["overdispersion_shrinkage_list"]][["ql_disp_shrunken"]][da_j]
+    if (!is.finite(da_ql) || da_ql < 0) {
+      da_result[da_j, "status"] <- "failed"
+      da_result[da_j, "note"] <- "the shrunken dispersion for this taxon is not usable"
+      next
+    }
+    if (da_ql == 0) {
+      da_result[da_j, "status"] <- "boundary"
+      da_result[da_j, "note"] <- "zero dispersion: Poisson boundary; quasi-likelihood inference withheld"
+      next
+    }
+    da_est <- da_glp[["lfc"]][da_j] * log(2)
+    da_se <- da_glp[["lfc_se"]][da_j] * log(2)
+    da_stat <- da_glp[["f_statistic"]][da_j]
+    da_p <- da_glp[["pval"]][da_j]
+    if (!is.finite(da_est) || !is.finite(da_se) || !is.finite(da_stat) ||
+        !is.finite(da_p) || da_p < 0 || da_p > 1) {
+      da_result[da_j, "status"] <- "failed"
+      da_result[da_j, "note"] <- "the fit returned a non-finite estimate, standard error or p-value"
+      next
+    }
+    da_result[da_j, c("estimate", "se", "statistic", "pvalue", "theta")] <-
+      c(da_est, da_se, da_stat, da_p, 1 / da_ql)
+  } else {
+    # "glm_nb" estimates theta per taxon inside MASS::glm.nb's alternating
+    # fit, then Wald-tests the group coefficient at fixed scale 1, which is
+    # summary.negbin's own default.
+    da_warns <- character(0)
+    da_fit <- tryCatch(
+      withCallingHandlers(
+        MASS::glm.nb(da_y ~ da_g + offset(da_offset), control = glm.control(maxit = 100)),
+        warning = function(w) {
+          da_warns <<- c(da_warns, conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }),
+      error = function(e) e)
+    if (inherits(da_fit, "error")) {
+      da_result[da_j, "status"] <- "failed"
+      da_result[da_j, "note"] <- paste("glm.nb stopped with an error:", conditionMessage(da_fit))
+      next
+    }
+    da_warns <- unique(da_warns)
+    if (!isTRUE(da_fit[["converged"]]) || !is.null(da_fit[["th.warn"]]) ||
+        any(grepl("iteration limit|alternation limit|did not converge|NaNs produced", da_warns))) {
+      da_result[da_j, "status"] <- "failed"
+      da_result[da_j, "note"] <- paste("the fit did not converge:",
+                                       paste(c(da_fit[["th.warn"]], da_warns), collapse = "; "))
+      next
+    }
+    da_co <- summary(da_fit, dispersion = 1)[["coefficients"]]
+    if (!(da_term %in% rownames(da_co))) {
+      da_result[da_j, "status"] <- "failed"
+      da_result[da_j, "note"] <- "the group coefficient is not estimable (aliased)"
+      next
+    }
+    da_row <- da_co[da_term, ]
+    if (!all(is.finite(da_row)) || da_row[[4]] < 0 || da_row[[4]] > 1) {
+      da_result[da_j, "status"] <- "failed"
+      da_result[da_j, "note"] <- "the fit returned a non-finite estimate, standard error or p-value"
+      next
+    }
+    da_theta <- da_fit[["theta"]]
+    da_result[da_j, c("estimate", "se", "statistic", "pvalue")] <- unname(da_row[1:4])
+    da_result[da_j, "theta"] <- da_theta
+    if (!is.finite(da_theta) || da_theta >= da_theta_upper) {
+      da_result[da_j, "status"] <- "boundary"
+      da_result[da_j, "note"] <- "the dispersion parameter theta reached its upper bound: these counts show no overdispersion, so the fit is effectively Poisson"
+    } else if (da_theta <= da_theta_lower) {
+      da_result[da_j, "status"] <- "boundary"
+      da_result[da_j, "note"] <- "the dispersion parameter theta reached its lower bound: the variance is extreme relative to the mean"
+    } else if (length(da_warns) > 0L) {
+      da_result[da_j, "note"] <- paste("R warned:", paste(da_warns, collapse = "; "))
+    }
   }
 }
 """
@@ -319,36 +439,70 @@ A finite number as `Float64`, or `nothing` for R's NA, NaN or an infinity.
 _num(x) = (ismissing(x) || isnothing(x) || !isfinite(x)) ? nothing : Float64(x)
 
 """
-    fit_nb(counts, groups, offset; levels) -> DataFrame
+    fit_nb(counts, groups, offset; levels, dispersion="glm_nb") -> DataFrame
 
-Fit `MASS::glm.nb(y ~ group + offset(offset))` to each column of the samples x
-taxa integer matrix `counts`. `levels` is `(reference, contrast)`, so the
-estimate is the natural-log fold change of `contrast` over `reference`.
+Fit a negative-binomial GLM with a log link to each column of the samples x
+taxa integer matrix `counts`. `offset` contains the natural logarithm of each
+sample's size factor. `levels` is `(reference, contrast)`, so the estimate is
+the natural-log fold change of `contrast` over `reference`.
+`dispersion` names what the fits do and how they test: `"glm_nb"` (the
+default) takes `MASS::glm.nb`'s maximum-likelihood theta per taxon and
+Wald-tests the group coefficient at fixed scale 1; `"glmGamPoi"` fits one
+`glmGamPoi::glm_gp` across all supplied taxa with overdispersion shrinkage
+toward the cross-taxon trend and reports `glmGamPoi::test_de`'s
+quasi-likelihood F-test of the group contrast — its `lfc` (log2 fold change)
+and `lfc_se`, both converted to the natural-log scale so the columns carry one
+effect scale. In that path `statistic` is the quasi-likelihood F, `pvalue`
+its p-value, and `dispersion_theta` the inverse of the shrunken
+quasi-likelihood dispersion the test used for the taxon. Names are stripped
+and matched without regard to case.
+
 Returns one row per taxon with `status` (`ok`, `boundary` or `failed`), `note`,
 `estimate`, `se`, `statistic`, `pvalue` and `theta`; a failed taxon has
-`nothing` for every statistic. Throws `MASSUnavailable` when MASS cannot be
-loaded and `RBusyError` when the R runtime stays busy.
+`nothing` for every statistic. Boundary fits retain their statistics: under
+`"glm_nb"` theta at or above 1e7 marks the Poisson end and theta at or below
+1e-8 marks extreme variance; under `"glmGamPoi"` a zero shrunken dispersion
+marks the Poisson boundary, where the F ratio would report p = 0 for the wrong
+reason, so inference is withheld. Constant counts, complete separation and
+unusable coefficients produce failed rows. Errors caught from the model-fitting
+calls also produce failed rows; a caught `glm_gp` or `test_de` error fails every
+taxon, with no fallback to `"glm_nb"`.
+
+Throws `ArgumentError` for an unsupported dispersion name or mismatched
+sample, group and offset lengths, `MASSUnavailable` when MASS cannot be loaded,
+`GlmGamPoiUnavailable` when `"glmGamPoi"` is selected and its package cannot
+be loaded, and `RBusyError` when the R runtime stays busy. R errors outside the
+caught model-fitting calls propagate.
 """
 function fit_nb(counts::AbstractMatrix{<:Integer}, groups::AbstractVector{<:AbstractString},
-                offset::AbstractVector{<:Real}; levels::NTuple{2,String})
+                offset::AbstractVector{<:Real}; levels::NTuple{2,String},
+                dispersion::AbstractString="glm_nb")
+    di = findfirst(s -> lowercase(s) == lowercase(strip(String(dispersion))), DISPERSIONS)
+    di === nothing && throw(ArgumentError(
+        "dispersion must be one of $(join(DISPERSIONS, ", ")), not '$dispersion'"))
+    use_glp = DISPERSIONS[di] == "glmGamPoi"
     size(counts, 1) == length(groups) == length(offset) || throw(ArgumentError(
         "counts have $(size(counts, 1)) samples, groups $(length(groups)), offset $(length(offset))"))
     raw = with_r_lock(; timeout=R_WAIT_SECONDS[]) do
         RCall.rcopy(RCall.reval("requireNamespace('MASS', quietly = TRUE)")) || throw(MASSUnavailable())
+        use_glp && !RCall.rcopy(RCall.reval("requireNamespace('glmGamPoi', quietly = TRUE)")) &&
+            throw(GlmGamPoiUnavailable())
         RCall.globalEnv[:da_counts] = Matrix{Int}(counts)
         RCall.globalEnv[:da_group] = String.(groups)
         RCall.globalEnv[:da_levels] = collect(levels)
         RCall.globalEnv[:da_offset] = Float64.(offset)
         RCall.globalEnv[:da_theta_upper] = THETA_UPPER
         RCall.globalEnv[:da_theta_lower] = THETA_LOWER
+        RCall.globalEnv[:da_use_glp] = use_glp
         try
             RCall.reval(_FIT_R)
             DataFrame(RCall.rcopy(RCall.reval("da_result")))
         finally
             RCall.reval("rm(list = intersect(ls(), c('da_counts', 'da_group', 'da_levels', " *
-                        "'da_offset', 'da_theta_upper', 'da_theta_lower', 'da_g', 'da_term', " *
-                        "'da_n', 'da_result', 'da_j', 'da_y', 'da_warns', 'da_fit', 'da_co', " *
-                        "'da_row', 'da_theta', 'da_absent'))); invisible(gc())")
+                        "'da_offset', 'da_theta_upper', 'da_theta_lower', 'da_use_glp', 'da_g', " *
+                        "'da_term', 'da_n', 'da_result', 'da_glp', 'da_glp_failed', 'da_gp', " *
+                        "'da_j', 'da_y', 'da_absent', 'da_ql', 'da_est', 'da_se', 'da_stat', " *
+                        "'da_p', 'da_warns', 'da_fit', 'da_co', 'da_row', 'da_theta'))); invisible(gc())")
         end
     end
     DataFrame(status    = String.(raw.status),
@@ -589,7 +743,12 @@ labelled `reference` in `groups`, by `config.method`.
 
 `nb_glm`: size factors are computed on the full matrix by `config.offset` and
 enter each negative-binomial model as `log(factor)`; the estimate is a
-natural-log fold change.
+natural-log fold change. `config.dispersion` selects the fits and the test:
+`"glm_nb"` (per-taxon `MASS::glm.nb` with its maximum-likelihood theta) or
+`"glmGamPoi"` (one `glmGamPoi::glm_gp` fit across the taxa passing the
+prevalence filter, with overdispersion shrinkage, and `glmGamPoi::test_de`'s
+quasi-likelihood F-test of the group contrast). The result's `config`
+includes the selected dispersion name.
 
 `clr_welch`, in this order: (1) `min_prevalence` chooses the taxa, and taxa with
 no reads in any sample are always left out; (2) the zeros of those taxa only
@@ -614,8 +773,11 @@ effect size and its label.
 
 Throws `ArgumentError` for unusable input (including a zero replacement that
 cannot be made), `ScalingRefusal` when the offset cannot be computed,
-`MASSUnavailable` or `ZCompositionsUnavailable` when the R package a method
-needs is missing, and an `ErrorException` when no taxon could be fitted at all.
+`MASSUnavailable`, `GlmGamPoiUnavailable` or `ZCompositionsUnavailable` when a
+required R package is missing, `RBusyError` when the R runtime stays busy, and
+an `ErrorException` when no taxon could be fitted at all, including when the
+`glm_gp` fit fails. Uncaught R errors from the fitting and zero-replacement
+helpers propagate.
 """
 function differential_abundance(counts::AbstractMatrix{<:Real},
                                 samples::AbstractVector{<:AbstractString},
@@ -664,7 +826,8 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
         factors = size_factors(counts, samples, config.offset)
         tested = findall(>=(config.min_prevalence), prevalence)
         fits = isempty(tested) ? nothing :
-            fit_nb(Int.(counts[:, tested]), groups, log.(factors); levels)
+            fit_nb(Int.(counts[:, tested]), groups, log.(factors); levels,
+                   dispersion=config.dispersion)
         if !isnothing(fits)
             for (k, j) in enumerate(tested)
                 f = fits[k, :]
@@ -675,14 +838,23 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
                     "pvalue" => f.pvalue, "dispersion_theta" => f.theta))
             end
         end
-        method_text = "Negative-binomial GLM per taxon (MASS::glm.nb, log link) with a " *
-                      "$(uppercase(config.offset)) size-factor offset; Wald test of the group " *
-                      "coefficient; Benjamini-Hochberg adjustment over the fitted taxa"
+        nb_fit = config.dispersion == "glm_nb" ? "MASS::glm.nb" : "glmGamPoi::glm_gp"
+        if config.dispersion == "glm_nb"
+            method_text = "Negative-binomial GLM per taxon ($nb_fit, log link) with a " *
+                          "$(uppercase(config.offset)) size-factor offset; Wald test of the group " *
+                          "coefficient; Benjamini-Hochberg adjustment over the fitted taxa"
+        else
+            method_text = "Negative-binomial GLM per taxon ($nb_fit, log link) with a " *
+                          "$(uppercase(config.offset)) size-factor offset; quasi-likelihood F-test " *
+                          "of the group contrast (glmGamPoi::test_de) with overdispersion shrinkage; " *
+                          "Benjamini-Hochberg adjustment over the fitted taxa"
+        end
         effect = Dict("key" => "log2_fold_change", "label" => "log2 fold change")
         size_factor_rows = [Dict("sample" => String(samples[i]), "group" => String(groups[i]),
                                  "factor" => factors[i]) for i in eachindex(samples)]
         config_echo = Dict{String,Any}("method" => config.method, "offset" => config.offset,
-                                       "min_prevalence" => config.min_prevalence)
+                                       "min_prevalence" => config.min_prevalence,
+                                       "dispersion" => config.dispersion)
     else
         (n_ref >= 2 && n_con >= 2) || throw(ArgumentError(
             "Welch's t-test needs at least 2 samples in each group to estimate its variance; " *

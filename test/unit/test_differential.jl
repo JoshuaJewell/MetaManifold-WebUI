@@ -31,6 +31,15 @@ const HAVE_MASS = HAVE_R && _r_has("MASS")
 HAVE_MASS || @info "R or MASS unavailable - the negative-binomial fit tests are SKIPPED"
 const HAVE_ZCOMP = HAVE_R && _r_has("zCompositions")
 HAVE_ZCOMP || @info "R or zCompositions unavailable - the clr_welch tests are SKIPPED"
+const HAVE_GLMGAMPOI = HAVE_MASS && _r_has("glmGamPoi")
+
+# Issue #37's test contract: the direct glmGamPoi comparisons fail, not skip,
+# in CI when glmGamPoi is missing. Locally they skip loudly. This guard is the
+# first statement of every glmGamPoi-dependent testset.
+const _GLMGAMPOI_IN_CI = get(ENV, "CI", "") == "true"
+HAVE_GLMGAMPOI || @info (_GLMGAMPOI_IN_CI ?
+    "glmGamPoi unavailable IN CI - the shrunken-dispersion tests FAIL" :
+    "R, MASS or glmGamPoi unavailable - the shrunken-dispersion fit tests are SKIPPED")
 
 # Rows per run: Up is split over two ASVs so the route must pool them by genus.
 const _DA_ROWS = Dict(
@@ -172,6 +181,16 @@ end
         @test_throws ArgumentError DifferentialConfig(; method="ancombc")
         # The pre-review name, never released, is not accepted.
         @test_throws ArgumentError DifferentialConfig(; method="clr_lm")
+        # The dispersion option: glm_nb is the default and keeps nb_glm's
+        # per-taxon maximum-likelihood theta; glmGamPoi is the alternative and
+        # is a negative-binomial setting only.
+        @test DifferentialConfig().dispersion == "glm_nb"
+        @test DifferentialConfig(dispersion="glmGamPoi").dispersion == "glmGamPoi"
+        @test DifferentialConfig(dispersion="  GLMGAMPOI ").dispersion == "glmGamPoi"
+        @test DifferentialConfig(dispersion=" Glm_Nb ").dispersion == "glm_nb"
+        @test_throws ArgumentError DifferentialConfig(dispersion="shrinkage")
+        @test_throws ArgumentError DifferentialConfig(method="clr_welch", dispersion="glmGamPoi")
+        @test DifferentialConfig(method="clr_welch").dispersion == "glm_nb"
         for d in (0, 1, -0.5, NaN)
             @test_throws ArgumentError DifferentialConfig(; method="clr_welch", replacement_delta=d)
         end
@@ -212,6 +231,9 @@ end
             byt = Dict(r["taxon"] => r for r in res["rows"])
             @test res["status"] == "ok"
             @test res["diagnostics"]["n_tested"] == 3
+            @test res["method"] == "Negative-binomial GLM per taxon (MASS::glm.nb, log link) " *
+                                  "with a TSS size-factor offset; Wald test of the group " *
+                                  "coefficient; Benjamini-Hochberg adjustment over the fitted taxa"
             @test all(r -> r["status"] == "ok", res["rows"])
             @test isapprox(byt["t_up"]["estimate"], log(4); atol=0.5)
             @test isapprox(byt["t_up"]["log2_fold_change"], 2; atol=0.8)
@@ -244,6 +266,92 @@ end
                     @test r["standard_error"] ≈ direct[2] rtol=1e-6
                     @test r["pvalue"] ≈ direct[3] rtol=1e-6
                     @test r["dispersion_theta"] ≈ direct[4] rtol=1e-6
+                end
+                @test res["config"]["dispersion"] == "glm_nb"
+            end
+        end
+    end
+
+    @testset "glmGamPoi path matches a direct glmGamPoi::test_de call" begin
+        if !HAVE_GLMGAMPOI
+            # Issue #37's contract: these comparisons fail, not skip, in CI.
+            @test !_GLMGAMPOI_IN_CI
+            @test_skip false
+        else
+            res = differential_abundance(effect, effect_samples, effect_taxa, effect_groups;
+                                         reference="A", contrast="B",
+                                         config=DifferentialConfig(dispersion="glmGamPoi"))
+            @test res["status"] == "ok"
+            @test res["method"] == "Negative-binomial GLM per taxon (glmGamPoi::glm_gp, log link) " *
+                                  "with a TSS size-factor offset; quasi-likelihood F-test of the " *
+                                  "group contrast (glmGamPoi::test_de) with overdispersion shrinkage; " *
+                                  "Benjamini-Hochberg adjustment over the fitted taxa"
+            @test res["config"]["dispersion"] == "glmGamPoi"
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            off = log.(tss_factors(effect, effect_samples))
+            g = effect_groups
+            # The reference is a direct glmGamPoi::test_de call here in R, not
+            # the fitted path under test: the same model and the same published
+            # quasi-likelihood F-test, computed independently. lfc is log2 and
+            # lfc_se its standard error, so both are scaled by log(2) to meet
+            # the natural-log convention of every method's estimate and se.
+            # One matrix column per quantity, one row per taxon.
+            direct = rcopy(R"""
+                local({
+                  g <- factor($g, levels = c("A", "B"))
+                  gp <- glmGamPoi::glm_gp(t($effect), design = model.matrix(~ g),
+                          size_factors = exp($off), overdispersion_shrinkage = TRUE)
+                  td <- glmGamPoi::test_de(gp, contrast = "gB", max_lfc = Inf,
+                                           compute_lfc_se = TRUE)
+                  cbind(td$pval, td$f_statistic, td$lfc * log(2), td$lfc_se * log(2),
+                        1 / gp$overdispersion_shrinkage_list$ql_disp_shrunken)
+                })
+            """)
+            for (j, t) in enumerate(effect_taxa)
+                r = byt[t]
+                @test r["status"] == "ok"
+                @test r["pvalue"] ≈ direct[j, 1] rtol=1e-6
+                @test r["statistic"] ≈ direct[j, 2] rtol=1e-6
+                @test r["estimate"] ≈ direct[j, 3] rtol=1e-6
+                @test r["standard_error"] ≈ direct[j, 4] rtol=1e-6
+                @test r["log2_fold_change"] ≈ direct[j, 3] / log(2) rtol=1e-6
+                @test r["dispersion_theta"] ≈ direct[j, 5] rtol=1e-6
+            end
+        end
+    end
+
+    @testset "glmGamPoi unusable dispersions are isolated per taxon" begin
+        if !HAVE_GLMGAMPOI
+            # Issue #37's contract: these comparisons fail, not skip, in CI.
+            @test !_GLMGAMPOI_IN_CI
+            @test_skip false
+        else
+            MetaManifold.RRuntime.with_r_lock() do
+                reval(raw"""
+                    test_original_gp <- get("glm_gp", asNamespace("glmGamPoi"))
+                    test_ql <- 0
+                    assignInNamespace("glm_gp", function(...) {
+                        fit <- test_original_gp(...)
+                        fit$overdispersion_shrinkage_list$ql_disp_shrunken[1] <- test_ql
+                        fit
+                    }, ns="glmGamPoi")
+                """)
+                try
+                    off = log.(tss_factors(effect, effect_samples))
+                    for (ql, status) in ((0.0, "boundary"), (-1.0, "failed"), (NaN, "failed"))
+                        RCall.globalEnv[:test_ql] = ql
+                        rows = fit_nb(effect, effect_groups, off; levels=("A", "B"),
+                                      dispersion="glmGamPoi")
+                        @test rows.status[1] == status
+                        @test isnothing(rows.pvalue[1])
+                        @test occursin("dispersion", rows.note[1])
+                        @test all(rows.status[2:end] .== "ok")
+                    end
+                finally
+                    reval(raw"""
+                        assignInNamespace("glm_gp", test_original_gp, ns="glmGamPoi")
+                        rm(test_original_gp, test_ql)
+                    """)
                 end
             end
         end
@@ -384,6 +492,16 @@ end
         @test isnothing(SV._config_value_error("analysis.differential.min_prevalence", 0.1))
         @test isnothing(SV._config_value_error("analysis.differential.method", "clr_welch"))
         @test !isnothing(SV._config_value_error("analysis.differential.method", "ancombc"))
+        # Like every other enum key, the config route takes exact spellings.
+        for dispersion in ("glm_nb", "glmGamPoi")
+            @test isnothing(SV._config_value_error("analysis.differential.dispersion", dispersion))
+        end
+        # "ml" was the pre-release spelling of glm_nb and is not accepted;
+        # case and spaces are DifferentialConfig's lenience, not the route's.
+        for dispersion in ("shrinkage", "ml", "", nothing, 1, true, ["glm_nb"],
+                           " GLM_NB ", "  GLMGAMPOI ", "GLMGAMPOI")
+            @test !isnothing(SV._config_value_error("analysis.differential.dispersion", dispersion))
+        end
     end
 
     @testset "CLR transform" begin
@@ -749,6 +867,57 @@ end
             end
             @test !rcopy(Bool, reval("exists('requireNamespace', envir = globalenv(), inherits = FALSE)"))
             @test rcopy(Bool, reval("requireNamespace('zCompositions', quietly = TRUE)")) == HAVE_ZCOMP
+        end
+    end
+
+    ## Without glmGamPoi, dispersion: glmGamPoi refuses with
+    # GlmGamPoiUnavailable and the route answers 503. As above, a
+    # `requireNamespace` bound in R's global environment reports glmGamPoi
+    # missing and defers to base for every other package, so the production
+    # probe sees the package as absent on any machine. MASS is probed first
+    # and must be real, so this testset needs it.
+    @testset "nb_glm without glmGamPoi refuses with GlmGamPoiUnavailable and a 503" begin
+        if !HAVE_MASS
+            @test_skip false    # without MASS the glm_nb path's own guard fires first
+        else
+            reval("""requireNamespace <- function(package, ...) {
+                if (identical(package, "glmGamPoi")) FALSE
+                else base::requireNamespace(package, ...)
+            }""")
+            try
+                @test !rcopy(Bool, reval("requireNamespace('glmGamPoi', quietly = TRUE)"))
+                e = try
+                    fit_nb([5 6; 7 3; 9 4; 4 8], ["A", "A", "B", "B"], [0.0, 0.0, 0.0, 0.0];
+                           levels=("A", "B"), dispersion="glmGamPoi")
+                    nothing
+                catch err
+                    err
+                end
+                @test e isa GlmGamPoiUnavailable
+                @test occursin("renv::restore()", sprint(showerror, e))
+                @test occursin("dispersion: glm_nb", sprint(showerror, e))
+                _da_fixture() do
+                    root = MetaManifold.Server.ServerState._root[]
+                    write(joinpath(root, "data", "studyD", "pipeline.yml"),
+                          "analysis:\n  differential:\n    dispersion: glmGamPoi\n")
+                    response = _da_post("studyD", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
+                                                       "table" => "merged", "rank" => "Genus"))
+                    body = JSON3.read(String(response.body))
+                    @test response.status == 503
+                    @test body.error == "r_unavailable"
+                    @test occursin("glmGamPoi", body.message)
+                end
+                # The override defers to base for everything else, so the
+                # default dispersion still fits normally with it in place:
+                # the injected-effect dataset, measured with MASS::glm.nb,
+                # reaches status ok on its own.
+                r = fit_nb(effect, effect_groups, log.(tss_factors(effect, effect_samples));
+                           levels=("A", "B"))
+                @test all(r.status .== "ok")
+            finally
+                reval("rm(requireNamespace)")
+            end
+            @test !rcopy(Bool, reval("exists('requireNamespace', envir = globalenv(), inherits = FALSE)"))
         end
     end
 end

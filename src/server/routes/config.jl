@@ -108,6 +108,7 @@ const _ENUM_VALUES = Dict(
     "analysis.beta.normalisation"    => ("hellinger", "none", "rarefy", "srs"),
     "analysis.differential.method"   => Differential.METHODS,
     "analysis.differential.offset"   => Differential.OFFSET_METHODS,
+    "analysis.differential.dispersion" => Differential.DISPERSIONS,
     "phylogeny.reference.align.strategy" => Validation.PHYLOGENY_ALIGN_STRATEGIES,
     "phylogeny.placement.align.strategy" => Validation.PHYLOGENY_ALIGN_STRATEGIES,
     "phylogeny.reference.trim.method"    => Validation.PHYLOGENY_TRIM_METHODS,

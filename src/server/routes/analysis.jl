@@ -1196,7 +1196,10 @@ end
     _differential_config(study) -> DifferentialConfig
 
 The study's `analysis.differential` settings, resolved through the config
-cascade.
+cascade. Missing or `nothing` values use the defaults in `DifferentialConfig`,
+including `dispersion="glm_nb"`. Invalid settings propagate the constructor's
+`ArgumentError`; values that cannot be converted to strings or numbers also
+raise their conversion errors.
 """
 function _differential_config(study::String)
     resolved = _resolved_run_config(study, nothing, nothing, nothing)
@@ -1204,7 +1207,8 @@ function _differential_config(study::String)
     DifferentialConfig(String(val("analysis.differential.offset", "tss")),
                        Float64(val("analysis.differential.min_prevalence", 0.0));
                        method=String(val("analysis.differential.method", "nb_glm")),
-                       replacement_delta=Float64(val("analysis.differential.replacement_delta", 0.65)))
+                       replacement_delta=Float64(val("analysis.differential.replacement_delta", 0.65)),
+                       dispersion=String(val("analysis.differential.dispersion", "glm_nb")))
 end
 
 """
@@ -1283,6 +1287,7 @@ function _differential(study::String, body)
         e isa ScalingRefusal   && return json_error(422, "scaling_refused", sprint(showerror, e))
         e isa MASSUnavailable  && return json_error(503, "r_unavailable", sprint(showerror, e))
         e isa ZCompositionsUnavailable && return json_error(503, "r_unavailable", sprint(showerror, e))
+        e isa GlmGamPoiUnavailable && return json_error(503, "r_unavailable", sprint(showerror, e))
         e isa ErrorException   && return json_error(422, "no_taxon_fitted", e.msg)
         rethrow()
     end

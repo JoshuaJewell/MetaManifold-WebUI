@@ -358,6 +358,15 @@ analysis:
     # rle is refused when no taxon is present in every sample.
     # Used by nb_glm only; clr_welch ignores it, since log-ratios carry no library size.
     offset: tss
+    # nb_glm only: the fits and the test. glm_nb (the default) fits
+    # MASS::glm.nb per taxon with its maximum-likelihood theta and Wald-tests
+    # the group coefficient. glmGamPoi fits one glmGamPoi::glm_gp across the
+    # taxa passing min_prevalence, with overdispersion shrinkage toward the
+    # cross-taxon trend, and reports glmGamPoi::test_de's quasi-likelihood
+    # F-test of the group contrast with its log2 fold changes. A zero shrunken
+    # dispersion withholds inference for its taxon. Requires the pinned
+    # glmGamPoi R package. Refused with clr_welch.
+    dispersion: glm_nb
     # Fraction of samples, 0 to 1, in which a taxon must have reads to be
     # tested. Taxa below it are listed as filtered, without a p-value. For
     # clr_welch it is applied before zero replacement, so on a sparse table it also
