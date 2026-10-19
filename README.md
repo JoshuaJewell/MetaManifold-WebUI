@@ -1,6 +1,7 @@
 # MetaManifold
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23464265.svg)](https://doi.org/10.5281/zenodo.23464265)
 [![Julia 1.12](https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia)](https://julialang.org)
 [![R >= 4.0](https://img.shields.io/badge/R-%E2%89%A54.0-276DC3?logo=r)](https://www.r-project.org)
 [![CI](https://github.com/JoshuaJewell/MetaManifold-WebUI/actions/workflows/ci.yml/badge.svg)](https://github.com/JoshuaJewell/MetaManifold-WebUI/actions/workflows/ci.yml)
@@ -882,6 +883,14 @@ This project orchestrates the following tools. Each is fetched from its upstream
 | [IQ-TREE](https://github.com/iqtree/iqtree3)    | GPL v2  | GitHub Releases         |
 | [RAxML](https://github.com/stamatak/standard-RAxML) | GPL v3 | Source / apt         |
 | [gappa](https://github.com/lczech/gappa)        | GPL v3  | Source                  |
+
+## Citation
+
+If you use MetaManifold in your work, please cite it through its Zenodo DOI,
+[10.5281/zenodo.23464265](https://doi.org/10.5281/zenodo.23464265), which covers
+every version. `CITATION.cff` holds the full metadata (GitHub's "Cite this
+repository" button reads it) and lists the tools MetaManifold runs, which should
+be cited as well.
 
 ## Acknowledgements
 

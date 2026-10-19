@@ -10,6 +10,14 @@ authors:
     orcid: "https://orcid.org/0009-0007-0289-9741"
 version: "0.1.0"
 date-released: "2026-10-19"
+doi: "10.5281/zenodo.23464265"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23464265"
+    description: "Concept DOI: every version of MetaManifold"
+  - type: doi
+    value: "10.5281/zenodo.23464266"
+    description: "Version DOI: MetaManifold v0.1.0"
 license: AGPL-3.0-only
 repository-code: "https://github.com/JoshuaJewell/MetaManifold-WebUI"
 url: "https://github.com/JoshuaJewell/MetaManifold-WebUI"

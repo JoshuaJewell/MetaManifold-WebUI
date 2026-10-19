@@ -5,5 +5,5 @@ export const SOURCE_URL = 'https://github.com/JoshuaJewell/MetaManifold-WebUI'
 export const LICENSE_URL = `${SOURCE_URL}/blob/main/LICENSE`
 export const COPYRIGHT = '© 2026 Joshua Benjamin Jewell and contributors'
 
-/** Set once Zenodo mints the DOI, e.g. '10.5281/zenodo.1234567'. */
-export const ZENODO_DOI: string | null = null
+/** Zenodo's concept DOI, which covers every version and resolves to the latest. */
+export const ZENODO_DOI: string | null = '10.5281/zenodo.23464265'
