@@ -15,7 +15,7 @@ export sample_columns, filtered_counts, filtered_df, taxonomy_levels, taxon_colu
        faceted_bar_chart,
        natural_less, natural_sort, short_sample_labels, pinned_segment_order,
        alpha_boxplot, nmds_chart,
-       run_nmds, run_permanova, r_available,
+       run_nmds, nmds_warnings, run_permanova, r_available,
        AlphaSignificance, was_computed,
        venn_taxa_present
 
@@ -1381,6 +1381,37 @@ function _ensure_r()
 end
 
 r_available() = _ensure_r()
+
+"""
+    nmds_warnings(mat, stress) -> Vector{String}
+
+Reasons an NMDS of the samples-by-features `mat` does not show meaningful
+distances. Two samples that share no feature have a Bray-Curtis dissimilarity
+of 1, the largest there is, so when the samples fall into groups that share
+none, the distances between groups carry no information and the ordination
+places those groups arbitrarily (`vegan::distconnected` finds the same groups).
+Stress near zero is reported otherwise, usually a sign of too little data.
+"""
+function nmds_warnings(mat::AbstractMatrix{<:Real}, stress::Real)
+    n = size(mat, 1)
+    parent = collect(1:n)
+    root(i) = parent[i] == i ? i : (parent[i] = root(parent[i]))
+    for j in axes(mat, 2)
+        present = findall(>(0), view(mat, :, j))
+        for i in present[2:end]
+            parent[root(i)] = root(present[1])
+        end
+    end
+    groups = length(unique(root(i) for i in 1:n))
+    if groups > 1
+        return ["NMDS: the samples fall into $groups groups that share no taxa, so the " *
+                "distances between those groups are arbitrary. Ordinate each group separately."]
+    elseif isfinite(stress) && stress < 1e-3
+        return ["NMDS: stress is near zero ($(round(stress; sigdigits=2))), which usually " *
+                "means too few samples or taxa for a meaningful ordination."]
+    end
+    String[]
+end
 
 """
     run_nmds(mat; seed=123, transform="none") -> (coords::Matrix{Float64}, stress::Float64)

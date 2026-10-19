@@ -7,6 +7,7 @@ import { errorMessage } from '../api/errorMessage'
 import { AnalysisChart } from './AnalysisChart'
 import { useToast } from './Toast'
 import { FACET_DIMENSIONS, type CategorySet, type ComparisonRunSpec, type FacetDimension } from '../api/types'
+import { ComputingNote } from './ComputingNote'
 
 //## Select / checkbox style tokens (matching DiversityPanel.tsx)
 const SELECT_STYLE: React.CSSProperties = {
@@ -366,6 +367,7 @@ export function TaxaCompositionChart({
           {loading ? 'Computing…' : 'Show'}
         </button>
       </div>
+      <ComputingNote active={loading} />
 
       {/* A grid needs headroom for its rows. */}
       {figure != null && (

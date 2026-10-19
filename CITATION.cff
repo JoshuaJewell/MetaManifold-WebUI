@@ -9,7 +9,7 @@ authors:
     affiliation: "Royal Veterinary College"
     orcid: "https://orcid.org/0009-0007-0289-9741"
 version: "0.1.0"
-date-released: "2026-05-21"
+date-released: "2026-10-19"
 license: AGPL-3.0-only
 repository-code: "https://github.com/JoshuaJewell/MetaManifold-WebUI"
 url: "https://github.com/JoshuaJewell/MetaManifold-WebUI"
@@ -17,9 +17,11 @@ abstract: >-
   MetaManifold is a Julia-native orchestrator for amplicon sequencing
   workflows. It wraps cutadapt, DADA2, SWARM, vsearch, and cd-hit-est into a
   single configurable pipeline, storing per-run results in DuckDB and exposing
-  them through an interactive React frontend. Analyses include alpha diversity,
-  taxonomic composition, NMDS, and PERMANOVA via R/vegan, together with
-  cross-run comparison and a functional-database annotation layer.
+  them through an interactive React frontend. ASVs can be placed on reference
+  trees with MAFFT, trimAl, IQ-TREE, RAxML-EPA and gappa. Analyses include
+  alpha diversity, taxonomic and organism-category composition, NMDS,
+  PERMANOVA and PERMDISP via R/vegan, and differential abundance, with
+  cross-run comparison throughout.
 keywords:
   - amplicon sequencing
   - metabarcoding
@@ -28,6 +30,7 @@ keywords:
   - bioinformatics
   - Julia
   - DuckDB
+  - phylogenetic placement
 references:
   - type: article
     title: "DADA2: High-resolution sample inference from Illumina amplicon data"
@@ -87,3 +90,210 @@ references:
     volume: 4
     start: e2584
     doi: "10.7717/peerj.2584"
+  - type: article
+    title: "Cutadapt removes adapter sequences from high-throughput sequencing reads"
+    authors:
+      - family-names: "Martin"
+        given-names: "Marcel"
+    journal: "EMBnet.journal"
+    year: 2011
+    volume: 17
+    issue: 1
+    start: 10
+    end: 12
+    doi: "10.14806/ej.17.1.200"
+  - type: article
+    title: "CD-HIT: accelerated for clustering the next-generation sequencing data"
+    authors:
+      - family-names: "Fu"
+        given-names: "Limin"
+      - family-names: "Niu"
+        given-names: "Beifang"
+      - family-names: "Zhu"
+        given-names: "Zhengwei"
+      - family-names: "Wu"
+        given-names: "Sitao"
+      - family-names: "Li"
+        given-names: "Weizhong"
+    journal: "Bioinformatics"
+    year: 2012
+    volume: 28
+    issue: 23
+    start: 3150
+    end: 3152
+    doi: "10.1093/bioinformatics/bts565"
+  - type: article
+    title: "MultiQC: summarize analysis results for multiple tools and samples in a single report"
+    authors:
+      - family-names: "Ewels"
+        given-names: "Philip"
+      - family-names: "Magnusson"
+        given-names: "Måns"
+      - family-names: "Lundin"
+        given-names: "Sverker"
+      - family-names: "Käller"
+        given-names: "Max"
+    journal: "Bioinformatics"
+    year: 2016
+    volume: 32
+    issue: 19
+    start: 3047
+    end: 3048
+    doi: "10.1093/bioinformatics/btw354"
+  - type: article
+    title: "MAFFT Multiple Sequence Alignment Software Version 7: Improvements in Performance and Usability"
+    authors:
+      - family-names: "Katoh"
+        given-names: "Kazutaka"
+      - family-names: "Standley"
+        given-names: "Daron M."
+    journal: "Molecular Biology and Evolution"
+    year: 2013
+    volume: 30
+    issue: 4
+    start: 772
+    end: 780
+    doi: "10.1093/molbev/mst010"
+  - type: article
+    title: "trimAl: a tool for automated alignment trimming in large-scale phylogenetic analyses"
+    authors:
+      - family-names: "Capella-Gutiérrez"
+        given-names: "Salvador"
+      - family-names: "Silla-Martínez"
+        given-names: "José M."
+      - family-names: "Gabaldón"
+        given-names: "Toni"
+    journal: "Bioinformatics"
+    year: 2009
+    volume: 25
+    issue: 15
+    start: 1972
+    end: 1973
+    doi: "10.1093/bioinformatics/btp348"
+  - type: article
+    title: "IQ-TREE 3: phylogenomic inference software using complex evolutionary models"
+    authors:
+      - family-names: "Wong"
+        given-names: "Thomas K F"
+      - family-names: "Ly-Trong"
+        given-names: "Nhan"
+      - family-names: "Ren"
+        given-names: "Huaiyan"
+      - family-names: "Demotte"
+        given-names: "Piyumal"
+      - family-names: "Baños"
+        given-names: "Hector"
+      - family-names: "Roger"
+        given-names: "Andrew J"
+      - family-names: "Susko"
+        given-names: "Edward"
+      - family-names: "Bielow"
+        given-names: "Chris"
+      - family-names: "De Maio"
+        given-names: "Nicola"
+      - family-names: "Goldman"
+        given-names: "Nick"
+      - family-names: "Hahn"
+        given-names: "Matthew W"
+      - family-names: "dos Reis"
+        given-names: "Mario"
+      - family-names: "Vinh"
+        given-names: "Le Sy"
+      - family-names: "Huttley"
+        given-names: "Gavin"
+      - family-names: "Lanfear"
+        given-names: "Robert"
+      - family-names: "Minh"
+        given-names: "Bui Quang"
+    journal: "Molecular Biology and Evolution"
+    year: 2026
+    volume: 43
+    issue: 5
+    doi: "10.1093/molbev/msag117"
+  - type: article
+    title: "RAxML version 8: a tool for phylogenetic analysis and post-analysis of large phylogenies"
+    authors:
+      - family-names: "Stamatakis"
+        given-names: "Alexandros"
+    journal: "Bioinformatics"
+    year: 2014
+    volume: 30
+    issue: 9
+    start: 1312
+    end: 1313
+    doi: "10.1093/bioinformatics/btu033"
+  - type: article
+    title: "Performance, Accuracy, and Web Server for Evolutionary Placement of Short Sequence Reads under Maximum Likelihood"
+    authors:
+      - family-names: "Berger"
+        given-names: "Simon A."
+      - family-names: "Krompass"
+        given-names: "Denis"
+      - family-names: "Stamatakis"
+        given-names: "Alexandros"
+    journal: "Systematic Biology"
+    year: 2011
+    volume: 60
+    issue: 3
+    start: 291
+    end: 302
+    doi: "10.1093/sysbio/syr010"
+  - type: article
+    title: "Genesis and Gappa: processing, analyzing and visualizing phylogenetic (placement) data"
+    authors:
+      - family-names: "Czech"
+        given-names: "Lucas"
+      - family-names: "Barbera"
+        given-names: "Pierre"
+      - family-names: "Stamatakis"
+        given-names: "Alexandros"
+    journal: "Bioinformatics"
+    year: 2020
+    volume: 36
+    issue: 10
+    start: 3263
+    end: 3265
+    doi: "10.1093/bioinformatics/btaa070"
+  - type: article
+    title: "zCompositions - R package for multivariate imputation of left-censored data under a compositional approach"
+    authors:
+      - family-names: "Palarea-Albaladejo"
+        given-names: "Javier"
+      - family-names: "Martín-Fernández"
+        given-names: "Josep Antoni"
+    journal: "Chemometrics and Intelligent Laboratory Systems"
+    year: 2015
+    volume: 143
+    start: 85
+    end: 96
+    doi: "10.1016/j.chemolab.2015.02.019"
+  - type: software
+    title: "FastQC: a quality control tool for high throughput sequence data"
+    authors:
+      - family-names: Andrews
+        given-names: "Simon"
+    year: 2010
+    url: "https://www.bioinformatics.babraham.ac.uk/projects/fastqc/"
+  - type: software
+    title: "vegan: Community Ecology Package"
+    authors:
+      - family-names: Oksanen
+        given-names: "Jari"
+      - name: "and others"
+    version: "2.7-3"
+    year: 2026
+    doi: "10.32614/CRAN.package.vegan"
+    url: "https://CRAN.R-project.org/package=vegan"
+  - type: book
+    title: "Modern Applied Statistics with S"
+    authors:
+      - family-names: Venables
+        given-names: "William N."
+      - family-names: Ripley
+        given-names: "Brian D."
+    edition: "Fourth"
+    publisher:
+      name: "Springer"
+      city: "New York"
+    year: 2002
+    isbn: "0-387-95457-0"

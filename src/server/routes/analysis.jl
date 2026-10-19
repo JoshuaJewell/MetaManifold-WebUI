@@ -8,7 +8,7 @@ using CSV, DataFrames
 using ..Analysis: alpha_chart,
                              sample_columns, taxonomy_levels, taxon_column, filtered_counts,
                              aggregate_by_taxon, combined_counts_across_runs,
-                             alpha_boxplot, nmds_chart, run_nmds, run_permanova, r_available,
+                             alpha_boxplot, nmds_chart, run_nmds, nmds_warnings, run_permanova, r_available,
                              sequence_column_name, normalise_counts, venn_taxa_present,
                              pool_columns, auto_min_depth, bar_chart, faceted_bar_chart,
                              natural_sort
@@ -821,6 +821,7 @@ end
     end
     fig = nmds_chart(coords, all_samples;
                      colour_by=colour_by, stress, shape_by=shape_by)
+    fig["warnings"] = nmds_warnings(mat, stress)
     HTTP.Response(200, ["Content-Type" => "application/json"],
                   body=JSON3.write(fig))
 end

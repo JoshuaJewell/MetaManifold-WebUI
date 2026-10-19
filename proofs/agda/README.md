@@ -7,16 +7,12 @@ SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@
 
 `proofs/agda/` holds Agda proofs of the exact-arithmetic properties of three
 functions in `src/analysis/differential.jl`: `bh_adjust`, `tss_factors` and
-`rle_factors` (with `_median`). The functions were added by the
-differential-abundance change (branch `feat/differential-abundance-nb`,
-commits `6c3e8b2` and `23dc89c`). These proofs depend on that change being
-merged first.
+`rle_factors` (with `_median`).
 
 `MetaManifold/Permanova.agda` covers the two things `run_permanova` in
 `src/analysis/analysis.jl` decides for itself rather than taking from vegan:
 the reported `min_p_value`, and which terms have their p-value withheld
-(`_varies_within_any_block`). Both arrive with the PERMANOVA change (branch
-`fix/permanova-terms`, PR #35), which these proofs depend on.
+(`_varies_within_any_block`).
 
 Every module is checked with `--safe --without-K`. There are no postulates,
 no holes and no termination or positivity pragmas.
@@ -31,9 +27,7 @@ The checker is **Agda 2.6.4.3** with **agda-stdlib 2.1**. The CI job
 `agda-stdlib=2.1-4`). It runs in a Debian image pinned by digest, because
 Agda publishes no 2.6.4.3 binary and stdlib 2.1 needs Agda 2.6.4.x.
 
-Earlier planning material and the archived proofs used Agda 2.7.0.1. These
-proofs are written for, and checked with, 2.6.4.3. They have not been checked
-with 2.7.0.1 or with stdlib 2.2 or later.
+The proofs have not been checked with Agda 2.7 or with stdlib 2.2 or later.
 
 To check locally:
 
@@ -83,61 +77,53 @@ vector.
 
 ## Theorem map
 
-| Requirement | Agda theorem (module) | Plain statement | Julia function | D1 test (`test/unit/test_differential.jl`) |
-|---|---|---|---|---|
-| R-BH-1 | `bh-nonneg` (BenjaminiHochberg) | For valid p-values, every adjusted value is ≥ 0. | `bh_adjust` | lines 106–110, parity 117–124 |
-| R-BH-2a | `bh-dominates-p` | Every adjusted value is ≥ its own p-value. | `bh_adjust` | line 107 (`0.001 → 0.003`), parity |
-| R-BH-2b | `bh-at-most-one` | Every adjusted value is ≤ 1. | `bh_adjust` | line 107 (`0.5 → 0.5`), line 110 (`[1.0]`) |
-| R-BH-2c | `bh-monotone` | For any two inputs, `p_i ≤ p_j` implies `adj_i ≤ adj_j`. This covers ties in both directions. | `bh_adjust` | line 109 (`[0.04, 0.01] → [0.04, 0.02]`) |
-| R-BH-2d | `bh-envelope`, `stepUp-envelope` | In sorted order, the adjusted value at rank `k` is `min(1, min_{j ≥ k} p_(j) · n/j)`. | `bh_adjust` loop | line 106 (all → 0.04), parity |
-| – | `bh-length` | The output has one entry per input. | `bh_adjust` | line 111 (empty → empty) |
-| – | `monotone-in-family-size` | A larger family never gives a smaller scaled value. | `n / rank * p` | – |
-| TSS | `total-positive` (Scaling) | A row of non-negative counts with at least one positive count has a positive total. So the `l > 0` refusal fires exactly on all-zero rows. | `tss_factors` | lines 137–139 (empty row refused) |
-| TSS | `proportions-sum-to-1` | A row's proportions `x / Σx` sum to 1. | (relative abundance) | – |
-| TSS | `proportions-bounded` | Every proportion lies in `[0, 1]`. | (relative abundance) | – |
-| TSS/RLE | `centre-positive`, `centre-monotone` | Dividing factors by any positive `g` keeps them positive and keeps their order. | `lib ./ _geomean(lib)`, `raw ./ _geomean(raw)` | – |
-| RLE | `ratio-positive` | A positive count over a positive normaliser is positive. | `view(sub, i, :) ./ gm` | – |
-| RLE | `median-positive` | The median (taken as `_median` takes it) of a non-empty list of positive values is positive. | `_median`, `rle_factors` | lines 143–153 |
+### Benjamini–Hochberg and scaling (`BenjaminiHochberg`, `Scaling`)
+
+Tests are testsets in `test/unit/test_differential.jl`.
+
+| Agda theorem | Plain statement | Julia function | Test |
+|---|---|---|---|
+| `bh-nonneg` | For valid p-values, every adjusted value is ≥ 0. | `bh_adjust` | "BH adjustment: known answers", "parity with R p.adjust" |
+| `bh-dominates-p` | Every adjusted value is ≥ its own p-value. | `bh_adjust` | "BH adjustment: known answers" (`0.001 → 0.003`), parity |
+| `bh-at-most-one` | Every adjusted value is ≤ 1. | `bh_adjust` | "BH adjustment: known answers" (`0.5 → 0.5`, `[1.0]`) |
+| `bh-monotone` | For any two inputs, `p_i ≤ p_j` implies `adj_i ≤ adj_j`. This covers ties in both directions. | `bh_adjust` | "BH adjustment: known answers" (`[0.04, 0.01] → [0.04, 0.02]`) |
+| `bh-envelope`, `stepUp-envelope` | In sorted order, the adjusted value at rank `k` is `min(1, min_{j ≥ k} p_(j) · n/j)`. | `bh_adjust` loop | "BH adjustment: known answers" (all → 0.04), parity |
+| `bh-length` | The output has one entry per input; empty input gives empty output. | `bh_adjust` | "BH adjustment: known answers" (empty → empty) |
+| `monotone-in-family-size` | A larger family never gives a smaller scaled value. | `n / rank * p` | – |
+| `total-positive` | A row of non-negative counts with at least one positive count has a positive total. So the `l > 0` refusal fires exactly on all-zero rows. | `tss_factors` | "TSS size factors" (empty row refused) |
+| `proportions-sum-to-1` | A row's proportions `x / Σx` sum to 1. | (relative abundance) | – |
+| `proportions-bounded` | Every proportion lies in `[0, 1]`. | (relative abundance) | – |
+| `centre-positive`, `centre-monotone` | Dividing factors by any positive `g` keeps them positive and keeps their order. | `lib ./ _geomean(lib)`, `raw ./ _geomean(raw)` | – |
+| `ratio-positive` | A positive count over a positive normaliser is positive. | `view(sub, i, :) ./ gm` | – |
+| `median-positive` | The median (taken as `_median` takes it) of a non-empty list of positive values is positive. | `_median`, `rle_factors` | "RLE size factors" |
 
 Taken together, the RLE rows show that once one taxon has reads in every
 sample, every RLE factor is positive in exact arithmetic. This holds given a
 positive geometric mean, which is assumed (see below).
 
 `tss_factors` never forms proportions; it centres library sizes. The
-proportion theorems are the relative-abundance reading of TSS, proved because
-the requirement names them. They do not describe a value the Julia code
-returns.
+proportion theorems are the relative-abundance reading of TSS and do not
+describe a value the Julia code returns.
 
 ### PERMANOVA (`Permanova`)
 
-| Agda theorem | Plain statement | Julia | Test (`test/unit/test_permanova.jl`) |
+Tests are testsets in `test/unit/test_permanova.jl`.
+
+| Agda theorem | Plain statement | Julia | Test |
 |---|---|---|---|
-| `minP-attained`, `p-floor` | `1/(B + 1)` is the smallest p-value `B` permutations can give, and it is given when no permutation reaches the observed statistic. | `min_p_value = 1 / (Int(n_perm) + 1)` | lines 73, 84 |
+| `minP-attained`, `p-floor` | `1/(B + 1)` is the smallest p-value `B` permutations can give, and it is given when no permutation reaches the observed statistic. | `min_p_value = 1 / (Int(n_perm) + 1)` | "each term is tested on its own", "within-individual blocks: permutation count, floor and refusal" |
 | `p-at-most-one` | With `k ≤ B`, no p-value is above 1. | (vegan) | – |
 | `below-floor-unreachable` | A threshold below `1/(B + 1)` is below every p-value, so no term can meet it. | `min_p_value` | – |
 | `minP-anti` | More permutations never raise the floor. | – | – |
-| `minP-63`, `no-p-at-1%-with-63` | With 63 permutations the floor is `1/64`, and no p-value is at or below 0.01. | – | lines 83–84 |
+| `minP-63`, `no-p-at-1%-with-63` | With 63 permutations the floor is `1/64`, and no p-value is at or below 0.01. | – | "within-individual blocks: permutation count, floor and refusal" |
 | `never-exchanged` | A term that is constant within every block is left in place by every within-block permutation, so its labels are never exchanged. | the reason for withholding | – |
 | `exchanged` | A term with two values in one block is moved by a within-block permutation: the swap of those two samples. | – | – |
 | `untestable⇔fixed` | Constant within every block ⇔ fixed by every within-block permutation. | – | – |
-| `varies-false⇔Constant` | The model of `_varies_within_any_block` returns `false` exactly when no block holds two different values. | `_varies_within_any_block` | lines 47–51 |
-| `withheld⇔never-exchanged` | So `untestable` (the function returned `false`) holds exactly when no within-block permutation exchanges the term's labels. | `untestable`, `withheld` | lines 92–93 |
-| `tested⇔exchanged` | The block-constancy filter admits a term exactly when some within-block permutation changes its labels; this does not guarantee a reported p-value. | `untestable`, `withheld` | line 98 |
-| `constant-in-blocks`, `varies-in-a-block` | The two direct cases in the test, by evaluation. | `_varies_within_any_block` | lines 49–50 |
-| `fixture-group-withheld`, `fixture-run-tested` | On the test's twelve samples (six individuals, two runs each, three individuals per group), `group` is never exchanged and `run` is. | `run_permanova` | lines 83–98 |
-
-## Corrections to the requirement wording
-
-- **R-BH-2a is true for the procedure.** An earlier archived note recorded
-  "q_i ≥ p_i is FALSE". It is false only for a scaling factor below 1. In BH
-  the rank `r` is at most `n`, so `n / r ≥ 1` (`rankFactor-≥1`), and the
-  clamp at 1 keeps the bound because `p ≤ 1`. The theorem is proved as
-  worded, for valid inputs.
-- **R-BH-2c is stated over input positions, not over sorted ranks.** A
-  sorted-rank statement would leave open how tied inputs are written back.
-  The membership form `x ∈ zip ps (bhAdjust ps)` covers ties.
-- **Empty input** is covered. All the `All`/membership statements are vacuous
-  on `[]`, and `bh-length` gives the empty result.
+| `varies-false⇔Constant` | The model of `_varies_within_any_block` returns `false` exactly when no block holds two different values. | `_varies_within_any_block` | "_varies_within_any_block" |
+| `withheld⇔never-exchanged` | So `untestable` (the function returned `false`) holds exactly when no within-block permutation exchanges the term's labels. | `untestable`, `withheld` | "within-individual blocks: permutation count, floor and refusal" |
+| `tested⇔exchanged` | The block-constancy filter admits a term exactly when some within-block permutation changes its labels; this does not guarantee a reported p-value. | `untestable`, `withheld` | "within-individual blocks: permutation count, floor and refusal" |
+| `constant-in-blocks`, `varies-in-a-block` | The two direct cases in the test, by evaluation. | `_varies_within_any_block` | "_varies_within_any_block" |
+| `fixture-group-withheld`, `fixture-run-tested` | On the test's twelve samples (six individuals, two runs each, three individuals per group), `group` is never exchanged and `run` is. | `run_permanova` | "within-individual blocks: permutation count, floor and refusal" |
 
 ## What is not proved, and why
 
@@ -151,10 +137,10 @@ returns.
   Julia divides by a geometric mean, the theorems divide by an arbitrary
   positive rational. That the real geometric mean of positive numbers is
   positive is a fact about the reals, not a theorem here.
-- **Scale invariance** (`tss_factors(7.5 .* x) ≈ tss_factors(x)`, line 136;
-  the same for RLE, line 148). This is a property of geometric-mean
-  centring and is not proved.
-- **The RLE "doubled sample" ratio test** (lines 150–151) is not proved.
+- **Scale invariance** (`tss_factors(7.5 .* x) ≈ tss_factors(x)`, and the
+  same for RLE). This is a property of geometric-mean centring and is not
+  proved.
+- **The RLE "doubled sample" ratio test** is not proved.
 - **Median equivariance** (`median(c·x) = c·median(x)`, translation) is not
   proved.
 - **Floating point.** Every statement is exact. `Float64` rounding, and a
@@ -172,20 +158,3 @@ returns.
 - **Equivalence of the Agda and Julia code** is argued, not formalised. The
   model mirrors the loop, and the two differences above are each
   discharged by a proved lemma plus a short argument.
-
-## Positive controls (run when the proofs were written)
-
-1. **Audit.** Each of the following was planted in a scratch copy, and each
-   made the audit exit 1 with a named finding: a `postulate` block, a
-   mid-line `private postulate`, `?`, `{! !}`, `{-# TERMINATING #-}`, a
-   module not imported by `All.agda`, and a removed `--without-K`. A comment
-   that mentions "postulate" and "?" does not trigger it.
-2. **Monotonicity needs the cumulative minimum.** Removing it makes Agda
-   reject the proofs:
-   - from `running`: rejected in `head-eq`, the envelope proof;
-   - from the sorted stage (`Z`): rejected in `Z-bounded`;
-   - from the stage the monotonicity proof alone uses: rejected in
-     `Z-linked`, at `ℚₚ.p⊓q≤q s F`.
-
-   A concrete counterexample is `p = [0.01, 0.011]`, `n = 2`. Without the
-   minimum the scaled values are `0.02` and `0.011`, which are not monotone.

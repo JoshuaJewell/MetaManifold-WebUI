@@ -108,6 +108,10 @@ function _sample_names(study::String, run::String)
     unique(map(f -> Tools._lane_free(replace(f, r"_R1(_001)?\.fastq\.gz$" => "")), files))
 end
 
+# Every run in the study: those directly under it and those inside its groups.
+_total_run_count(study::String, runs, groups) =
+    length(runs) + sum((length(_group_run_names(study, g)) for g in groups); init=0)
+
 function _active_job_count(study::String)
     jobs = JobQueue.list_jobs(; study)
     count(j -> j.status in (JobQueue.queued, JobQueue.running), jobs)
@@ -117,7 +121,7 @@ function _study_data(name::String)
     runs   = _run_names(name)
     groups = _group_names(name)
     (; name,
-       run_count        = length(runs),
+       run_count        = _total_run_count(name, runs, groups),
        group_count      = length(groups),
        active_job_count = _active_job_count(name),
        runs,
@@ -173,7 +177,7 @@ end
         runs   = _run_names(name)
         groups = _group_names(name)
         (; name,
-           run_count        = length(runs),
+           run_count        = _total_run_count(name, runs, groups),
            group_count      = length(groups),
            active_job_count = _active_job_count(name))
     end

@@ -1,5 +1,6 @@
 export interface StudySummary {
   name:             string
+  /** Every run in the study, including those inside groups. */
   run_count:        number
   group_count:      number
   active_job_count: number
@@ -444,6 +445,8 @@ export interface DifferentialResult {
   }
   diagnostics: {
     n_taxa: number; n_tested: number; n_failed: number; n_boundary: number; n_filtered: number
+    /** Samples left out because they have no reads. */
+    samples_without_reads?: string[]
     /** clr_welch only. */
     zero_replacement?: {
       method: string; delta: number; zeros_replaced: number; n_taxa_in_composition: number

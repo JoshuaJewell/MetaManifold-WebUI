@@ -93,6 +93,7 @@ a:hover  { text-decoration: underline; }
   opacity:   .6;
 }
 .sidebar-legal a { color: inherit; text-decoration: underline; }
+.sidebar-legal-links { white-space: nowrap; margin-top: 2px; }
 
 .sidebar-sub-label {
   font-size:      .6rem;
@@ -293,6 +294,18 @@ a:hover  { text-decoration: underline; }
   font-size: .9rem;
   padding:   20px 0;
 }
+
+.computing-note { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+.computing-spinner {
+  width:  12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: computing-spin .8s linear infinite;
+}
+@keyframes computing-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .computing-spinner { animation: none; } }
 
 .error-msg {
   color:     #c92a2a;

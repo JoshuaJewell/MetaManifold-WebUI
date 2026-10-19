@@ -10,6 +10,7 @@ import { useToast } from './Toast'
 import type { ComparisonRunSpec, VennResult } from '../api/types'
 import { sharedRanks } from './sharedRanks'
 import type { AnalysisOption } from './annotationShared'
+import { ComputingNote } from './ComputingNote'
 
 type Mode = 'euler' | 'upset'
 
@@ -100,6 +101,13 @@ export function VennPanel({ study, runs, option }: {
     () => result ? asSets(result.sets.map(s => ({ name: s.name, elems: s.taxa }))) : null,
     [result],
   )
+  // Set names such as "Multiplex/Large_Intestine" overflow upsetjs's default
+  // label column (19% of the width), so it is sized to the longest name.
+  const labelWidth = useMemo(
+    () => Math.min(Math.round(width * 0.4),
+                   12 + 7 * Math.max(0, ...(result?.sets ?? []).map(s => s.name.length))),
+    [result, width],
+  )
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -136,11 +144,16 @@ export function VennPanel({ study, runs, option }: {
             onClick={() => setMode('upset')}>UpSet</button>
         </div>
       </div>
+      <ComputingNote active={loading} />
 
       <div ref={box} style={{ maxWidth: 580 }}>
         {upsetjsSets && (mode === 'euler'
-          ? <VennDiagram sets={upsetjsSets} width={width} height={Math.round(width * 340 / 580)} />
-          : <UpSetJS sets={upsetjsSets} width={width} height={Math.round(width * 340 / 580)} />)}
+          ? <VennDiagram sets={upsetjsSets} width={width} height={Math.round(width * 340 / 580)}
+              padding={Math.round(width * 0.07)} />
+          // Exclusive intersections, as the Euler regions are: a taxon counts once,
+          // in the one combination of sets it belongs to.
+          : <UpSetJS sets={upsetjsSets} width={width} height={Math.round(width * 340 / 580)}
+              combinations={{ type: 'distinctIntersection' }} widthRatios={[0.15, labelWidth]} />)}
       </div>
     </div>
   )

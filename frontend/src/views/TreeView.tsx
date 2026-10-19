@@ -72,7 +72,12 @@ function TreeLoader({ source, file }: { source: TreeSource; file: string }) {
   const { data, loading, error } = useApi(fetcher)
 
   if (loading) return <Skeleton lines={6} />
-  if (error || !data) return <p className="error-msg">{error ?? 'Tree not found'}</p>
+  if (error || !data) return (
+    <>
+      <Header source={source} file={file || 'Tree not found'} />
+      <p className="error-msg">{error ?? 'Tree not found'}</p>
+    </>
+  )
   return <TreeEditor key={`${source.key}/${file}`} source={source} tree={data} />
 }
 

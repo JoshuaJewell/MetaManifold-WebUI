@@ -438,6 +438,32 @@ top level, run this once to keep completed taxonomy work current:
 julia --project=. -e 'include("scripts/migrate_r_threads.jl"); MigrateRThreads.run_migration("projects")'
 ```
 
+### Profiling stage memory (`occupancy_probe:` in `pipeline.yml`)
+
+A diagnostic for sizing a machine, off by default and not offered in the config
+editor. Add it to a run's or study's `pipeline.yml` by hand:
+
+```yaml
+occupancy_probe:
+  enabled: true
+  interval_ms: 10    # sampling interval in milliseconds (at least 1)
+```
+
+Each stage then records an `occupancy` entry in the run's `attestation.yml`:
+
+- `child_peak_rss_kib`: the largest total resident memory of the stage's tool
+  processes (vsearch, swarm, cd-hit and so on) at any one sample. Tools run
+  concurrently can approach the sum of their individual peaks.
+- under `tasks`, each task's `peak_rss_kib` (largest sampled resident memory)
+  and `hwm_kib` (the kernel's high-water mark), with `samples: 0` for a process
+  too short-lived to be sampled.
+- `julia_allocated_bytes`, the Julia allocation over the stage. It is
+  process-wide, so it includes other runs' pipelines when several run at once.
+
+Linux only, since it reads `/proc`. For stages run on a remote server, the
+figures describe the local ssh client, not the work. With the probe off, the
+records are unchanged.
+
 ### Configuring DADA2 (`dada2:` in `pipeline.yml`)
 
 ```yaml
@@ -864,15 +890,19 @@ This pipeline draws on the following prior work:
 - **Frédéric Mahé**: [Fred's metabarcoding pipeline](https://github.com/frederic-mahe/swarm/wiki/Fred's-metabarcoding-pipeline) informed the overall workflow architecture, namely the sequencing of primer trimming, `swarm.jl`, vsearch-based taxonomy assignment, and the final table merge/filter stages.
 - **Benjamin J. Callahan _et al._**: [DADA2 tutorial](https://benjjneb.github.io/dada2/tutorial.html), used under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), on which `dada2.jl` and its modules are based.
 
+The following people contributed code to this project:
+
+- **Jonathan D.A. Jewell** ([@hyperpolymath](https://github.com/hyperpolymath)): the differential abundance analysis, statistical-correctness fixes to the omnibus tests and PERMANOVA, server hardening, CI and installer improvements, and the machine-checked Agda proofs in `proofs/agda/`, which he maintains.
+
 The following colleagues at the **Department of Parasitology, Charles University** (Faculty of Science, BIOCEV, Vestec, Czech Republic) contributed to this work:
 
-- **Mgr. Jiří Novák** (supervisor): scripts from which several modules and configurations were adapted.
+- **Mgr. Jiří Novák** ([@novakj96](https://github.com/novakj96)) (supervisor): scripts from which several modules and configurations were adapted.
 - **doc. Mgr. Vladimír Hampl**: provided laboratory access and resources.
 - **Mgr. Paulína Pristašová**: <3.
 
 ## Licence
 
-Copyright © 2026 Joshua Benjamin Jewell.
+Copyright © 2026 Joshua Benjamin Jewell and contributors.
 
 Source code is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 

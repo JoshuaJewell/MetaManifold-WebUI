@@ -4,6 +4,13 @@ This file sets out what a pull request must look like, how licensing and credit
 work, and which design decisions are settled. Pull requests that miss the
 requirements under [Pull requests](#pull-requests) are closed without review.
 
+## Scope
+
+MetaManifold is an amplicon metabarcoding pipeline with a web interface.
+Features that serve another project's research, and dependencies on packages
+the contributor maintains, belong in a fork unless they are registered,
+independently useful, and agreed in an issue first.
+
 ## Issues
 
 Issues track defects and features in this repository. Raise issues about a fork's

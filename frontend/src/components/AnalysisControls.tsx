@@ -3,6 +3,7 @@
 import { PlotlyChart } from './PlotlyChart'
 import { useAlphaMetricFilter, AlphaMetricToggles } from './alphaMetrics'
 import type { UseAnalysisResult } from '../hooks/useAnalysis'
+import { ComputingNote } from './ComputingNote'
 
 interface AnalysisControlsProps extends UseAnalysisResult {
   /** Truthy when analysis is ready (e.g. a table is selected). */
@@ -25,6 +26,7 @@ export function AnalysisControls({
           {loading ? 'Computing…' : 'Alpha Diversity'}
         </button>
       </div>
+      <ComputingNote active={loading} />
 
       {alphaFig != null && (
         <>

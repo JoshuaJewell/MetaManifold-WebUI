@@ -11,6 +11,7 @@ import { AnalysisChart } from './AnalysisChart'
 import { AddToReport } from './AddToReport'
 import { saveBlob } from '../utils/download'
 import { differentialCsv, effectValue, formatStat } from './differentialTable'
+import { ComputingNote } from './ComputingNote'
 
 const cell = { padding: '3px 10px', textAlign: 'right' } as const
 const head = { padding: '4px 10px', textAlign: 'right' } as const
@@ -119,6 +120,7 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
           </span>
         )}
       </div>
+      <ComputingNote active={loading} label="Fitting" />
 
       {result && (
         <>
@@ -128,6 +130,9 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
             {result.diagnostics.n_boundary > 0 && `, ${result.diagnostics.n_boundary} at a dispersion boundary`}
             {result.diagnostics.n_filtered > 0 && `, ${result.diagnostics.n_filtered} below the prevalence threshold`}
             . Samples: {Object.entries(result.n_samples).map(([g, n]) => `${g} ${n}`).join(', ')}.
+            {(result.diagnostics.samples_without_reads?.length ?? 0) > 0 &&
+              ` Left out ${result.diagnostics.samples_without_reads!.length} sample(s) with no reads: ` +
+              `${result.diagnostics.samples_without_reads!.join(', ')}.`}
             {result.diagnostics.zero_replacement && (() => {
               const z = result.diagnostics.zero_replacement
               return ` ${z.zeros_replaced} zeros replaced by ${z.method} over ${z.n_taxa_in_composition} taxa; ` +

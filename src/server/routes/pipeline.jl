@@ -207,7 +207,7 @@ end
 # The vsearch stage's two searches: `asv()`, and `otu()` unless it is `nothing`, each
 # under its occupancy probe label. The full pipeline runs them concurrently; a
 # single-stage re-run runs them one after the other. These are the two shapes whose
-# memory peaks the probe tells apart, and test/occupancy_disagreement_test.jl runs
+# memory peaks the probe tells apart, and test/unit/test_occupancy_disagreement.jl runs
 # both through this function. Returns the two results, `nothing` for an absent OTU
 # search. Concurrently, both are waited for before a failure is rethrown, so a
 # failed ASV search cannot leave the OTU search running.

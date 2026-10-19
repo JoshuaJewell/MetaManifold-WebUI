@@ -89,7 +89,7 @@ using MetaManifold.Categories, MetaManifold.CompositionLibrary
     ## Occupancy probe and the two-thread disagreement test (MMW-01), with the
     ## full suite. Its vsearch part skips, saying so, when vsearch is not on PATH.
     if isempty(filter(a -> !startswith(a, "--"), ARGS))
-        include("occupancy_disagreement_test.jl")
+        include(joinpath(@__DIR__, "unit", "test_occupancy_disagreement.jl"))
     end
 
     ## Integration tests (opt-in)

@@ -34,7 +34,7 @@
 # which moved the stage's allocation total by up to 12% between repeats of the
 # SAME order. On one thread the output order is fixed, and the three orders
 # agreed to within 0.08% over five repeats each. Run directly with
-#   julia --project=. -t 2 test/occupancy_disagreement_test.jl
+#   julia --project=. -t 2 test/unit/test_occupancy_disagreement.jl
 # and set OCCUPANCY_RESULTS=<path> to also write the numbers as YAML.
 
 using Test, YAML, OrderedCollections

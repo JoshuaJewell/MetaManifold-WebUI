@@ -59,6 +59,18 @@
         @test length(trace_names) == 6  # top 5 + Other
     end
 
+    @testset "nmds_warnings" begin
+        # Samples 1-2 share taxon 1 and samples 3-4 share taxon 3; the pairs share nothing.
+        split = [5.0 1 0 0; 2 0 0 0; 0 0 4 1; 0 0 3 0]
+        w = Analysis.nmds_warnings(split, 0.0)
+        @test length(w) == 1 && occursin("2 groups that share no taxa", w[1])
+        # One shared taxon links everything: no group warning, only the stress one.
+        linked = [5.0 1 0 0; 2 0 0 1; 0 0 4 1; 0 0 3 1]
+        @test isempty(Analysis.nmds_warnings(linked, 0.12))
+        @test occursin("stress is near zero", only(Analysis.nmds_warnings(linked, 1e-5)))
+        @test isempty(Analysis.nmds_warnings(linked, NaN))
+    end
+
     @testset "nmds_chart" begin
         coords = [0.1 0.2; -0.3 0.4; 0.5 -0.1]
         labels = ["s1", "s2", "s3"]

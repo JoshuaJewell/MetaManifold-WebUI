@@ -280,6 +280,37 @@ end
         end
     end
 
+    @testset "A sample with no reads is left out and named, not a refusal" begin
+        if !HAVE_MASS
+            @test_skip false
+        else
+            # One empty sample per group, as a blank emptied by primer trimming would be.
+            counts = vcat(effect, zeros(Int, 2, 3))
+            samples = vcat(effect_samples, ["blank_A", "blank_B"])
+            groups = vcat(effect_groups, ["A", "B"])
+            res = differential_abundance(counts, samples, effect_taxa, groups;
+                                         reference="A", contrast="B")
+            ref = differential_abundance(effect, effect_samples, effect_taxa, effect_groups;
+                                         reference="A", contrast="B")
+            @test res["diagnostics"]["samples_without_reads"] == ["blank_A", "blank_B"]
+            @test ref["diagnostics"]["samples_without_reads"] == String[]
+            @test res["n_samples"] == ref["n_samples"]
+            @test [r["pvalue"] for r in res["rows"]] ≈ [r["pvalue"] for r in ref["rows"]]
+            @test !any(s -> s["sample"] in ("blank_A", "blank_B"), res["size_factors"])
+            # A group left with no samples is still refused, and the message says why.
+            e = try
+                differential_abundance(vcat(effect[13:24, :], zeros(Int, 1, 3)),
+                                       vcat(effect_samples[13:24], ["blank_A"]), effect_taxa,
+                                       vcat(effect_groups[13:24], ["A"]); reference="A", contrast="B")
+                nothing
+            catch err
+                err
+            end
+            @test e isa ArgumentError
+            @test occursin("blank_A", sprint(showerror, e))
+        end
+    end
+
     @testset "A taxon absent from one group is refused, not reported as p≈1" begin
         if !HAVE_MASS
             @test_skip false

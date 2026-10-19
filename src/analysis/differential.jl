@@ -604,7 +604,9 @@ change, relative to the geometric mean of the tested taxa. Replaced zeros are
 not measurements; `diagnostics.zero_replacement` reports their share of each
 sample. Each group needs at least 2 samples.
 
-For both methods, taxa present in fewer than `config.min_prevalence` of the
+For both methods, samples with no reads are left out before anything else and
+named in `diagnostics.samples_without_reads`; they have no library size and no
+composition. Taxa present in fewer than `config.min_prevalence` of the
 samples are reported as `filtered` and not fitted, and the Benjamini-Hochberg
 family is the fitted taxa that produced a p-value; failed and filtered taxa
 carry `padj = nothing`. The result's `effect` names the row key that holds the
@@ -630,12 +632,23 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
     unknown = setdiff(unique(groups), (reference, contrast))
     isempty(unknown) || throw(ArgumentError(
         "samples belong to groups other than '$reference' and '$contrast': $(join(unknown, ", "))"))
+    # A sample with no reads (a blank emptied by primer trimming, say) has no
+    # library size and no composition, so neither method can use it. It is left
+    # out, and named in `diagnostics.samples_without_reads`, rather than letting
+    # one empty sample refuse the whole analysis.
+    has_reads = [sum(view(counts, i, :)) > 0 for i in axes(counts, 1)]
+    without_reads = String.(samples[.!has_reads])
+    if !isempty(without_reads)
+        counts, samples, groups = counts[has_reads, :], samples[has_reads], groups[has_reads]
+    end
     n_ref = count(==(reference), groups)
     n_con = count(==(contrast), groups)
+    dropped_note = isempty(without_reads) ? "" :
+        " after leaving out $(length(without_reads)) sample(s) with no reads ($(join(without_reads, ", ")))"
     (n_ref >= 1 && n_con >= 1) || throw(ArgumentError(
-        "each group needs at least one sample; '$reference' has $n_ref and '$contrast' has $n_con"))
+        "each group needs at least one sample; '$reference' has $n_ref and '$contrast' has $n_con$dropped_note"))
     n_ref + n_con >= 3 || throw(ArgumentError(
-        "a group effect and a variance cannot be estimated from $(n_ref + n_con) samples; at least 3 are needed"))
+        "a group effect and a variance cannot be estimated from $(n_ref + n_con) samples; at least 3 are needed$dropped_note"))
 
     n = length(samples)
     present = [count(>(0), view(counts, :, j)) for j in axes(counts, 2)]
@@ -645,7 +658,7 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
                  "analysis.differential.min_prevalence = $(config.min_prevalence)")
             for j in axes(counts, 2)]
     levels = (String(reference), String(contrast))
-    diagnostics = Dict{String,Any}()
+    diagnostics = Dict{String,Any}("samples_without_reads" => without_reads)
 
     if config.method == "nb_glm"
         factors = size_factors(counts, samples, config.offset)
@@ -673,7 +686,7 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
     else
         (n_ref >= 2 && n_con >= 2) || throw(ArgumentError(
             "Welch's t-test needs at least 2 samples in each group to estimate its variance; " *
-            "'$reference' has $n_ref and '$contrast' has $n_con"))
+            "'$reference' has $n_ref and '$contrast' has $n_con$dropped_note"))
         for j in findall(==(0), present)
             rows[j]["note"] = "no reads in any sample of either group, so it is not part of the composition"
         end

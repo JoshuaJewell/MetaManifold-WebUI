@@ -69,54 +69,54 @@ export function Layout() {
           Studies
         </NavLink>
         {studies?.map((s: StudySummary) => (
-          <NavLink
-            key={s.name}
-            to={`/${s.name}`}
-            className={({ isActive }) => `sidebar-link sidebar-link-indented ${isActive ? 'active' : ''}`}
-          >
-            {s.name}
-            {s.active_job_count > 0 && <span> ({s.active_job_count})</span>}
-          </NavLink>
-        ))}
-
-        {study && studyDetail && (
-          <>
-            {studyDetail.groups && studyDetail.groups.length > 0 && (
-              <div className="sidebar-sub-label">Groups</div>
-            )}
-            {studyDetail.groups?.map((g: string) => (
-              <React.Fragment key={g}>
-                <NavLink
-                  to={`/${study}/${g}`}
-                  className={({ isActive }) => `sidebar-link sidebar-link-indented2 ${isActive ? 'active' : ''}`}
-                >
-                  {g}
-                </NavLink>
-                {activeGroup === g && groupRuns?.map(r => (
+          <React.Fragment key={s.name}>
+            <NavLink
+              to={`/${s.name}`}
+              className={({ isActive }) => `sidebar-link sidebar-link-indented ${isActive ? 'active' : ''}`}
+            >
+              {s.name}
+              {s.active_job_count > 0 && <span> ({s.active_job_count})</span>}
+            </NavLink>
+            {s.name === study && studyDetail && (
+              <>
+                {studyDetail.groups && studyDetail.groups.length > 0 && (
+                  <div className="sidebar-sub-label">Groups</div>
+                )}
+                {studyDetail.groups?.map((g: string) => (
+                  <React.Fragment key={g}>
+                    <NavLink
+                      to={`/${study}/${g}`}
+                      className={({ isActive }) => `sidebar-link sidebar-link-indented2 ${isActive ? 'active' : ''}`}
+                    >
+                      {g}
+                    </NavLink>
+                    {activeGroup === g && groupRuns?.map(r => (
+                      <NavLink
+                        key={r.name}
+                        to={`/${study}/${g}/${r.name}`}
+                        className={({ isActive }) => `sidebar-link sidebar-link-indented3 ${isActive ? 'active' : ''}`}
+                      >
+                        {r.name}
+                      </NavLink>
+                    ))}
+                  </React.Fragment>
+                ))}
+                {studyDetail.runs && studyDetail.runs.length > 0 && (
+                  <div className="sidebar-sub-label">Runs</div>
+                )}
+                {studyDetail.runs?.map((r: string) => (
                   <NavLink
-                    key={r.name}
-                    to={`/${study}/${g}/${r.name}`}
-                    className={({ isActive }) => `sidebar-link sidebar-link-indented3 ${isActive ? 'active' : ''}`}
+                    key={r}
+                    to={`/${study}/${r}`}
+                    className={({ isActive }) => `sidebar-link sidebar-link-indented2 ${isActive ? 'active' : ''}`}
                   >
-                    {r.name}
+                    {r}
                   </NavLink>
                 ))}
-              </React.Fragment>
-            ))}
-            {studyDetail.runs && studyDetail.runs.length > 0 && (
-              <div className="sidebar-sub-label">Runs</div>
+              </>
             )}
-            {studyDetail.runs?.map((r: string) => (
-              <NavLink
-                key={r}
-                to={`/${study}/${r}`}
-                className={({ isActive }) => `sidebar-link sidebar-link-indented2 ${isActive ? 'active' : ''}`}
-              >
-                {r}
-              </NavLink>
-            ))}
-          </>
-        )}
+          </React.Fragment>
+        ))}
 
         <div className="sidebar-spacer" />
 
@@ -131,8 +131,11 @@ export function Layout() {
         <NavLink to="/reference-trees" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>Reference trees</NavLink>
         <NavLink to="/about" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>About</NavLink>
         <div className="sidebar-legal">
-          {COPYRIGHT} · <a href={LICENSE_URL} target="_blank" rel="noreferrer">AGPL-3.0</a> ·{' '}
-          <a href={SOURCE_URL} target="_blank" rel="noreferrer">Source and Documentation</a>
+          <div>{COPYRIGHT}</div>
+          <div className="sidebar-legal-links">
+            <a href={LICENSE_URL} target="_blank" rel="noreferrer">AGPL-3.0</a> ·{' '}
+            <a href={SOURCE_URL} target="_blank" rel="noreferrer">Source and Documentation</a>
+          </div>
         </div>
       </nav>
 

@@ -8,6 +8,7 @@ import { useToast } from './Toast'
 import { errorMessage } from '../api/errorMessage'
 import type { AnalysisOption } from './annotationShared'
 import type { ColFilter, ComparisonRunSpec, PermanovaResult } from '../api/types'
+import { ComputingNote } from './ComputingNote'
 
 /** Alpha comparison, NMDS and PERMANOVA across the runs/sub-groups in `runs`. */
 export function DiversityPanel({ study, runs, option, aggregate }: {
@@ -64,7 +65,10 @@ export function DiversityPanel({ study, runs, option, aggregate }: {
         if (current()) setAlphaFig(fig)
       } else if (type === 'nmds') {
         const fig = await api.analysis.nmds(study, body)
-        if (current()) setNmdsFig(fig)
+        if (current()) {
+          setNmdsFig(fig)
+          for (const w of (fig as { warnings?: string[] }).warnings ?? []) toast.info(w)
+        }
       } else {
         const res = await api.analysis.permanova(study, body)
         if (current()) setPermanova(res)
@@ -115,6 +119,7 @@ export function DiversityPanel({ study, runs, option, aggregate }: {
           </span>
         )}
       </div>
+      <ComputingNote active={loading !== null} />
 
       {alphaFig != null && (
         <>

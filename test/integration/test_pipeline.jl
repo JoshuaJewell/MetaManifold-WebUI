@@ -247,7 +247,7 @@
     # vsearch stage's two searches concurrently and a single-stage re-run runs them
     # one after the other (_vsearch_searches) - the two shapes whose peaks the
     # occupancy probe exists to tell apart - and these calls are the only callers of
-    # that helper outside test/occupancy_disagreement_test.jl.
+    # that helper outside test/unit/test_occupancy_disagreement.jl.
     #
     # Each vsearch output is removed first. A stage whose outputs are current skips
     # before doing any work, and a stage that skips records nothing: a re-run that

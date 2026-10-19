@@ -52,6 +52,8 @@ _saved_root = SV.ServerState._root[]
         @test Set(SV._run_names("studyA")) == Set(["run1", "run2", "pooledRun"])
         @test SV._group_names("studyA") == ["groupG"]
         @test SV._group_run_names("studyA", "groupG") == ["runG1"]
+        ## The study's run count includes the runs inside its groups.
+        @test SV._study_data("studyA").run_count == 4
 
         @test SV._run_group("studyA", "runG1") == "groupG"
         @test SV._run_group("studyA", "run1") === nothing
