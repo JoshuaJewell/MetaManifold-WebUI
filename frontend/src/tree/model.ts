@@ -23,7 +23,7 @@ export interface SrcNode {
 
 export interface Placement {
   edgeNum:  number
-  lwr:      number
+  lwr:      number | null
   distal:   number
   pendant:  number
   logLik:   number | null
@@ -216,6 +216,8 @@ export function parseJplace(text: string): SourceTree {
   const iEdge = col('edge_num'), iLwr = col('like_weight_ratio'), iDist = col('distal_length')
   const iPend = col('pendant_length'), iLik = col('likelihood')
   if (iEdge < 0) throw new Error('jplace fields lack edge_num')
+  const weight = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1 ? v : null
   tree.pqueries = (doc.placements ?? []).map((pq: Record<string, unknown>) => {
     const rows = (pq.p ?? []) as number[][]
     const nm = Array.isArray(pq.nm) ? (pq.nm as [string, number][]) : null
@@ -223,15 +225,21 @@ export function parseJplace(text: string): SourceTree {
     const mult = nm ? nm.reduce((a, x) => a + (Number(x[1]) || 0), 0) : Math.max(1, names.length)
     const places = rows.map(r => ({
       edgeNum: r[iEdge],
-      lwr:     iLwr >= 0 ? r[iLwr] : 1,
+      lwr:     iLwr >= 0 ? weight(r[iLwr]) : null,
       distal:  iDist >= 0 ? r[iDist] : 0,
       pendant: iPend >= 0 ? r[iPend] : 0,
       logLik:  iLik >= 0 ? r[iLik] : null,
-    })).sort((a, b) => b.lwr - a.lwr)
+    })).sort((a, b) => (b.lwr ?? -1) - (a.lwr ?? -1))
     return { names, mult, places }
   })
   tree.meta = { ...(doc.metadata ?? {}), version: doc.version }
   return tree
+}
+
+/** Best reported LWR is unknown if any candidate's weight is missing. */
+export function bestLwr(q: PQuery): number | null {
+  if (!q.places.length || q.places.some(p => p.lwr === null)) return null
+  return q.places[0].lwr
 }
 
 export function parseTreeFile(format: 'jplace' | 'newick', text: string): SourceTree {

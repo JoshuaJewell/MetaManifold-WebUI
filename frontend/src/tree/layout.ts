@@ -1,6 +1,6 @@
 // © 2026 Joshua Benjamin Jewell. All rights reserved.
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
-import { pointOnBranch, type DisplayTree, type DNode, type PQuery, type Rgba, type TreeIndex } from './model'
+import { bestLwr, pointOnBranch, type DisplayTree, type DNode, type PQuery, type Rgba, type TreeIndex } from './model'
 
 export type SymbolShape = 'circle' | 'square' | 'triangle' | 'diamond'
 export type Dataset = 'placements' | 'support'
@@ -44,6 +44,7 @@ export interface TreeSettings {
   showInternalNames: boolean
   /** Count each query at its best placement, or spread it over candidates by LWR. */
   placements:        'best' | 'all'
+  bestLwrThreshold:  number
   placementMinLwr:   number
   placementLabels:   boolean
   symbols:           Record<Dataset, SymbolStyle>
@@ -64,7 +65,7 @@ export const DEFAULT_SETTINGS: TreeSettings = {
   arc: 360, arcStart: 0, scaleBar: true, scaleBarLength: null, ladderize: 'none', ladderizeBy: 'tips',
   fontSize: 11, rowHeight: 14, size: 700, zoom: 1,
   showSupport: true, supportMin: 0, showInternalNames: true,
-  placements: 'best', placementMinLwr: 0.1, placementLabels: false, wedge: 'isosceles',
+  placements: 'best', bestLwrThreshold: 0.95, placementMinLwr: 0.1, placementLabels: false, wedge: 'isosceles',
   collapsedCounts: true, tipLabels: 'tips', tipJustify: 'left',
   symbols: {
     placements: { show: true, shape: 'circle', fill: { hex: '#e8590c', alpha: 0.6 }, stroke: { hex: '#e8590c', alpha: 1 }, minSize: 5, maxSize: 18 },
@@ -96,7 +97,7 @@ export interface LNode {
 export interface LPlacement {
   query:  number
   rank:   number
-  lwr:    number
+  lwr:    number | null
   x:      number
   y:      number
   /** Placements inside a collapsed clade are drawn at the clade. */
@@ -112,7 +113,7 @@ export interface LSymbol {
   y:       number
   value:   number
   size:    number
-  queries: { query: number; lwr: number; rank: number }[]
+  queries: { query: number; lwr: number | null; rank: number }[]
 }
 
 export interface DatasetScale {
@@ -376,12 +377,15 @@ export function layoutTree(t: DisplayTree, ix: TreeIndex, pqueries: PQuery[], s:
   }
 
   // Placements: the distal length is measured from the source child end of the branch.
+  const bestWeights = pqueries.map(bestLwr)
   const placements: LPlacement[] = []
   if (pqueries.length) {
     pqueries.forEach((q, qi) => {
+      // Without weights, several candidates have no identifiable best location.
+      if (s.placements === 'best' && q.places.length > 1 && bestWeights[qi] === null) return
       q.places.forEach((p, rank) => {
         if (s.placements === 'best' && rank > 0) return
-        if (rank > 0 && p.lwr < s.placementMinLwr) return
+        if (rank > 0 && p.lwr !== null && p.lwr < s.placementMinLwr) return
         const e = ix.edgeByNum.get(p.edgeNum)
         if (e === undefined) return
         const cands = t.byEdge.get(e) ?? []
@@ -413,7 +417,9 @@ export function layoutTree(t: DisplayTree, ix: TreeIndex, pqueries: PQuery[], s:
   if (s.symbols.placements.show && placements.length) {
     const groups = new Map<number, LSymbol>()
     for (const p of placements) {
-      const w = pqueries[p.query].mult * (s.placements === 'all' ? p.lwr : 1)
+      const weight = s.placements === 'all' ? p.lwr : 1
+      if (weight === null || (s.placements === 'all' && bestWeights[p.query] === null)) continue
+      const w = pqueries[p.query].mult * weight
       let g = groups.get(p.node.id)
       if (!g) {
         g = { dataset: 'placements', node: p.node, x: 0, y: 0, value: 0, size: 0, queries: [] }

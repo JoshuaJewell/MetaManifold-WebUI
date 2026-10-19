@@ -3,14 +3,14 @@
 import { useEffect, useState } from 'react'
 import { indexTree, nodeKey, type DNode, type NodeStyle } from './model'
 import styles from './Tree.module.css'
-import { fmt } from './ui'
+import { fmt, fmtLwr } from './ui'
 import { StyleEditor } from './controls'
 
 export function Inspector({ d, ix, names, placements, onRename, onStyle, onRotate, onToggle, onReroot, onParent, onQuery }: {
   d: DNode
   ix: ReturnType<typeof indexTree>
   names: Map<string, string>
-  placements: { name: string; lwr: number; rank: number; query: number }[]
+  placements: { name: string; lwr: number | null; rank: number; query: number }[]
   onRename: (key: string, name: string | null) => void
   onStyle: (style: NodeStyle | null) => void
   onRotate: () => void
@@ -66,7 +66,7 @@ export function Inspector({ d, ix, names, placements, onRename, onStyle, onRotat
         <div className="card-title" style={{ marginTop: 12 }}>Placements here</div>
         <ul className={styles.placeList}>
           {placements.map((p, k) => (
-            <li key={k}><button className={styles.linkBtn} onClick={() => onQuery(p.query)}>{p.name}</button> LWR {fmt(p.lwr, 3)}{p.rank ? ` (candidate ${p.rank + 1})` : ''}</li>
+            <li key={k}><button className={styles.linkBtn} onClick={() => onQuery(p.query)}>{p.name}</button> LWR {fmtLwr(p.lwr)}{p.rank ? ` (candidate ${p.rank + 1})` : ''}</li>
           ))}
         </ul>
       </>}
