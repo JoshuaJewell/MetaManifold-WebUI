@@ -363,9 +363,10 @@ analysis:
     # the group coefficient. glmGamPoi fits one glmGamPoi::glm_gp across the
     # taxa passing min_prevalence, with overdispersion shrinkage toward the
     # cross-taxon trend, and reports glmGamPoi::test_de's quasi-likelihood
-    # F-test of the group contrast with its log2 fold changes. A zero shrunken
-    # dispersion withholds inference for its taxon. Requires the pinned
-    # glmGamPoi R package. Refused with clr_welch.
+    # F-test of the group contrast with its log2 fold changes; the reported
+    # theta inverts glm_gp's negative-binomial overdispersion, and a taxon
+    # whose overdispersion is zero is marked at the Poisson boundary, as under
+    # glm_nb. Requires the pinned glmGamPoi R package. Refused with clr_welch.
     dispersion: glm_nb
     # Fraction of samples, 0 to 1, in which a taxon must have reads to be
     # tested. Taxa below it are listed as filtered, without a p-value. For

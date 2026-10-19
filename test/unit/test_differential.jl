@@ -295,7 +295,9 @@ end
             # quasi-likelihood F-test, computed independently. lfc is log2 and
             # lfc_se its standard error, so both are scaled by log(2) to meet
             # the natural-log convention of every method's estimate and se.
-            # One matrix column per quantity, one row per taxon.
+            # theta inverts glm_gp's negative-binomial overdispersion, not the
+            # quasi-likelihood scale the F-test divides by. One matrix column
+            # per quantity, one row per taxon.
             direct = rcopy(R"""
                 local({
                   g <- factor($g, levels = c("A", "B"))
@@ -304,7 +306,7 @@ end
                   td <- glmGamPoi::test_de(gp, contrast = "gB", max_lfc = Inf,
                                            compute_lfc_se = TRUE)
                   cbind(td$pval, td$f_statistic, td$lfc * log(2), td$lfc_se * log(2),
-                        1 / gp$overdispersion_shrinkage_list$ql_disp_shrunken)
+                        1 / gp$overdispersions)
                 })
             """)
             for (j, t) in enumerate(effect_taxa)
@@ -320,37 +322,46 @@ end
         end
     end
 
-    @testset "glmGamPoi unusable dispersions are isolated per taxon" begin
+    @testset "glmGamPoi unusable overdispersions are isolated per taxon" begin
         if !HAVE_GLMGAMPOI
             # Issue #37's contract: these comparisons fail, not skip, in CI.
             @test !_GLMGAMPOI_IN_CI
             @test_skip false
         else
+            # test_de refits the reduced model from the shrinkage list's
+            # dispersion trend and divides by ql_disp_shrunken, so altering
+            # `overdispersions` after the fit changes only what theta and the
+            # boundary check read, never the test itself.
             MetaManifold.RRuntime.with_r_lock() do
                 reval(raw"""
                     test_original_gp <- get("glm_gp", asNamespace("glmGamPoi"))
-                    test_ql <- 0
+                    test_od <- 0
                     assignInNamespace("glm_gp", function(...) {
                         fit <- test_original_gp(...)
-                        fit$overdispersion_shrinkage_list$ql_disp_shrunken[1] <- test_ql
+                        fit$overdispersions[1] <- test_od
                         fit
                     }, ns="glmGamPoi")
                 """)
                 try
                     off = log.(tss_factors(effect, effect_samples))
-                    for (ql, status) in ((0.0, "boundary"), (-1.0, "failed"), (NaN, "failed"))
-                        RCall.globalEnv[:test_ql] = ql
+                    # A zero overdispersion is the Poisson boundary: marked, with
+                    # the statistics kept and no finite theta, as under glm_nb.
+                    # A negative or non-finite one fails its taxon alone.
+                    for (od, status, tested) in ((0.0, "boundary", true), (-1.0, "failed", false),
+                                                 (NaN, "failed", false))
+                        RCall.globalEnv[:test_od] = od
                         rows = fit_nb(effect, effect_groups, off; levels=("A", "B"),
                                       dispersion="glmGamPoi")
                         @test rows.status[1] == status
-                        @test isnothing(rows.pvalue[1])
-                        @test occursin("dispersion", rows.note[1])
+                        @test isnothing(rows.pvalue[1]) == !tested
+                        @test isnothing(rows.theta[1])
+                        @test occursin("overdispersion", rows.note[1])
                         @test all(rows.status[2:end] .== "ok")
                     end
                 finally
                     reval(raw"""
                         assignInNamespace("glm_gp", test_original_gp, ns="glmGamPoi")
-                        rm(test_original_gp, test_ql)
+                        rm(test_original_gp, test_od)
                     """)
                 end
             end

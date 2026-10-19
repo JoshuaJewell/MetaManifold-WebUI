@@ -349,20 +349,18 @@ for (da_j in seq_len(da_n)) {
     # glmGamPoi's own test on its own fit. `lfc` is the log2 fold change of
     # the group contrast and `lfc_se` its standard error; both are converted
     # to the natural-log scale so every method reports one effect scale. The
-    # per-taxon scale the test used is the shrunken quasi-likelihood
-    # dispersion `ql_disp_shrunken`, whose inverse is reported as the
-    # dispersion theta. Zero dispersion is the Poisson boundary, where the F
-    # ratio would report p = 0 for the wrong reason, so inference is withheld;
-    # an unusable dispersion fails only its own taxon.
-    da_ql <- da_gp[["overdispersion_shrinkage_list"]][["ql_disp_shrunken"]][da_j]
-    if (!is.finite(da_ql) || da_ql < 0) {
+    # reported theta is the inverse of glm_gp's negative-binomial
+    # overdispersion for the taxon (`overdispersions`: variance = mu + mu^2 *
+    # overdispersion), the same parameter glm.nb's theta inverts. It is not
+    # the quasi-likelihood scale the F-test divides by. Zero overdispersion
+    # is the Poisson boundary: the row is marked, as under glm_nb, and keeps
+    # its statistics, since the F-test's denominator is the shrunken
+    # quasi-likelihood dispersion and stays defined. An unusable
+    # overdispersion fails only its own taxon.
+    da_od <- da_gp[["overdispersions"]][da_j]
+    if (!is.finite(da_od) || da_od < 0) {
       da_result[da_j, "status"] <- "failed"
-      da_result[da_j, "note"] <- "the shrunken dispersion for this taxon is not usable"
-      next
-    }
-    if (da_ql == 0) {
-      da_result[da_j, "status"] <- "boundary"
-      da_result[da_j, "note"] <- "zero dispersion: Poisson boundary; quasi-likelihood inference withheld"
+      da_result[da_j, "note"] <- "the negative-binomial overdispersion for this taxon is not usable"
       next
     }
     da_est <- da_glp[["lfc"]][da_j] * log(2)
@@ -376,7 +374,11 @@ for (da_j in seq_len(da_n)) {
       next
     }
     da_result[da_j, c("estimate", "se", "statistic", "pvalue", "theta")] <-
-      c(da_est, da_se, da_stat, da_p, 1 / da_ql)
+      c(da_est, da_se, da_stat, da_p, 1 / da_od)
+    if (da_od == 0) {
+      da_result[da_j, "status"] <- "boundary"
+      da_result[da_j, "note"] <- "the negative-binomial overdispersion is zero: these counts show no overdispersion, so the fit is effectively Poisson and theta is unbounded"
+    }
   } else {
     # "glm_nb" estimates theta per taxon inside MASS::glm.nb's alternating
     # fit, then Wald-tests the group coefficient at fixed scale 1, which is
@@ -453,17 +455,20 @@ toward the cross-taxon trend and reports `glmGamPoi::test_de`'s
 quasi-likelihood F-test of the group contrast — its `lfc` (log2 fold change)
 and `lfc_se`, both converted to the natural-log scale so the columns carry one
 effect scale. In that path `statistic` is the quasi-likelihood F, `pvalue`
-its p-value, and `dispersion_theta` the inverse of the shrunken
-quasi-likelihood dispersion the test used for the taxon. Names are stripped
-and matched without regard to case.
+its p-value, and `theta` the inverse of `glm_gp`'s negative-binomial
+overdispersion for the taxon (its `overdispersions` element), the same
+parameter `MASS::glm.nb`'s theta inverts; it is `nothing` where that
+overdispersion is zero. Names are stripped and matched without regard to
+case.
 
 Returns one row per taxon with `status` (`ok`, `boundary` or `failed`), `note`,
 `estimate`, `se`, `statistic`, `pvalue` and `theta`; a failed taxon has
 `nothing` for every statistic. Boundary fits retain their statistics: under
 `"glm_nb"` theta at or above 1e7 marks the Poisson end and theta at or below
-1e-8 marks extreme variance; under `"glmGamPoi"` a zero shrunken dispersion
-marks the Poisson boundary, where the F ratio would report p = 0 for the wrong
-reason, so inference is withheld. Constant counts, complete separation and
+1e-8 marks extreme variance; under `"glmGamPoi"` a zero negative-binomial
+overdispersion marks the Poisson boundary, and the row keeps its statistics,
+since the F-test divides by the shrunken quasi-likelihood dispersion, which
+stays defined there. Constant counts, complete separation and
 unusable coefficients produce failed rows. Errors caught from the model-fitting
 calls also produce failed rows; a caught `glm_gp` or `test_de` error fails every
 taxon, with no fallback to `"glm_nb"`.
@@ -501,7 +506,7 @@ function fit_nb(counts::AbstractMatrix{<:Integer}, groups::AbstractVector{<:Abst
             RCall.reval("rm(list = intersect(ls(), c('da_counts', 'da_group', 'da_levels', " *
                         "'da_offset', 'da_theta_upper', 'da_theta_lower', 'da_use_glp', 'da_g', " *
                         "'da_term', 'da_n', 'da_result', 'da_glp', 'da_glp_failed', 'da_gp', " *
-                        "'da_j', 'da_y', 'da_absent', 'da_ql', 'da_est', 'da_se', 'da_stat', " *
+                        "'da_j', 'da_y', 'da_absent', 'da_od', 'da_est', 'da_se', 'da_stat', " *
                         "'da_p', 'da_warns', 'da_fit', 'da_co', 'da_row', 'da_theta'))); invisible(gc())")
         end
     end
