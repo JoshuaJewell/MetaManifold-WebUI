@@ -9,14 +9,14 @@ import { useApi } from '../hooks/useApi'
 import { Skeleton } from '../components/Skeleton'
 import { useToast } from '../components/Toast'
 import {
-  buildDisplay, foldOps, indexTree, mapSupport, midpointOp, nodeKey, parseTreeFile, pointOnBranch,
+  bestLwr, buildDisplay, foldOps, indexTree, mapSupport, midpointOp, nodeKey, parseTreeFile, pointOnBranch,
   rerootAbove, tipsBelow, toNewick, unmatchedOps,
   type DNode, type SourceTree, type TreeOp,
 } from '../tree/model'
 import { DEFAULT_SETTINGS, layoutTree, symbolPath, type Dataset, type SymbolStyle, type TreeSettings } from '../tree/layout'
 import styles from '../tree/Tree.module.css'
 import { mergeSettings, readDoc, type TreeViewDoc } from '../tree/viewDoc'
-import { fmt, PLACE_SELECTED } from '../tree/ui'
+import { fmt, fmtLwr, PLACE_SELECTED } from '../tree/ui'
 import { TreeShapes } from '../tree/TreeShapes'
 import { Legend, legendItems } from '../tree/Legend'
 import { ImportPanel } from '../tree/ImportPanel'
@@ -382,11 +382,12 @@ function TreeCanvas({ source, tree, src, toast }: {
   }, [])
 
   const queryRows = useMemo(() => src.pqueries.map((q, qi) => {
-    const best = q.places[0]
+    const lwr = bestLwr(q)
+    const best = lwr !== null || q.places.length === 1 ? q.places[0] : undefined
     const edge = best ? ix.edgeByNum.get(best.edgeNum) : undefined
     const onEdge = edge !== undefined ? display.byEdge.get(edge)?.[0] : undefined
     const dn = onEdge && best ? pointOnBranch(onEdge, best.distal).node : undefined
-    return { qi, name: q.names.join(', '), lwr: best?.lwr ?? 0, n: q.places.length, where: dn ? describe(dn) : '', dn }
+    return { qi, name: q.names.join(', '), lwr, n: q.places.length, where: dn ? describe(dn) : '', dn }
   }), [src, ix, display, describe])
 
   const selectQuery = (qi: number) => {
@@ -579,7 +580,7 @@ function TreeCanvas({ source, tree, src, toast }: {
                 const title = sy.dataset === 'support'
                   ? `Support ${sy.node.support}`
                   : `${fmt(sy.value, 3)} placement${sy.value === 1 ? '' : 's'}\n` + sy.queries
-                      .map(q => `${src.pqueries[q.query].names.join(', ')} (LWR ${fmt(q.lwr, 3)})`).join('\n')
+                      .map(q => `${src.pqueries[q.query].names.join(', ')} (LWR ${fmtLwr(q.lwr)})`).join('\n')
                 return (
                   <path key={k} d={symbolPath(st.shape, sy.x, sy.y, sy.size)}
                     fill={st.fill.hex} fillOpacity={st.fill.alpha}
@@ -595,7 +596,7 @@ function TreeCanvas({ source, tree, src, toast }: {
                 )
               })}
               {selQuery !== null && layout.placements.filter(p => p.query === selQuery).map((p, k) => (
-                <circle key={`sq${k}`} data-ui="" cx={p.x} cy={p.y} r={4 + 4 * Math.sqrt(p.lwr)}
+                <circle key={`sq${k}`} data-ui="" cx={p.x} cy={p.y} r={4 + 4 * Math.sqrt(p.lwr ?? 0)}
                   fill="none" stroke={PLACE_SELECTED} strokeWidth={2} pointerEvents="none" />
               ))}
               {settings.placementLabels && layout.placements.filter(p => p.rank === 0).map((p, k) => (
@@ -679,16 +680,21 @@ function TreeCanvas({ source, tree, src, toast }: {
           {src.pqueries.length > 0 && (
             <div className="card">
               <div className="card-title">Placements</div>
+              <label>Best LWR threshold <input type="number" min={0} max={1} step={0.05}
+                value={settings.bestLwrThreshold} className={styles.num}
+                onChange={e => set('bestLwrThreshold', Math.min(1, Math.max(0, Number(e.target.value) || 0)))} /></label>
+              <p className={styles.muted}>LWRs are from this file. Open the raw placement file for raw LWRs; accumulation changes the weights.</p>
               <div className={styles.queryList}>
                 <table>
-                  <thead><tr><th>Query</th><th>LWR</th><th>Location</th></tr></thead>
+                  <thead><tr><th>Query</th><th>Best LWR</th><th>Location</th></tr></thead>
                   <tbody>
                     {queryRows.map(r => (
                       <tr key={r.qi} className={selQuery === r.qi ? styles.rowOn : undefined} onClick={() => selectQuery(r.qi)}
                         tabIndex={0} aria-selected={selQuery === r.qi}
                         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectQuery(r.qi) } }}>
                         <td>{r.name}</td>
-                        <td title={`${r.n} candidate${r.n === 1 ? '' : 's'}`}>{fmt(r.lwr, 3)}{r.n > 1 ? ` (${r.n})` : ''}</td>
+                        <td title={`${r.n} candidate${r.n === 1 ? '' : 's'}`}>{fmtLwr(r.lwr)}{r.n > 1 ? ` (${r.n})` : ''}
+                          {r.lwr !== null && r.lwr < settings.bestLwrThreshold && <span className={styles.muted}> · below threshold</span>}</td>
                         <td className={styles.where}>{r.where}</td>
                       </tr>
                     ))}

@@ -18,6 +18,8 @@ export function mergeSettings(raw: unknown): TreeSettings {
   const out: TreeSettings = {
     ...DEFAULT_SETTINGS, ...saved,
     placements: saved.placements === 'all' ? 'all' : 'best',
+    bestLwrThreshold: typeof saved.bestLwrThreshold === 'number' && Number.isFinite(saved.bestLwrThreshold)
+      ? Math.min(1, Math.max(0, saved.bestLwrThreshold)) : DEFAULT_SETTINGS.bestLwrThreshold,
     symbols: {
       placements: { ...DEFAULT_SETTINGS.symbols.placements, ...(sym.placements ?? {}) },
       support:    { ...DEFAULT_SETTINGS.symbols.support, ...(sym.support ?? {}) },
