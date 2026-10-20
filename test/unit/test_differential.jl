@@ -330,8 +330,9 @@ end
         else
             # test_de refits the reduced model from the shrinkage list's
             # dispersion trend and divides by ql_disp_shrunken, so altering
-            # `overdispersions` after the fit changes only what theta and the
-            # boundary check read, never the test itself.
+            # `overdispersions` after the fit changes theta, the boundary check
+            # and lfc_se (predict() weights by it), never the F statistic or
+            # its p-value.
             MetaManifold.RRuntime.with_r_lock() do
                 reval(raw"""
                     test_original_gp <- get("glm_gp", asNamespace("glmGamPoi"))

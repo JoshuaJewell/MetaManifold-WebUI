@@ -250,7 +250,7 @@ is the reference. Counts are aggregated by taxon after applicable
 read-count bounds to the differential-abundance request, so those bounds do
 not exclude samples from this analysis.
 
-All `analysis.differential` options below (`method`, `offset`,
+All `analysis.differential` options below (`method`, `offset`, `dispersion`,
 `min_prevalence` and `replacement_delta`) are resolved at study scope.
 Set them in the study configuration; group and run overrides are not used
 by this endpoint, including when called from a group Analysis workspace.
@@ -260,7 +260,15 @@ by this endpoint, including when called from a group Analysis workspace.
 - `nb_glm` (default): a negative-binomial GLM per taxon using `MASS::glm.nb`,
   with a library-size offset. The effect is log2 fold change; positive values
   indicate greater abundance in the second condition. `offset` selects `tss`
-  (default) or `rle` scaling.
+  (default) or `rle` scaling. `dispersion` selects the fits and the test:
+  `glm_nb` (default) fits `MASS::glm.nb` per taxon with its own
+  maximum-likelihood theta and Wald-tests the group coefficient; `glmGamPoi`
+  fits one `glmGamPoi::glm_gp` across the taxa passing `min_prevalence`,
+  sharing a dispersion trend across them, and reports `glmGamPoi::test_de`'s
+  quasi-likelihood F-test. Under `glmGamPoi` the p-value comes from that
+  F-test, the standard error is `test_de`'s `lfc_se`, and theta is each
+  taxon's own estimate before shrinkage. It requires the pinned glmGamPoi R
+  package and is refused for `clr_welch`.
 - `clr_welch`: Welch's t-test on centred log-ratios after multiplicative zero
   replacement with `zCompositions::cmultRepl`. The effect is a CLR difference,
   not a fold change. `replacement_delta` controls the replacement fraction

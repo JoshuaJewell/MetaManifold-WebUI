@@ -356,12 +356,14 @@ for (da_j in seq_len(da_n)) {
     # to the natural-log scale so every method reports one effect scale. The
     # reported theta is the inverse of glm_gp's negative-binomial
     # overdispersion for the taxon (`overdispersions`: variance = mu + mu^2 *
-    # overdispersion), the same parameter glm.nb's theta inverts. It is not
-    # the quasi-likelihood scale the F-test divides by. Zero overdispersion
-    # is the Poisson boundary: the row is marked, as under glm_nb, and keeps
-    # its statistics, since the F-test's denominator is the shrunken
-    # quasi-likelihood dispersion and stays defined. An unusable
-    # overdispersion fails only its own taxon.
+    # overdispersion), the same parameter glm.nb's theta inverts. It is the
+    # taxon's own estimate before shrinkage: the coefficients and the F-test's
+    # reduced fit use the cross-taxon trend, and the F ratio divides by the
+    # shrunken quasi-likelihood dispersion; only lfc_se, from predict(), is
+    # weighted by this estimate. Zero overdispersion is the Poisson boundary:
+    # the row is marked, as under glm_nb, and keeps its statistics, since the
+    # test does not read it. An unusable overdispersion fails only its own
+    # taxon.
     da_od <- da_gp[["overdispersions"]][da_j]
     if (!is.finite(da_od) || da_od < 0) {
       da_result[da_j, "status"] <- "failed"
@@ -382,7 +384,7 @@ for (da_j in seq_len(da_n)) {
       c(da_est, da_se, da_stat, da_p, 1 / da_od)
     if (da_od == 0) {
       da_result[da_j, "status"] <- "boundary"
-      da_result[da_j, "note"] <- "the negative-binomial overdispersion is zero: these counts show no overdispersion, so the fit is effectively Poisson and theta is unbounded"
+      da_result[da_j, "note"] <- "the taxon's negative-binomial overdispersion estimate is zero: these counts show no overdispersion beyond Poisson, so theta is unbounded; the test used the cross-taxon trend, so its statistics stand"
     }
   } else {
     # "glm_nb" estimates theta per taxon inside MASS::glm.nb's alternating
@@ -461,11 +463,11 @@ quasi-likelihood F-test of the group contrast — its `lfc` (log2 fold change)
 and `lfc_se`, both converted to the natural-log scale so the columns carry one
 effect scale. In that path `statistic` is the quasi-likelihood F, `pvalue`
 its p-value, and `theta` the inverse of `glm_gp`'s negative-binomial
-overdispersion for the taxon (its `overdispersions` element), the same
-parameter `MASS::glm.nb`'s theta inverts; it is `nothing` where that
-overdispersion is zero. The contrast is passed to `test_de` as numeric
-weights, so condition labels are never parsed as R code. Names are stripped
-and matched without regard to case.
+overdispersion for the taxon (its `overdispersions` element, the taxon's own
+estimate before shrinkage), the same parameter `MASS::glm.nb`'s theta inverts;
+it is `nothing` where that overdispersion is zero. The contrast is passed to
+`test_de` as numeric weights, so condition labels are never parsed as R code.
+Names are stripped and matched without regard to case.
 
 Returns one row per taxon with `status` (`ok`, `boundary` or `failed`), `note`,
 `estimate`, `se`, `statistic`, `pvalue` and `theta`; a failed taxon has
