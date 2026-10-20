@@ -368,6 +368,39 @@ end
         end
     end
 
+    @testset "Condition labels never change the fits or reach R as code" begin
+        if !HAVE_GLMGAMPOI
+            # Issue #37's contract: these comparisons fail, not skip, in CI.
+            @test !_GLMGAMPOI_IN_CI
+            @test_skip false
+        else
+            # Condition labels join group, run and sub-group names with '/', and
+            # those names may carry '-' and '.'. test_de parses and evaluates a
+            # text contrast as R code, so the contrast goes to it as numeric
+            # weights. These labels, and one that reads as R code, must give the
+            # A/B results under both dispersions, and that code must never run.
+            # The coded label opens with '[' so that the text the old path built,
+            # "da_g[...]", indexed the live factor da_g and so ran the code.
+            off = log.(tss_factors(effect, effect_samples))
+            evaluated = "mm_contrast_label_evaluated"
+            labels = (("run-A", "run-B"), ("grpA/run_1", "grpB/run_2"), ("2024-01", "2024-02"),
+                      ("A", "[assign(\"$evaluated\", TRUE, envir = globalenv())]"))
+            for dispersion in ("glm_nb", "glmGamPoi")
+                base = fit_nb(effect, effect_groups, off; levels=("A", "B"), dispersion)
+                @test all(base.status .== "ok")
+                for (ref, con) in labels
+                    groups = [g == "A" ? ref : con for g in effect_groups]
+                    rows = fit_nb(effect, groups, off; levels=(ref, con), dispersion)
+                    @test rows.status == base.status
+                    for col in (:estimate, :se, :statistic, :pvalue, :theta)
+                        @test all(isapprox.(rows[!, col], base[!, col]; rtol=1e-10))
+                    end
+                end
+            end
+            @test !rcopy(R"exists($evaluated, envir = globalenv())")
+        end
+    end
+
     @testset "Degenerate and filtered taxa are reported, not dropped" begin
         if !HAVE_MASS
             @test_skip false

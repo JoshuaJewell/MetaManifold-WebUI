@@ -291,27 +291,32 @@ da_result <- data.frame(status = rep("ok", da_n), note = rep("", da_n),
                         estimate = rep(NA_real_, da_n), se = rep(NA_real_, da_n),
                         statistic = rep(NA_real_, da_n), pvalue = rep(NA_real_, da_n),
                         theta = rep(NA_real_, da_n), stringsAsFactors = FALSE)
-# "glmGamPoi": one glmGamPoi::glm_gp fit across all taxa supplies each taxon's
-# "glmGamPoi": one glmGamPoi::glm_gp fit across all taxa, with each taxon's
-# overdispersion shrunk toward the cross-taxon trend, supplies glmGamPoi's own
-# published inference -- glmGamPoi::test_de's quasi-likelihood F-test of the
-# group coefficient. Its genes x samples convention, so
-# the counts are transposed, and size_factors takes the linear size factor
-# (the per-taxon fits below use its log as their offset). A fit- or test-level
-# error fails every taxon. No fallback to another dispersion estimator or
-# significance test is permitted.
+# "glmGamPoi": one glmGamPoi::glm_gp fit across all taxa supplies glmGamPoi's
+# own published inference -- glmGamPoi::test_de's quasi-likelihood F-test of
+# the group coefficient. glm_gp refits the coefficients at its cross-taxon
+# dispersion trend and shrinks each taxon's quasi-likelihood dispersion by
+# empirical Bayes. glm_gp works genes x samples, so the counts are transposed,
+# and size_factors takes the linear size factor (the per-taxon fits below use
+# its log as their offset). The contrast reaches test_de as numeric weights on
+# the design's columns, never as text: test_de parses and evaluates a text
+# contrast as R code, so a condition label such as "run-B" or "grpB/run_2"
+# would stop it, and a label that reads as R code would run. A fit- or
+# test-level error fails every taxon. No fallback to another dispersion
+# estimator or significance test is permitted.
 da_glp <- NULL
 da_glp_failed <- ""
 if (da_use_glp) {
+  da_design <- model.matrix(~ da_g)
+  da_contrast <- as.numeric(colnames(da_design) == da_term)
   da_gp <- tryCatch(
-    glmGamPoi::glm_gp(t(da_counts), design = model.matrix(~ da_g),
+    glmGamPoi::glm_gp(t(da_counts), design = da_design,
                       size_factors = exp(da_offset), overdispersion_shrinkage = TRUE),
     error = function(e) e)
   if (inherits(da_gp, "error")) {
     da_glp_failed <- paste("glm_gp stopped with an error:", conditionMessage(da_gp))
   } else {
     da_glp <- tryCatch(
-      glmGamPoi::test_de(da_gp, contrast = da_term, max_lfc = Inf, compute_lfc_se = TRUE),
+      glmGamPoi::test_de(da_gp, contrast = da_contrast, max_lfc = Inf, compute_lfc_se = TRUE),
       error = function(e) e)
     if (inherits(da_glp, "error")) {
       da_glp_failed <- paste("test_de stopped with an error:", conditionMessage(da_glp))
@@ -458,8 +463,9 @@ effect scale. In that path `statistic` is the quasi-likelihood F, `pvalue`
 its p-value, and `theta` the inverse of `glm_gp`'s negative-binomial
 overdispersion for the taxon (its `overdispersions` element), the same
 parameter `MASS::glm.nb`'s theta inverts; it is `nothing` where that
-overdispersion is zero. Names are stripped and matched without regard to
-case.
+overdispersion is zero. The contrast is passed to `test_de` as numeric
+weights, so condition labels are never parsed as R code. Names are stripped
+and matched without regard to case.
 
 Returns one row per taxon with `status` (`ok`, `boundary` or `failed`), `note`,
 `estimate`, `se`, `statistic`, `pvalue` and `theta`; a failed taxon has
@@ -505,7 +511,8 @@ function fit_nb(counts::AbstractMatrix{<:Integer}, groups::AbstractVector{<:Abst
         finally
             RCall.reval("rm(list = intersect(ls(), c('da_counts', 'da_group', 'da_levels', " *
                         "'da_offset', 'da_theta_upper', 'da_theta_lower', 'da_use_glp', 'da_g', " *
-                        "'da_term', 'da_n', 'da_result', 'da_glp', 'da_glp_failed', 'da_gp', " *
+                        "'da_term', 'da_n', 'da_result', 'da_design', 'da_contrast', 'da_glp', " *
+                        "'da_glp_failed', 'da_gp', " *
                         "'da_j', 'da_y', 'da_absent', 'da_od', 'da_est', 'da_se', 'da_stat', " *
                         "'da_p', 'da_warns', 'da_fit', 'da_co', 'da_row', 'da_theta'))); invisible(gc())")
         end
