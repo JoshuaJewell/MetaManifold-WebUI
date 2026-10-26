@@ -346,8 +346,9 @@ for (da_j in seq_len(da_n)) {
   if (length(da_absent) > 0L) {
     da_result[da_j, "status"] <- "failed"
     da_result[da_j, "note"] <- paste0("no reads in any '", da_absent[[1]], "' sample (complete ",
-                                      "separation): the fold change is unbounded and its test ",
-                                      "is undefined, so no p-value is reported")
+                                      "separation): the fold change is unbounded and ",
+                                      if (da_use_glp) "its test" else "the Wald test",
+                                      " is undefined, so no p-value is reported")
     next
   }
   if (da_use_glp) {
@@ -839,6 +840,18 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
     if config.method == "nb_glm"
         factors = size_factors(counts, samples, config.offset)
         tested = findall(>=(config.min_prevalence), prevalence)
+        if config.dispersion == "glmGamPoi"
+            # glmGamPoi fits every taxon together: an all-zero taxon has a
+            # dispersion of exactly 0 and a quasi-likelihood dispersion of
+            # exactly 1, and both feed the trend and the shrinkage prior that
+            # every other taxon is tested against. Leave such taxa out of the
+            # shared fit (glm_nb fits each alone and reports them as constant).
+            for j in tested
+                present[j] == 0 && (rows[j]["note"] =
+                    "no reads in any sample of either group, so it is not part of the shared glmGamPoi fit")
+            end
+            tested = filter(j -> present[j] > 0, tested)
+        end
         fits = isempty(tested) ? nothing :
             fit_nb(Int.(counts[:, tested]), groups, log.(factors); levels,
                    dispersion=config.dispersion)

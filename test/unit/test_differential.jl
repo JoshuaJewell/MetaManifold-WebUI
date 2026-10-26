@@ -478,6 +478,8 @@ end
             s = byt["only_b"]
             @test s["status"] == "failed"
             @test occursin("'A'", s["note"]) && occursin("complete separation", s["note"])
+            # The default path's test is the Wald test, and the note says so.
+            @test occursin("the Wald test is undefined", s["note"])
             @test all(isnothing, (s["estimate"], s["standard_error"], s["pvalue"], s["padj"]))
             # The BH family is the three other taxa only.
             @test res["diagnostics"]["n_tested"] == 3
@@ -496,6 +498,57 @@ end
                 })
             """)
             @test direct[1] == 1 && direct[2] > 0.9
+        end
+    end
+
+    @testset "Zero-read taxa stay out of the shared glmGamPoi fit" begin
+        if !HAVE_MASS
+            @test_skip false
+        else
+            zeros2 = zeros(Int, size(effect, 1), 2)
+            counts = hcat(effect, zeros2)
+            taxa = vcat(effect_taxa, ["z1", "z2"])
+            # glm_nb fits each taxon alone and keeps refusing a constant one.
+            res = differential_abundance(counts, effect_samples, taxa, effect_groups;
+                                         reference="A", contrast="B")
+            byt = Dict(r["taxon"] => r for r in res["rows"])
+            @test byt["z1"]["status"] == "failed"
+            @test occursin("constant", byt["z1"]["note"])
+        end
+        if !HAVE_GLMGAMPOI
+            @test !_GLMGAMPOI_IN_CI
+            @test_skip false
+        else
+            cfg = DifferentialConfig(dispersion="glmGamPoi")
+            base = differential_abundance(effect, effect_samples, effect_taxa, effect_groups;
+                                          reference="A", contrast="B", config=cfg)
+            with = differential_abundance(hcat(effect, zeros(Int, size(effect, 1), 2)),
+                                          effect_samples, vcat(effect_taxa, ["z1", "z2"]),
+                                          effect_groups; reference="A", contrast="B", config=cfg)
+            b0 = Dict(r["taxon"] => r for r in base["rows"])
+            b1 = Dict(r["taxon"] => r for r in with["rows"])
+            for t in effect_taxa, k in ("estimate", "standard_error", "statistic", "pvalue", "padj")
+                @test b1[t][k] ≈ b0[t][k]
+            end
+            @test b1["z1"]["status"] == "filtered"
+            @test occursin("no reads in any sample", b1["z1"]["note"])
+            @test isnothing(b1["z1"]["pvalue"])
+        end
+    end
+
+    @testset "glmGamPoi separation note does not name the Wald test" begin
+        if !HAVE_GLMGAMPOI
+            @test !_GLMGAMPOI_IN_CI
+            @test_skip false
+        else
+            only_b = vcat(fill(0, 12), [50, 80, 120, 30, 60, 90, 40, 70, 110, 55, 65, 85])
+            res = differential_abundance(hcat(effect, only_b), effect_samples,
+                                         vcat(effect_taxa, ["only_b"]), effect_groups;
+                                         reference="A", contrast="B",
+                                         config=DifferentialConfig(dispersion="glmGamPoi"))
+            note = Dict(r["taxon"] => r for r in res["rows"])["only_b"]["note"]
+            @test occursin("complete separation", note)
+            @test !occursin("Wald", note)
         end
     end
 
