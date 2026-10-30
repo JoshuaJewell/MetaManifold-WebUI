@@ -13,6 +13,10 @@ using HTTP
     HTTP.setheader(stream, "Cache-Control"     => "no-cache")
     HTTP.setheader(stream, "Connection"        => "keep-alive")
     HTTP.setheader(stream, "X-Accel-Buffering" => "no")
+    # Streaming responses commit their headers before ordinary middleware
+    # returns; supply the same baseline before HTTP.startwrite(stream).
+    HTTP.setheader(stream, "X-Content-Type-Options" => "nosniff")
+    HTTP.setheader(stream, "Referrer-Policy" => "no-referrer")
     ch = subscribe_events()
     try
         HTTP.startwrite(stream)
