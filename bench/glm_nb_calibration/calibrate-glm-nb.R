@@ -69,7 +69,9 @@ results <- do.call(rbind, rows)
 write.csv(results, "calibration-replicates.csv", row.names = FALSE)
 for (n in unique(results$n_per_group)) {
   for (method in unique(results$method)) {
-    d <- subset(results, n_per_group == n & results$method == method)
+    # Index explicitly: subset() would resolve `method` as the data-frame column.
+    d <- results[results$n_per_group == n & results$method == method, , drop = FALSE]
+    stopifnot(nrow(d) == reps)
     cat(sprintf("n=%d method=%s valid=%d failed=%d boundary=%d rejected=%d pooled_rate=%.6f mean_replicate_rate=%.6f replicate_SE=%.6f\n",
                 n, method, sum(d$valid), sum(d$failed), sum(d$boundary),
                 sum(d$rejected), sum(d$rejected) / sum(d$valid),
