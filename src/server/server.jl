@@ -279,17 +279,19 @@ module Server
         end
     end
 
-    ## Response-wide browser protections
-    # Keep this outside the CORS and file handlers so even refusals and
-    # downloaded artefacts get consistent headers. The uploaded-file CSP remains
-    # untouched; a full SPA CSP requires a separate review of the built bundle.
+    ## Browser protections for ordinary HTTP responses
+    # Keep this outside the CORS/file handlers, so rejections also receive
+    # headers. Oxygen's streaming route uses HTTP.Stream and commits its headers
+    # before its handler returns; it sets these protections before startwrite.
+    # A blanket X-Frame-Options here would break cross-origin report previews.
     function _response_security_middleware(next)
         function(req::HTTP.Request)
+            path = first(split(req.target, '?'; limit=2))
+            path == "/api/v1/events" && return next(req)
             resp = next(req)
             for (key, value) in (
                 "X-Content-Type-Options" => "nosniff",
                 "Referrer-Policy" => "no-referrer",
-                "X-Frame-Options" => "SAMEORIGIN",
             )
                 isempty(HTTP.header(resp, key, "")) &&
                     HTTP.setheader(resp, key => value)
@@ -355,13 +357,17 @@ module Server
                 # the browser always loads the latest bundle after a rebuild.
                 cache = (ext in (".js", ".css") && occursin("/assets/", uri)) ?
                     "public, max-age=31536000, immutable" : "no-store"
-                return HTTP.Response(200,
-                    ["Content-Type" => mime, "Cache-Control" => cache];
-                    body=read(target))
+                headers = ["Content-Type" => mime, "Cache-Control" => cache]
+                # Only protect frontend HTML from framing. /files and /api
+                # include intentional iframe report/figure previews, including
+                # deployments where the UI and API have different origins.
+                ext == ".html" && push!(headers, "X-Frame-Options" => "SAMEORIGIN")
+                return HTTP.Response(200, headers; body=read(target))
             end
             index = joinpath(_frontend_dir, "index.html")
             isfile(index) && return HTTP.Response(200,
-                ["Content-Type" => "text/html", "Cache-Control" => "no-store"];
+                ["Content-Type" => "text/html", "Cache-Control" => "no-store",
+                 "X-Frame-Options" => "SAMEORIGIN"];
                 body=read(index))
             # No frontend build yet - fall through to Oxygen (404)
             next(req)
