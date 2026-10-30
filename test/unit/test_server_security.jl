@@ -38,6 +38,25 @@ end
     touch(joinpath(tmp, "data", "StudyS", "run1", "s1_R1.fastq.gz"))
     mkpath(joinpath(tmp, "projects", "StudyS", "run1"))
     try
+        @testset "Browser security headers cover API, files and refusals" begin
+            host = "Host" => "127.0.0.1:8080"
+            # All return paths should carry the same baseline, including errors
+            # and CORS refusals; route-specific CSP remains unmodified.
+            requests = [
+                _ss_request("GET", "/api/v1/studies", [host]),
+                _ss_request("GET", "/files/StudyS/runs/missing.txt", [host]),
+                _ss_request("GET", "/api/v1/studies", [host, "Origin" => "http://evil.example"]),
+                _ss_request("OPTIONS", "/api/v1/studies",
+                            [host, "Origin" => "http://localhost:5173"]),
+            ]
+            @test [r.status for r in requests] == [200, 404, 403, 204]
+            for r in requests
+                @test SV.HTTP.header(r, "X-Content-Type-Options") == "nosniff"
+                @test SV.HTTP.header(r, "Referrer-Policy") == "no-referrer"
+                @test SV.HTTP.header(r, "X-Frame-Options") == "SAMEORIGIN"
+            end
+        end
+
         @testset "Origin allow-list" begin
             studies = "/api/v1/studies"
             host = "Host" => "127.0.0.1:8080"
