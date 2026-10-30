@@ -53,7 +53,22 @@ end
             for r in requests
                 @test SV.HTTP.header(r, "X-Content-Type-Options") == "nosniff"
                 @test SV.HTTP.header(r, "Referrer-Policy") == "no-referrer"
-                @test SV.HTTP.header(r, "X-Frame-Options") == "SAMEORIGIN"
+                @test SV.HTTP.header(r, "X-Frame-Options") == ""
+            end
+            # A split-origin frontend embeds report/figure resources in iframes.
+            # Do not block them with SAMEORIGIN on the API host.
+            write(joinpath(tmp, "projects", "StudyS", "run1", "figure.pdf"), "%PDF-1.4")
+            figure = _ss_request("GET", "/files/StudyS/runs/run1/figure.pdf", [host])
+            @test figure.status == 200
+            @test SV.HTTP.header(figure, "X-Frame-Options") == ""
+            @test SV.HTTP.header(figure, "Referrer-Policy") == "no-referrer"
+            # Only the SPA HTML document is protected against cross-origin
+            # framing, and only if a frontend build is present in this test.
+            index = joinpath(SV._frontend_dir, "index.html")
+            if isfile(index)
+                spa = _ss_request("GET", "/", [host])
+                @test spa.status == 200
+                @test SV.HTTP.header(spa, "X-Frame-Options") == "SAMEORIGIN"
             end
         end
 
