@@ -279,6 +279,25 @@ module Server
         end
     end
 
+    ## Response-wide browser protections
+    # Keep this outside the CORS and file handlers so even refusals and
+    # downloaded artefacts get consistent headers. The uploaded-file CSP remains
+    # untouched; a full SPA CSP requires a separate review of the built bundle.
+    function _response_security_middleware(next)
+        function(req::HTTP.Request)
+            resp = next(req)
+            for (key, value) in (
+                "X-Content-Type-Options" => "nosniff",
+                "Referrer-Policy" => "no-referrer",
+                "X-Frame-Options" => "SAMEORIGIN",
+            )
+                isempty(HTTP.header(resp, key, "")) &&
+                    HTTP.setheader(resp, key => value)
+            end
+            resp
+        end
+    end
+
     ## Static file serving (frontend build + on-demand PDFs)
     const _frontend_dir = joinpath(@__DIR__, "..", "..", "web", "dist")
     const _mime_map = Dict(
@@ -413,7 +432,8 @@ module Server
     end
 
     ## Entry point
-    const _MIDDLEWARE = [_bad_request_middleware, _r_busy_middleware, _cors_middleware,
+    const _MIDDLEWARE = [_response_security_middleware, _bad_request_middleware,
+                         _r_busy_middleware, _cors_middleware,
                          _analysis_source_middleware, _file_middleware]
     # Oxygen's docs (/docs, /docs/schema) and metrics sit outside the middleware
     # above, so they would bypass the Host and Origin checks; nothing uses them.
