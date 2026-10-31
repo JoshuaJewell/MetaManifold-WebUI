@@ -2,7 +2,7 @@
 # Reproduce the small-sample glm_nb calibration result
 
 This is the simulation published in [upstream issue #64](https://github.com/JoshuaJewell/MetaManifold-WebUI/issues/64).
-The R script is unchanged apart from its licence header. It runs the actual
+The simulation and fitting logic match the issue script. The licence header and per-method summary grouping have been updated. It runs the actual
 `_FIT_R` block from the supplied `src/analysis/differential.jl`, rather than
 reimplementing the fitter. This branch is based on upstream main at
 `a325589d3d318847c15b21cd34fb7d6e7a6d2f7b`, which includes PR #62.
