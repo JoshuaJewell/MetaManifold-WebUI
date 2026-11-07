@@ -89,11 +89,16 @@ case "${1:-}" in
         [ -e "$control/ready" ] || exit 1
         # Retransmitting this request after losing its reply is safe. Only one
         # worker can acquire run.lock; a terminal attempt cannot launch again.
-        # Recorded here, not by the detached child: if its log cannot be opened
-        # on a full disk it never runs, so waiting for a marker only it can
-        # write would report a failed launch as a success.
+        # Prove the log is writable before launching. A full or read-only disk
+        # would otherwise kill the detached child before it can record its
+        # marker, and this request would report success while the caller polls a
+        # state that can never arrive. Child liveness is not a usable signal:
+        # `setsid` forks and the tracked PID exits immediately.
+        { : >> "$control/log"; } 2>/dev/null || {
+            echo 'Remote worker log is not writable; retry the stage' >&2
+            exit 1
+        }
         nohup setsid bash "$control/worker.sh" run >> "$control/log" 2>&1 < /dev/null &
-        child=$!
         # Acknowledging only the shell fork lets an immediate status probe win
         # run.lock before the worker. Wait for a durable launch marker before
         # the caller polls. Startup failure is bounded and retryable, not an
@@ -104,7 +109,6 @@ case "${1:-}" in
             if [ -e "$control/pid" ] || [ -e "$control/exit" ] || [ -e "$control/cancel" ]; then
                 exit 0
             fi
-            kill -0 "$child" 2>/dev/null || break
             sleep 0.1
         done
         echo 'Remote worker did not acknowledge startup; retry the stage' >&2
