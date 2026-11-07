@@ -210,8 +210,9 @@ end
 
 ## Deterministic row order
 # Identity columns, in the order they are preferred as a tiebreak/fallback sort
-# key. Every merged or annotation table carries at least one of them.
-const _IDENTITY_COLUMNS = ("SeqName", "OTU", "ASV", "sequence")
+# key. Every merged or annotation table carries at least one of them. Defined
+# once, in Analysis.
+const _IDENTITY_COLUMNS = Analysis._IDENTITY_COLUMNS
 
 """
     _stable_order_clause(columns) -> String

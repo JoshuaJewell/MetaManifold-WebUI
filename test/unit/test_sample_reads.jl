@@ -39,14 +39,14 @@ sets:
 
 # Build <root>/projects/<study>/<run>/merged/results.duckdb plus the data-side
 # run directory the route guards look for.
-function _sr_make_run(root::String, study::String, run::String)
-    data_run = joinpath(root, "data", study, run)
+function _sr_make_run(root::String, study::String, run::String; group::Union{String,Nothing}=nothing)
+    data_run = joinpath(root, "data", study, something(group, ""), run)
     mkpath(data_run)
     touch(joinpath(data_run, "Srich_R1.fastq.gz")); touch(joinpath(data_run, "Srich_R2.fastq.gz"))
     # No inherited figure exclusions: the request's filters are the only ones.
     write(joinpath(data_run, "pipeline.yml"), "analysis:\n  exclude_categories: []\n")
 
-    merge_dir = joinpath(root, "projects", study, run, "merged")
+    merge_dir = joinpath(root, "projects", study, something(group, ""), run, "merged")
     mkpath(merge_dir)
     db = DuckDB.DB(joinpath(merge_dir, "results.duckdb"))
     con = DBInterface.connect(db)
@@ -346,6 +346,19 @@ _sr_filters(sample_reads) = Dict(
             # and Scontam would add 45 + 15 per run.
             @test [t.name for t in fig.data] == ["Blastocystis"]
             @test collect(fig.data[1].x) == ["runA", "runB"]
+            @test collect(fig.data[1].y) == [155.0, 155.0]
+
+            # Two runs of one group stay two bars, labelled group/run.
+            _sr_make_run(root, "studyS", "siteA"; group="proto")
+            _sr_make_run(root, "studyS", "siteB"; group="proto")
+            r = _sr_post("/api/v1/studies/studyS/analysis/chart",
+                         Dict("runs" => [Dict("run" => "siteA", "group" => "proto"),
+                                         Dict("run" => "siteB", "group" => "proto")],
+                              "table" => "merged", "tag" => "rank",
+                              "value" => "Genus", "relative" => false, "colFilters" => filt))
+            @test r.status == 200
+            fig = JSON3.read(String(r.body))
+            @test collect(fig.data[1].x) == ["proto/siteA", "proto/siteB"]
             @test collect(fig.data[1].y) == [155.0, 155.0]
 
             r = _sr_post("/api/v1/studies/studyS/analysis/alpha",

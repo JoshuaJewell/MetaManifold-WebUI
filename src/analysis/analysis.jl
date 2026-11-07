@@ -109,9 +109,8 @@ function taxon_column(columns::Union{Vector{String}, AbstractSet{String}}, rank:
 end
 
 ## Deterministic row order
-# Identity columns, in preference order. Mirrors `_IDENTITY_COLUMNS` in
-# src/server/routes/duckdb_helpers.jl; both exist because the two layers reach
-# the same tables and neither may depend on the other.
+# Identity columns, in preference order. The server's duckdb_helpers.jl reuses
+# this definition for its own tiebreak sort.
 const _IDENTITY_COLUMNS = ("SeqName", "OTU", "ASV", "sequence")
 
 """

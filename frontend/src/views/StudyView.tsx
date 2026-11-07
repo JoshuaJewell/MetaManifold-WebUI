@@ -63,8 +63,12 @@ export function StudyView() {
 
   // Fetch runs from each group for the analysis workspace
   const [groupRuns, setGroupRuns] = useState<GroupedRun[]>([])
+  // The study whose group runs have been listed; until then the analysis tabs cannot tell they have none.
+  const [groupRunsStudy, setGroupRunsStudy] = useState<string | null>(null)
   useEffect(() => {
-    if (!detail?.groups?.length) { setGroupRuns([]); return }
+    // Detail kept from the previous study says nothing about this one's groups.
+    if (!detail || detail.name !== study) return
+    if (!detail.groups?.length) { setGroupRuns([]); setGroupRunsStudy(study!); return }
     let cancelled = false
     Promise.all(
       detail.groups.map(async (g: string) => {
@@ -72,12 +76,12 @@ export function StudyView() {
         return gRuns.map(r => ({ ...r, group: g }))
       })
     ).then(results => {
-      if (!cancelled) setGroupRuns(results.flat())
+      if (!cancelled) { setGroupRuns(results.flat()); setGroupRunsStudy(study!) }
     }).catch(e => {
-      if (!cancelled) toast.error(`Could not list group runs: ${e.message ?? e}`)
+      if (!cancelled) { toast.error(`Could not list group runs: ${e.message ?? e}`); setGroupRunsStudy(study!) }
     })
     return () => { cancelled = true }
-  }, [detail?.groups, study])
+  }, [detail, study])
 
   const analysisSource: AnnotationSource = view === 'analysis-dada2' ? 'DADA2' : 'VSEARCH'
   const comparisonRunsFor = useCallback((source: AnnotationSource): ComparisonRunSpec[] => [
@@ -85,7 +89,8 @@ export function StudyView() {
     ...groupRuns.filter(r => carriesSource(r, source)).flatMap(r => expandRunSpecs([r], r.group)),
   ], [runs, groupRuns])
   const allComparisonRuns = useMemo(() => comparisonRunsFor(analysisSource), [comparisonRunsFor, analysisSource])
-  const hasSource = (source: AnnotationSource) => runs == null || comparisonRunsFor(source).length > 0
+  const hasSource = (source: AnnotationSource) =>
+    runs == null || groupRunsStudy !== study || comparisonRunsFor(source).length > 0
 
   const placementRuns = useMemo(() => [
     ...(runs ?? []).map(r => ({ run: r.name, group: null, subgroups: r.pooled ? r.subgroups : [] })),

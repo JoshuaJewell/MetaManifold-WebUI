@@ -895,6 +895,10 @@ end
     collected = Tuple{String, Vector{String}, DataFrame}[]
     first_error = Ref{Union{HTTP.Response,Nothing}}(nothing)
     effective_top_n = (tag == "category") ? typemax(Int) : top_n
+    # As for alpha diversity: when several runs are compared, each bar is a run.
+    # Labelling by group alone would pool two runs of one group into one bar.
+    compare_runs = length(unique(_resolved_run_label(r) for r in
+        filter(!isnothing, [_resolve_run_duckdb(study, s) for s in runs_spec]))) > 1
 
     for spec in runs_spec
         resolved = _resolve_run_duckdb(study, spec)
@@ -934,7 +938,7 @@ end
             end
             nrow(agg) == 0 && return nothing
 
-            label = _resolved_group_label(resolved)
+            label = compare_runs ? _resolved_run_label(resolved) : _resolved_group_label(resolved)
             push!(collected, (label, scols, agg))
             nothing
         end
