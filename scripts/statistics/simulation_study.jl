@@ -77,8 +77,14 @@ function reference_metrics(column::AbstractVector{BigInt})
     first(computed)
 end
 
-_relative_error(observed::BigFloat, reference::BigFloat) =
-    abs(observed - reference) / max(big(1.0), abs(reference))
+"""Measure errors at reference precision, independent of the caller's MPFR state."""
+function metric_errors(observed::BigFloat, reference::BigFloat)
+    computed = with_precision(; bits=REFERENCE_BITS) do
+        absolute = abs(observed - reference)
+        (absolute=absolute, relative=absolute / max(one(BigFloat), abs(reference)))
+    end
+    first(computed)
+end
 
 function main(args::Vector{String})
     replicates = 40
@@ -142,10 +148,10 @@ function main(args::Vector{String})
                 policy)
             sample = result.samples[1]
             allowed = tolerance(bits)
-            shannon_error = abs(sample.shannon - reference.shannon)
-            simpson_error = abs(sample.gini_simpson - reference.simpson)
-            shannon_relative = _relative_error(sample.shannon, reference.shannon)
-            simpson_relative = _relative_error(sample.gini_simpson, reference.simpson)
+            shannon_errors = metric_errors(sample.shannon, reference.shannon)
+            simpson_errors = metric_errors(sample.gini_simpson, reference.simpson)
+            shannon_error, shannon_relative = shannon_errors.absolute, shannon_errors.relative
+            simpson_error, simpson_relative = simpson_errors.absolute, simpson_errors.relative
             maxima[bits]["shannon_abs"] = max(maxima[bits]["shannon_abs"], shannon_error)
             maxima[bits]["simpson_abs"] = max(maxima[bits]["simpson_abs"], simpson_error)
             maxima[bits]["shannon_rel"] = max(maxima[bits]["shannon_rel"], shannon_relative)
@@ -166,6 +172,7 @@ function main(args::Vector{String})
         "exact_replicates" => EXACT_REPLICATES,
         "precision_replicates" => replicates,
         "reference_bits" => REFERENCE_BITS,
+        "comparison_bits" => REFERENCE_BITS,
         "precisions" => collect(PRECISIONS),
         "tolerance_rule" => "2^-(bits-16) absolute, declared before the run",
         "tolerances" => Dict(string(bits) => string(tolerance(bits)) for bits in PRECISIONS),

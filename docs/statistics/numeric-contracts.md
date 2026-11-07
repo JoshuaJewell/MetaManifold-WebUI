@@ -39,6 +39,15 @@ pipe-containing inclusion/exclusion values, so this route explicitly refuses
 them rather than silently changing the requested rows. Empty arrays and null
 fields mean an inactive filter. Sample-read filtering remains unsupported.
 
+The shared sample detector reserves metadata names such as `total`, `Pident`
+and suffixes such as `_boot`. FASTQ sample names can also use those names, so
+the validated route refuses any integer column omitted by that detector. This
+also refuses tables containing genuine integer metadata with those names:
+without an authoritative column-role map the route cannot distinguish them
+from counts. Supply an explicitly labelled count matrix through the direct
+statistics API in that case. An incomplete inferred sample set is never
+reported as a successful exact summary.
+
 * Direct HTTP input must use integer JSON tokens through `2^53 - 1`; larger
   counts must be whole-number strings. Fractional/exponent tokens, including
   `1.0` and `1e0`, are refused before their syntax can be erased by JSON parsing.

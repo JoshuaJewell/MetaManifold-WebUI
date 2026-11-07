@@ -170,7 +170,7 @@ export function AnalysisWorkspace({ study, runs: baseRuns, source, perRun }: {
         {visited.has('diversity') && (
           <div hidden={tab !== 'diversity'}>
             <section className={styles.section}>
-              <ValidatedStatisticsPanel study={study} runs={selectedRuns} option={selected} />
+              <ValidatedStatisticsPanel study={study} runs={effectiveRuns} option={selected} />
             </section>
             {perRun?.diversity && (
               <section className={styles.section}>

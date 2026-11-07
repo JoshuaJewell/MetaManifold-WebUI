@@ -197,6 +197,21 @@ function _vs_make_run(root::String)
         for saved_name in ("filtered-v1", "2026.01")
             DBInterface.execute(con, "CREATE TABLE \"$(saved_name)\" AS SELECT * FROM merged")
         end
+        DBInterface.execute(con, """CREATE TABLE merged_aliases (
+            SeqName VARCHAR, Genus VARCHAR, feature BIGINT,
+            __VALIDATED_FEATURE BIGINT, __validated_feature_ BIGINT, "odd""sample" HUGEINT)""")
+        DBInterface.execute(con, """INSERT INTO merged_aliases VALUES
+            ('seq2', 'G', 2, 20, 200, 9007199254740993),
+            ('seq1', 'G', 1, 10, 100, 1), ('seq3', 'H', 4, 40, 400, 3)""")
+        DBInterface.execute(con, """CREATE TABLE merged_subgroups (
+            SeqName VARCHAR, Genus VARCHAR, A_one BIGINT, A_two BIGINT, AB_one BIGINT)""")
+        DBInterface.execute(con, """INSERT INTO merged_subgroups VALUES
+            ('seq1', 'G', 1, 4, 100), ('seq2', 'H', 2, 5, 200)""")
+        for (index, name) in enumerate(("total", "total_A", "sample_boot", "sample_dada2",
+                                       "sample_vsearch", "Pident", "consensus_score", "Genus"))
+            DBInterface.execute(con, "CREATE TABLE ambiguous_$index (SeqName VARCHAR, s1 BIGINT, \"$name\" BIGINT)")
+            DBInterface.execute(con, "INSERT INTO ambiguous_$index VALUES ('seq1', 1, 5)")
+        end
     finally
         DBInterface.close!(con)
         close(db)
@@ -264,15 +279,14 @@ end
         @test loaded.config.numeric_policy.mode == "exact_counts"
         @test !haskey(loaded.result, :analysis_id) # response-only field is not in the stored result
 
-        # Run filters retain decimal support, and prefix selection preserves
-        # the correspondence between sample labels and streamed columns.
-        filtered = _vs_post(path, merge(request, Dict("prefix" => "s2",
+        # Run filters retain decimal support for numeric metadata columns.
+        filtered = _vs_post(path, merge(request, Dict(
             "colFilters" => Dict("Pident" => Dict("min" => 99.0)))))
         @test filtered.status == 200
         filtered_result = JSON3.read(String(filtered.body))
-        @test length(filtered_result.samples) == 1
-        @test filtered_result.samples[1].label == "s2"
-        @test collect(filtered_result.samples[1].counts) == [string(big(2)^126)]
+        @test length(filtered_result.samples) == 3
+        filtered_s2 = only(filter(x -> x.label == "s2", filtered_result.samples))
+        @test collect(filtered_s2.counts) == [string(big(2)^126)]
 
         selected = _vs_post(path, merge(request, Dict("colFilters" => Dict(
             "Genus" => Dict("include" => ["G"], "exclude" => ["H"], "text" => "G")))))
@@ -303,6 +317,91 @@ end
         @test _vs_post(path, merge(request, Dict(
             "colFilters" => Dict("s1" => Dict("min" => 1))))).status == 422
         @test _vs_get("/api/v1/statistics/derived/$id").status == 404
+    end
+end
+
+@testset "Run summaries preserve colliding sample names and subgroup boundaries" begin
+    _vs_with_root() do root
+        _vs_make_run(root)
+        path = "/api/v1/studies/studyV/runs/run1/statistics/summaries"
+        for level in (nothing, "Genus")
+            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => "exact_counts"),
+                "table" => "merged_aliases", "taxonomic_level" => level))
+            @test response.status == 200
+            response.status == 200 || continue
+            result = JSON3.read(String(response.body))
+            @test Set(s.label for s in result.samples) ==
+                Set(["feature", "__VALIDATED_FEATURE", "__validated_feature_", "odd\"sample"])
+            for (label, factor) in (("feature", 1), ("__VALIDATED_FEATURE", 10), ("__validated_feature_", 100))
+                sample = only(filter(s -> s.label == label, result.samples))
+                @test sample.total == 7 * factor
+                @test collect(sample.features) == (isnothing(level) ? ["seq1", "seq2", "seq3"] : ["G", "H"])
+                @test collect(sample.counts) == factor .* (isnothing(level) ? [1, 2, 4] : [3, 4])
+                @test collect(sample.proportions) == (isnothing(level) ? ["1/7", "2/7", "4/7"] : ["3/7", "4/7"])
+            end
+            quoted = only(filter(s -> s.label == "odd\"sample", result.samples))
+            @test quoted.total == "9007199254740997"
+            @test collect(quoted.counts) == (isnothing(level) ? Any[1, "9007199254740993", 3] : Any["9007199254740994", 3])
+            loaded = JSON3.read(String(_vs_get("/api/v1/studies/studyV/runs/run1/statistics/derived/$(result.analysis_id)").body))
+            @test loaded.result.samples == result.samples
+        end
+
+        for mode in ("exact_counts", "high_precision"), prefix in ("A", "AB", nothing)
+            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => mode),
+                "table" => "merged_subgroups", "prefix" => prefix))
+            @test response.status == 200
+            response.status == 200 || continue
+            result = JSON3.read(String(response.body))
+            expected = prefix == "A" ? Dict("A_one" => 3, "A_two" => 9) :
+                       prefix == "AB" ? Dict("AB_one" => 300) :
+                       Dict("A_one" => 3, "A_two" => 9, "AB_one" => 300)
+            @test Dict(s.label => s.total for s in result.samples) == expected
+            loaded = JSON3.read(String(_vs_get("/api/v1/studies/studyV/runs/run1/statistics/derived/$(result.analysis_id)").body))
+            @test loaded.config.prefix == prefix
+            @test Set(loaded.config.sample_columns) == Set(keys(expected))
+            @test loaded.result.samples == result.samples
+        end
+    end
+end
+
+@testset "Reserved integer names cannot silently remove samples" begin
+    _vs_with_root() do root
+        _vs_make_run(root)
+        path = "/api/v1/studies/studyV/runs/run1/statistics/summaries"
+        for index in 1:8, mode in ("exact_counts", "high_precision")
+            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => mode),
+                "table" => "ambiguous_$index"))
+            @test response.status == 422
+            @test occursin("excluded by the sample detector", String(response.body))
+        end
+        directory = joinpath(root, "projects", "studyV", "run1", "derived", "validated-statistics")
+        @test !isdir(directory) || isempty(readdir(directory))
+        # Float metadata remains usable; rejecting ambiguous integers must not
+        # prevent the existing ordinary metadata/count schema from working.
+        @test _vs_post(path, Dict("numeric_policy" => Dict("mode" => "exact_counts"))).status == 200
+    end
+end
+
+@testset "Unknown filter columns fail before any derived record is written" begin
+    _vs_with_root() do root
+        _vs_make_run(root)
+        path = "/api/v1/studies/studyV/runs/run1/statistics/summaries"
+        request = Dict("numeric_policy" => Dict("mode" => "exact_counts"), "table" => "merged")
+        directory = joinpath(root, "projects", "studyV", "run1", "derived", "validated-statistics")
+        for criterion in (Dict("text" => "G"), Dict("include" => ["G"]),
+                          Dict("exclude" => ["G"]), Dict("min" => 1), Dict("max" => 1))
+            response = _vs_post(path, merge(request, Dict("colFilters" => Dict("unknown" => criterion))))
+            @test response.status == 400
+            @test !isdir(directory) || isempty(readdir(directory))
+        end
+        response = _vs_post(path, merge(request, Dict("colFilters" => Dict("Genus" => Dict("text" => "H")))))
+        @test response.status == 200
+        result = JSON3.read(String(response.body))
+        @test only(filter(s -> s.label == "s1", result.samples)).total == 4
+        @test collect(result.samples[1].features) == ["seq3"]
+        loaded = JSON3.read(String(_vs_get("/api/v1/studies/studyV/runs/run1/statistics/derived/$(result.analysis_id)").body))
+        @test loaded.config.filters["col.Genus"] == "H"
+        @test loaded.result.samples == result.samples
     end
 end
 

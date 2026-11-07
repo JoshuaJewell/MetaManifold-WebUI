@@ -86,12 +86,40 @@ end
     @test !check(137, rejected; expected_rejection="reviewed limit changed")
 end
 
+@testset "Simulation errors retain reference precision and restore MPFR state" begin
+    NP = MetaManifold.NumericPolicy
+    reference, _ = NP.with_precision(; bits=4096) do
+        BigFloat(1) + BigFloat(2)^(-600) + BigFloat(2)^(-900)
+    end
+    observed, _ = NP.with_precision(; bits=512) do
+        BigFloat(1)
+    end
+    expected, _ = NP.with_precision(; bits=4096) do
+        difference = BigFloat(2)^(-600) + BigFloat(2)^(-900)
+        (absolute=difference, relative=difference / reference)
+    end
+    # The operands agree at 256 bits, while the difference has two terms more
+    # than 256 bits apart. Comparing at ambient precision loses the lower term.
+    for ambient in (128, 256, 512)
+        NP.with_precision(; bits=ambient) do
+            errors = StatisticsSimulationScript.metric_errors(observed, reference)
+            @test precision(errors.absolute) == 4096
+            @test precision(errors.relative) == 4096
+            @test errors == expected
+            @test errors.absolute > 0
+            @test precision(BigFloat) == ambient
+            @test rounding(BigFloat) == RoundNearest
+        end
+    end
+end
+
 @testset "Simulation evidence is retained as readable JSON" begin
     mktempdir() do directory
         output = joinpath(directory, "simulation.json")
         @test StatisticsSimulationScript.main(["--replicates", "1", "--output", output]) == 0
         report = JSON3.read(read(output, String))
         @test report.complete === true
+        @test report.comparison_bits == report.reference_bits == 4096
         @test isempty(report.exact_failures)
         @test isempty(report.metric_failures)
     end

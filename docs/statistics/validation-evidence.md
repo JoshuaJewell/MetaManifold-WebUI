@@ -68,6 +68,29 @@ the sources, attribution and scope inference about the download. This
 corrects the earlier incomplete description of the published terms; it does
 not supply a new dataset-specific permission or a release approval.
 
+## PR review regressions
+
+The run-route regressions in `test/unit/test_validated_statistics.jl` cover
+default and saved table names, typed filters, unknown filter columns, sample
+names colliding with projected feature labels, and subgroup names such as
+`A` and `AB`. Reserved integer names such as `total` are explicitly rejected
+when their count/metadata role is ambiguous. Subgroups use the same underscore-delimited prefix contract as
+the existing analysis routes. Tests check the persisted results and selected
+sample columns as well as the response.
+
+`frontend/src/components/AnalysisWorkspace.test.ts` renders the workspace and
+descriptive panel, toggles aggregation, and checks the submitted scope,
+displayed total, downloaded JSON and rejection of a stale response. Its pinned
+React 18 test renderer is a development dependency; the package and lockfile
+change supports this interaction test without adding production code.
+
+The simulation now measures absolute and relative errors inside the same
+4096-bit precision scope as its reference computation. A regression checks
+differences with significant terms more than 256 bits apart under several
+ambient precisions, and verifies restoration of MPFR state. New reports record
+`comparison_bits`; earlier reports lacking it did not measure the error at the
+declared reference precision and must not substitute for the corrected run.
+
 ## Required decisions that remain separate
 
 | Gate | Evidence required |

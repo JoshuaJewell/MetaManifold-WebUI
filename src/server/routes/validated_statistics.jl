@@ -310,6 +310,19 @@ function _validated_integer_sample_columns(con, table::String, columns::Vector{S
         end
     end
     samples = Analysis.sample_columns(con, table)
+    # The shared detector reserves metadata names and suffixes, but FASTQ
+    # sample stems can use them too. Without an authoritative column-role map
+    # an excluded integer column is ambiguous: neither silently omit it nor
+    # reinterpret possible metadata as reads. Direct labelled counts remain
+    # available when the source schema cannot establish the sample set.
+    selected = Set(samples)
+    for column in columns
+        if get(types, column, "") in _DUCKDB_INTEGER_TYPES && !(column in selected)
+            throw(UnsupportedRepresentationError("an unambiguous supported count schema",
+                "integer column '$column' is excluded by the sample detector",
+                "validated statistics; use an explicit labelled count matrix to distinguish counts from metadata"))
+        end
+    end
     isempty(samples) && throw(ArgumentError("no sample count columns were found"))
     for sample in samples
         type = get(types, sample, "")
@@ -339,9 +352,7 @@ function _validated_duckdb_counts(con, table::String, columns::Vector{String};
                                   cancellation=nothing)
     check_cancelled!(cancellation)
     samples = _validated_integer_sample_columns(con, table, columns)
-    if !isnothing(prefix)
-        samples = filter(c -> startswith(c, prefix), samples)
-    end
+    samples = _filter_by_prefix(samples, prefix)
     isempty(samples) && throw(ArgumentError("no sample columns remain after the prefix filter"))
     sample_symbols = Symbol.(samples)
 
@@ -362,7 +373,16 @@ function _validated_duckdb_counts(con, table::String, columns::Vector{String};
         "COALESCE(NULLIF(CAST($(_sql_identifier(taxon)) AS VARCHAR), ''), 'Unassigned')"
     end
     count_columns = join([_sql_identifier(c) for c in samples], ", ")
-    sql = "SELECT $feature_expression AS feature, $count_columns FROM $(_sql_identifier(table)) " *
+    # DuckDB identifiers are case-insensitive. Reserve a label alias outside the
+    # source schema so a sample named `feature` (or our internal name) keeps its
+    # own count column and cannot be mistaken for the projected feature label.
+    source_names = Set(lowercase.(columns))
+    feature_alias = "__validated_feature"
+    while lowercase(feature_alias) in source_names
+        feature_alias *= "_"
+    end
+    feature_symbol = Symbol(feature_alias)
+    sql = "SELECT $feature_expression AS $(_sql_identifier(feature_alias)), $count_columns FROM $(_sql_identifier(table)) " *
           where_clause
 
     # A SQL GROUP BY would either overflow fixed-width SUM or require an
@@ -382,10 +402,11 @@ function _validated_duckdb_counts(con, table::String, columns::Vector{String};
                 for row in DuckDB.Tables.rows(chunk_columns)
                     raw_rows += 1
                     check_cancelled_periodically!(cancellation, raw_rows)
-                    ismissing(row.feature) && throw(UnsupportedRepresentationError(
+                    feature_value = row[feature_symbol]
+                    ismissing(feature_value) && throw(UnsupportedRepresentationError(
                         "a non-missing feature label", "missing",
                         "validated run statistics row $raw_rows"))
-                    feature = string(row.feature)
+                    feature = string(feature_value)
                     i = get(feature_rows, feature, 0)
                     if iszero(i)
                         n_features = length(features) + 1
@@ -511,7 +532,7 @@ end
 
         outcome = _with_analysis_results_table(study, run, table; group, readonly=true) do con, columns
             for key in keys(params)
-                startswith(key, "col_") || continue
+                (startswith(key, "col_") || startswith(key, "col.")) || continue
                 column = split(key, '.'; limit=2)[end]
                 column in columns || throw(ArgumentError("unknown filter column '$column'"))
             end
