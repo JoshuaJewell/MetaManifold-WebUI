@@ -60,12 +60,13 @@ Attribution: Kozich JJ, Westcott SL, Baxter NT, Highlander SK, Schloss PD (2013)
 [Development of a dual-index sequencing strategy and curation pipeline for
 analyzing amplicon sequence data on the MiSeq Illumina sequencing platform](https://doi.org/10.1128/AEM.01043-13),
 Applied and Environmental Microbiology 79(17):5112–5120. Mothur MiSeq SOP
-accessed 7 November 2026. The paper's data-availability section links to the
-Mothur-hosted sequences. Neither that section nor the inspected SOP page
-states a separate FASTQ redistribution licence. The repository's code licence does not
-by itself establish the FASTQ dataset's redistribution licence. Record the
-actual data-use terms or obtain a decision from the responsible data owner
-before a redistribution/release claim.
+accessed 7 November 2026. The paper links the Mothur-hosted sequences. The
+publisher's site-wide notice and upstream's explicit FASTQ annotations give
+a published CC BY 4.0 basis. All six decompressed inputs match the original
+SOP archive byte-for-byte. The [data-use record](miseq-data-use.md) documents
+the sources, attribution and scope inference about the download. This
+corrects the earlier incomplete description of the published terms; it does
+not supply a new dataset-specific permission or a release approval.
 
 ## Required decisions that remain separate
 
@@ -73,9 +74,12 @@ before a redistribution/release claim.
 | --- | --- |
 | Numerical implementation | Passing known-answer, boundary, adversarial and independent-reference checks at a recorded revision |
 | Real pipeline | Retained generated matrix, source/configuration/software provenance and an independent passing receipt |
-| Data use | Recorded applicable terms, attribution and any necessary rights approval |
+| Data use | Published CC BY 4.0 basis and attribution documented in `miseq-data-use.md`; record the maintainer's assessment of any specific scope concern |
 | Independent scientific review | A named qualified reviewer, scope reviewed, findings, limitations, date and explicit decision |
 | Upstream release | JoshuaJewell's explicit approval after the focused PR and required CI pass |
 
 Never populate reviewer or approver fields on someone else's behalf. Keep the
 issue open while any applicable gate is outstanding.
+
+Use the [review and decision forms](issue-65-review.md) to record actual
+scientific and maintainer decisions for a specific revision.
