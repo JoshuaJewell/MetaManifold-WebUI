@@ -172,8 +172,50 @@ function _json_exact_count(value, feature::String, sample::String)
 end
 
 function _validated_filter_params(body)
+    filter_text = get(body, :filter, nothing)
+    (isnothing(filter_text) || filter_text isa AbstractString) ||
+        throw(ArgumentError("filter must be a string"))
+    filters = get(body, :colFilters, nothing)
+    normalized_filters = Dict{String,Any}()
+    if !isnothing(filters)
+        (filters isa JSON3.Object || filters isa AbstractDict) ||
+            throw(ArgumentError("colFilters must be an object"))
+        for (column, specification) in pairs(filters)
+            string(column) == SAMPLE_READS_FILTER_KEY && throw(ArgumentError(
+                "sample read filters are not supported for validated statistics"))
+            (specification isa JSON3.Object || specification isa AbstractDict) ||
+                throw(ArgumentError("each column filter must be an object"))
+            normalized = Dict{Symbol,Any}()
+            for (field, value) in pairs(specification)
+                name = string(field)
+                name in ("include", "exclude", "text", "min", "max") ||
+                    throw(ArgumentError("unsupported column filter field '$name'"))
+                isnothing(value) && continue # cleared UI fields are inactive
+                if name in ("include", "exclude")
+                    (value isa AbstractVector && all(v -> v isa AbstractString, value)) ||
+                        throw(ArgumentError("$name must be an array of strings"))
+                    isempty(value) && continue
+                    # The shared query helper transports these through a pipe-
+                    # separated string. Refuse values it cannot represent intact.
+                    any(v -> isempty(v) || occursin('|', v), value) &&
+                        throw(UnsupportedRepresentationError("a lossless column filter", repr(value),
+                            "validated statistics; empty or pipe-containing filter values are unsupported"))
+                elseif name == "text"
+                    value isa AbstractString || throw(ArgumentError("text filter must be a string"))
+                else
+                    (value isa Real && !(value isa Bool) && isfinite(value)) ||
+                        throw(ArgumentError("$name filter must be a finite number"))
+                end
+                normalized[Symbol(name)] = value
+            end
+            lower, upper = get(specification, :min, nothing), get(specification, :max, nothing)
+            (!isnothing(lower) && !isnothing(upper) && lower > upper) &&
+                throw(ArgumentError("column filter min must not exceed max"))
+            normalized_filters[string(column)] = normalized
+        end
+    end
     try
-        _body_filter_params(body)
+        _body_filter_params(Dict(:filter => filter_text, :colFilters => normalized_filters))
     catch err
         err isa InterruptException && rethrow()
         throw(ArgumentError("invalid filter parameters: $(sprint(showerror, err))"))

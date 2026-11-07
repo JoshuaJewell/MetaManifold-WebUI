@@ -30,6 +30,15 @@ and hardware remain part of the trusted execution base.
 
 ## Boundaries
 
+Validated run statistics use `merged` when no table is named and accept the same
+safe table names as saved composition tables. Column filters must match the
+typed request contract: string arrays for inclusion/exclusion, a string for
+text, and finite numeric bounds with min <= max. Unknown or malformed fields
+are refused. The shared filter transport cannot preserve empty or
+pipe-containing inclusion/exclusion values, so this route explicitly refuses
+them rather than silently changing the requested rows. Empty arrays and null
+fields mean an inactive filter. Sample-read filtering remains unsupported.
+
 * Direct HTTP input must use integer JSON tokens through `2^53 - 1`; larger
   counts must be whole-number strings. Fractional/exponent tokens, including
   `1.0` and `1e0`, are refused before their syntax can be erased by JSON parsing.

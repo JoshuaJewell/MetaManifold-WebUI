@@ -274,6 +274,25 @@ end
         @test filtered_result.samples[1].label == "s2"
         @test collect(filtered_result.samples[1].counts) == [string(big(2)^126)]
 
+        selected = _vs_post(path, merge(request, Dict("colFilters" => Dict(
+            "Genus" => Dict("include" => ["G"], "exclude" => ["H"], "text" => "G")))))
+        @test selected.status == 200
+        @test collect(JSON3.read(String(selected.body)).samples[1].features) == ["G"]
+        for specification in (Dict("include" => "G"), Dict("exclude" => 1),
+            Dict("include" => [1]), Dict("text" => true), Dict("min" => "1"),
+            Dict("max" => true), Dict("min" => 2, "max" => 1), Dict("incldue" => ["G"]), 1)
+            rejected = _vs_post(path, merge(request, Dict("colFilters" => Dict("Genus" => specification))))
+            @test rejected.status == 400
+        end
+        @test _vs_post(path, merge(request, Dict("colFilters" => ["G"]))).status == 400
+        @test _vs_post(path, merge(request, Dict("filter" => ["G"]))).status == 400
+        for values in (["G|H"], [""])
+            @test _vs_post(path, merge(request, Dict("colFilters" => Dict(
+                "Genus" => Dict("include" => values))))).status == 422
+        end
+        cleared = Dict("include" => String[], "exclude" => nothing, "text" => "", "min" => nothing)
+        @test _vs_post(path, merge(request, Dict("colFilters" => Dict("Genus" => cleared)))).status == 200
+
         @test _vs_post(path, merge(request, Dict("table" => "merged_float"))).status == 422
         @test _vs_post(path, merge(request, Dict("table" => "merged_negative"))).status == 400
         @test _vs_post(path, merge(request, Dict("table" => "merged_null"))).status == 422
