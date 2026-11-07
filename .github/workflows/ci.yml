@@ -351,3 +351,17 @@ jobs:
           echo /usr/share/agda-stdlib/standard-library.agda-lib > "$AGDA_DIR/libraries"
           cd proofs/agda
           agda MetaManifold/All.agda
+
+  # Every file must state its licence: an SPDX header, or an entry in REUSE.toml
+  # for files that cannot hold one. The tool version is pinned here because no
+  # other job or installer uses it. The name is a fixed string for the reason
+  # given on the test job.
+  reuse:
+    name: REUSE compliance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Check licensing
+        run: pipx run reuse==6.2.0 lint

@@ -11,8 +11,8 @@ authors:
     email: jjewell23@rvc.ac.uk
     affiliation: "Royal Veterinary College"
     orcid: "https://orcid.org/0009-0007-0289-9741"
-version: "0.1.0"
-date-released: "2026-10-19"
+version: "0.2.0"
+date-released: "2026-11-07"
 doi: "10.5281/zenodo.23464265"
 identifiers:
   - type: doi
