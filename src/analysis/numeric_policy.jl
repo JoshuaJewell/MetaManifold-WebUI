@@ -421,7 +421,18 @@ function to_display(v::NumericValue; digits::Integer=6)
     isfinite(v.value) || throw(UnsupportedRepresentationError(
         "a finite display number", string(v.value), "to_display"))
     kept = v.kind === ROUNDED && !isnothing(v.digits) ? v.digits : Int(digits)
-    rendered = _rendered_decimal(Rational{BigInt}(v.value), kept)
+    # Julia 1.12's BigFloat -> Rational conversion uses ldexp at ambient
+    # precision. Preserve the stored operand's bits before integer rendering.
+    exact_binary = if v.value isa BigFloat
+        lock(_PRECISION_LOCK) do
+            setprecision(BigFloat, precision(v.value)) do
+                Rational{BigInt}(v.value)
+            end
+        end
+    else
+        Rational{BigInt}(v.value)
+    end
+    rendered = _rendered_decimal(exact_binary, kept)
     bits = isnothing(v.precision_bits) ? "unknown precision" : "$(v.precision_bits)-bit"
     # The display is always a rounding, whatever the value's kind: an
     # approximate MPFR value shown at 6dp has still been rounded, and a reader

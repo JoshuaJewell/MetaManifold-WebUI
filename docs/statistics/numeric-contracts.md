@@ -30,6 +30,13 @@ and hardware remain part of the trusted execution base.
 
 ## Boundaries
 
+Decimal display preserves the precision stored in a BigFloat while converting
+its binary value to a rational. Julia 1.12's conversion uses an intermediate
+operation at ambient precision; leaving that precision lower could discard
+significant bits before the requested decimal rounding. Regression tests retain
+the 100-place display of `1 + 2^-300` under lower ambient precisions. This does
+not make the original floating-point metric exact.
+
 Validated run statistics use `merged` when no table is named and accept the same
 safe table names as saved composition tables. Column filters must match the
 typed request contract: string arrays for inclusion/exclusion, a string for

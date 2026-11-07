@@ -521,9 +521,13 @@ end
             throw(ArgumentError("invalid table name"))
         table = String(table)
         prefix_raw = get(body, :prefix, nothing)
-        prefix = isnothing(prefix_raw) ? nothing : string(prefix_raw)
+        (isnothing(prefix_raw) || prefix_raw isa AbstractString) ||
+            throw(ArgumentError("prefix must be a string"))
+        prefix = isnothing(prefix_raw) ? nothing : String(prefix_raw)
         level_raw = get(body, :taxonomic_level, get(body, :rank, nothing))
-        level = isnothing(level_raw) ? nothing : string(level_raw)
+        (isnothing(level_raw) || level_raw isa AbstractString) ||
+            throw(ArgumentError("taxonomic_level must be a string"))
+        level = isnothing(level_raw) ? nothing : String(level_raw)
         params = _validated_filter_params(body)
         any(startswith(key, "sample_" ) for key in keys(params)) && throw(ArgumentError(
             "sample read filters use floating-point aggregation and are not supported"))

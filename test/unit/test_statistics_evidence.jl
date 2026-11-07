@@ -124,3 +124,27 @@ end
         @test isempty(report.metric_failures)
     end
 end
+
+@testset "Reference error distinguishes a threshold-straddling excess" begin
+    NP = MetaManifold.NumericPolicy
+    observed = first(NP.with_precision(; bits=512) do
+        BigFloat(1) + BigFloat(2)^(-496)
+    end)
+    reference = first(NP.with_precision(; bits=4096) do
+        BigFloat(1) - BigFloat(2)^(-800)
+    end)
+    before = precision(BigFloat)
+    comparison = StatisticsSimulationScript.metric_errors(observed, reference)
+    exact_observed = first(NP.with_precision(; bits=4096) do
+        Rational{BigInt}(comparison.absolute)
+    end)
+    @test exact_observed == big(1)//(big(2)^496) + big(1)//(big(2)^800)
+    @test comparison.absolute > StatisticsSimulationScript.tolerance(512)
+    @test precision(comparison.absolute) == 4096
+    @test precision(comparison.relative) == 4096
+    @test precision(BigFloat) == before
+    low_error = first(NP.with_precision(; bits=256) do
+        abs(observed-reference)
+    end)
+    @test low_error == StatisticsSimulationScript.tolerance(512)
+end

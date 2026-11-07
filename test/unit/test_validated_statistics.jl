@@ -300,6 +300,8 @@ end
         end
         @test _vs_post(path, merge(request, Dict("colFilters" => ["G"]))).status == 400
         @test _vs_post(path, merge(request, Dict("filter" => ["G"]))).status == 400
+        @test _vs_post(path, merge(request, Dict("prefix" => true))).status == 400
+        @test _vs_post(path, merge(request, Dict("taxonomic_level" => 1))).status == 400
         for values in (["G|H"], [""])
             @test _vs_post(path, merge(request, Dict("colFilters" => Dict(
                 "Genus" => Dict("include" => values))))).status == 422

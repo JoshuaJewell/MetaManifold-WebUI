@@ -22,6 +22,20 @@ using MetaManifold.Canonical
     @test occursin("count overflow", sprint(showerror, CountOverflowError(big(1), big(2))))
 end
 
+@testset "High-precision display retains stored bits at lower ambient precision" begin
+    value = first(with_precision(; bits=512) do
+        BigFloat(1) + BigFloat(2)^(-300)
+    end)
+    # 2^-300 = 4.909093465...e-91, rounded here to 100 places after the point.
+    expected = "1." * repeat("0",90) * "4909093465"
+    for bits in (64,128,256)
+        with_precision(; bits) do
+            @test startswith(to_display(approximate_value(value); digits=100), expected)
+            @test precision(BigFloat) == bits
+        end
+    end
+end
+
 @testset "Policy validation and ambient rounding cannot change the claim" begin
     invalid = NumericPolicySpec(:high_precision, MAX_PRECISION_BITS + 1, 4096, 6)
     @test_throws ArgumentError assert_mode(invalid, :high_precision)
