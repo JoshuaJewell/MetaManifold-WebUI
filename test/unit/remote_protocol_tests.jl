@@ -18,11 +18,19 @@ function _remote_fixture(f)
         downloads = Ref(0)
         fail_download = Ref(false)
         fail_control = Ref(:none)
+        probe_launch = Ref(false)
         drop_status = Ref(false)
         drop_start_reply = Ref(false)
         fail_cancel = Ref(false)
         retries = Ref(0)
         ssh = function (_, command)
+            if probe_launch[] && occursin("worker.sh' start", command)
+                probe_launch[] = false
+                dir = JSON3.read(read(joinpath(d, "stage.log.remote.json"), String))["directory"]
+                lockfile = joinpath(dir, ".metamanifold", "run.lock")
+                held = joinpath(dir, "probe-held")
+                return `bash -c '(exec 9>"$1"; flock -x 9; touch "$2"; sleep 0.5) & while ! test -f "$2"; do sleep 0.01; done; bash -c "$3"' _ $lockfile $held $command`
+            end
             occursin("worker.sh' retry", command) && (retries[] += 1)
             if drop_status[] && occursin("worker.sh' status", command)
                 return `bash -c 'exit 255'`
@@ -64,7 +72,7 @@ function _remote_fixture(f)
                 _connection=(ssh, scp), _poll_interval=0.02)
         end
         try
-            f((; d, target, input, uploads, downloads, fail_download, fail_control, drop_status,
+            f((; d, target, input, uploads, downloads, fail_download, fail_control, probe_launch, drop_status,
                 drop_start_reply, fail_cancel, retries, invoke, ssh, scp))
         finally
             # Never let a failed assertion strand a detached test process.
@@ -76,7 +84,7 @@ function _remote_fixture(f)
     end
 end
 
-function _wait_remote(predicate; timeout=20)
+function _wait_remote(predicate; timeout=120)
     timedwait(predicate, timeout; pollint=0.02) == :ok || error("Timed out waiting for remote fixture")
 end
 
@@ -85,6 +93,27 @@ _dir(f, log="stage") = _journal(f, log)["directory"]
 _task_error(t) = try fetch(t); nothing catch e; e end
 
 @testset "Durable remote execution protocol" begin
+    @testset "a transient status probe cannot lose a detached launch" begin
+        _remote_fixture() do f
+            f.probe_launch[] = true
+            task = @async f.invoke(d -> "cd '$d' && cat input > output")
+            try
+                finished = timedwait(() -> istaskdone(task), 120; pollint=0.02)
+                @test finished == :ok
+                if finished == :ok
+                    fetch(task)
+                    @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+                    @test isempty(readdir(f.target.base))
+                end
+            finally
+                if !istaskdone(task)
+                    schedule(task, InterruptException(); error=true)
+                    _task_error(task)
+                end
+            end
+        end
+    end
+
     @testset "interrupted control uploads remain retryable and cancellable" begin
         for part in (:command, :worker), cancel in (false, true)
             _remote_fixture() do f

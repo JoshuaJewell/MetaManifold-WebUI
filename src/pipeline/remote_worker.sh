@@ -17,7 +17,9 @@ case "${1:-}" in
         # The lock is inherited by the workload: even if its wrapper dies, a
         # surviving child prevents another command from starting in this attempt.
         exec 9>"$control/run.lock"
-        flock -n 9 || exit 0
+        # A status/idle probe takes this lock briefly too. Do not mistake that
+        # transient owner for an already running workload and lose the launch.
+        flock -w 1 9 || exit 0
         exec 8>"$control/control.lock"
         flock -x 8 || exit 1
         [ ! -e "$control/cancel" ] && [ ! -e "$control/exit" ] &&
@@ -56,6 +58,18 @@ case "${1:-}" in
         # Retransmitting this request after losing its reply is safe. Only one
         # worker can acquire run.lock; a terminal attempt cannot launch again.
         nohup setsid bash "$control/worker.sh" run >> "$control/log" 2>&1 < /dev/null &
+        # Acknowledging only the shell fork lets an immediate status probe win
+        # run.lock before the worker. Wait for its durable launch marker before
+        # the caller polls. Startup failure is bounded and retryable, not an
+        # apparently successful start followed by an endless ready state.
+        for ((n=0; n<100; n++)); do
+            if [ -e "$control/pid" ] || [ -e "$control/exit" ] || [ -e "$control/cancel" ]; then
+                exit 0
+            fi
+            sleep 0.1
+        done
+        echo 'Remote worker did not acknowledge startup; retry the stage' >&2
+        exit 1
         ;;
     status)
         if [ -e "$control/cancel" ]; then

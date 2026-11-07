@@ -45,6 +45,9 @@ has no SSH standard streams. Repeating a launch request after losing its reply
 cannot start another workload while the attempt's execution lock is held.
 Successful exit markers also prevent relaunch. The log is read in bounded
 chunks on each connection.
+Start acknowledges the worker's durable launch marker before polling begins,
+and the worker tolerates the brief execution-lock ownership of a status probe.
+A missing startup acknowledgement is a bounded, retryable error.
 Control scripts are uploaded to unique temporary names, checksummed, and renamed
 into place. A partial upload is never executed as the installed status worker.
 
