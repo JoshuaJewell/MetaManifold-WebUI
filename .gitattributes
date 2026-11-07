@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: MPL-2.0
+
+# The uploaded Linux worker must remain executable by Bash after a Windows clone.
+src/pipeline/remote_worker.sh text eol=lf

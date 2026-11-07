@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Phylogenetic placement: FASTA intake, settings, the command lines each step
@@ -9,11 +10,54 @@ using JSON3, YAML, DuckDB, DBInterface, Random
 const _PH = MetaManifold.Phylogeny
 const _PSV = MetaManifold.Server
 
+@testset "Interrupted phylogeny status is recoverable" begin
+    for key in ("ref:interrupted", "pl:study/interrupted")
+        mktempdir() do dir
+            _PH._update_status!(dir, st -> begin
+                st["state"] = "running"
+                st["steps"] = Dict("align" => Dict("state" => "done"),
+                                   "tree" => Dict("state" => "running"))
+            end)
+            @test _PSV._state(dir, key) == "failed"
+            status = _PH.read_status(dir)
+            @test status["steps"]["align"]["state"] == "done"
+            @test status["steps"]["tree"]["state"] == "failed"
+            @test occursin("interrupted", status["error"])
+            @test _PSV._state(dir, key) == "failed" # reconciliation is idempotent
+        end
+    end
+    mktempdir() do dir
+        gate = Channel{Nothing}(1)
+        job = _PSV._submit_phylo("ref:live-recovery-test") do
+            take!(gate)
+        end
+        try
+            _PH._update_status!(dir, st -> (st["state"] = "running"))
+            @test _PSV._state(dir, "ref:live-recovery-test") == "running"
+            @test _PH.read_status(dir)["state"] == "running"
+        finally
+            put!(gate, nothing)
+            task = job.task
+            isnothing(task) || wait(task)
+        end
+    end
+end
+
 _ph_request(method, path, body="", headers=["Content-Type" => "application/json"]) =
     _PSV.Oxygen.internalrequest(_PSV.HTTP.Request(method, path, headers, body))
 _ph_json(r) = JSON3.read(String(r.body))
 
 _ph_factory() = YAML.load_file(joinpath(@__DIR__, "..", "..", "config", "defaults", "pipeline.yml"))
+
+@testset "Remote IQ-TREE accepts its checkpoint" begin
+    settings = _PH.placement_settings(_ph_factory())
+    step = only(s for s in _PH.REFERENCE_STEPS if s.name == "tree")
+    bins = Dict("iqtree" => "iqtree")
+    local_command = only(_PH.step_commands(step, settings, bins, 2, 123; path=identity))
+    remote_command = only(_PH.step_commands(step, settings, bins, 2, 123; path=identity, resume=true))
+    @test "-redo" in split(local_command)
+    @test !("-redo" in split(remote_command))
+end
 
 # Sequences related by a simple tree: two clades of four, and query fragments from each.
 function _ph_sequences(rng)

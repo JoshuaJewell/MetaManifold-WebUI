@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 # SPDX-License-Identifier: MPL-2.0
 
 # Bioserver offload: where a stage runs, how many threads it runs with, and what
@@ -7,6 +8,10 @@
 # far side of the connection belongs to the integration suite.
 
 using CodecZlib
+
+if Sys.islinux()
+    include("remote_protocol_tests.jl")
+end
 
 const _R = MetaManifold.DADA2
 
