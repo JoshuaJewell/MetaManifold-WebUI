@@ -18,6 +18,15 @@ const _EXACT_JSON_INTEGER_MAX = 2^53 - 1
 const _DUCKDB_INTEGER_TYPES = Set([
     "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
 ])
+# DuckDB integer types that `Analysis.sample_columns` does not admit as counts.
+# A column of one of these is ambiguous rather than absent: it must be rejected
+# (`_validated_integer_sample_columns`) instead of silently omitted, whether the
+# omission comes from its unsignedness or from a reserved metadata name. BIGNUM
+# belongs here because its width is unbounded, so it cannot be read as an exact
+# 64-bit count.
+const _UNSUPPORTED_INTEGER_TYPES = Set([
+    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT", "BIGNUM",
+])
 
 # Responses are I-JSON values in RFC 8785 canonical bytes. `JSON3.write` emits
 # neither key order nor ECMAScript number formatting, so it cannot be used here:
@@ -293,18 +302,16 @@ function _statistics_cancellation(body)
     CancellationToken(; deadline_seconds=value)
 end
 
-_sql_identifier(name::AbstractString) = "\"" * replace(name, "\"" => "\"\"") * "\""
-
 function _validated_integer_sample_columns(con, table::String, columns::Vector{String})
     schema = DataFrame(DBInterface.execute(con,
         "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ?",
         [table]))
     types = Dict(string(row.column_name) => uppercase(string(row.data_type)) for row in eachrow(schema))
-    # The ordinary sample detector does not recognise these numeric types. Do
-    # not silently drop a possible sample while claiming a complete summary.
+    # DECIMAL and BOOLEAN are refused outright: the first is exact but not an
+    # integer count DuckDB will sum as one, and the second is not a count at
+    # all. Neither may be silently dropped while claiming a complete summary.
     for (column, datatype) in types
-        if startswith(datatype, "DECIMAL") || datatype in
-           ("UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT", "BOOLEAN")
+        if startswith(datatype, "DECIMAL") || datatype == "BOOLEAN"
             throw(UnsupportedRepresentationError("an unambiguous supported count schema",
                 "$column has type $datatype", "validated statistics; this column cannot be silently omitted"))
         end
@@ -317,9 +324,11 @@ function _validated_integer_sample_columns(con, table::String, columns::Vector{S
     # available when the source schema cannot establish the sample set.
     selected = Set(samples)
     for column in columns
-        if get(types, column, "") in _DUCKDB_INTEGER_TYPES && !(column in selected)
+        datatype = get(types, column, "")
+        if (datatype in _DUCKDB_INTEGER_TYPES || datatype in _UNSUPPORTED_INTEGER_TYPES) &&
+                !(column in selected)
             throw(UnsupportedRepresentationError("an unambiguous supported count schema",
-                "integer column '$column' is excluded by the sample detector",
+                "integer column '$column' ($datatype) is excluded by the sample detector",
                 "validated statistics; use an explicit labelled count matrix to distinguish counts from metadata"))
         end
     end
@@ -469,6 +478,16 @@ function _direct_source(result, labels, features, groups, counts)
     )
 end
 
+# A run inside a group is addressed either as `/runs/{run}` (the group is
+# resolved from the directory layout) or with an explicit `?group=`. Both reach
+# the same project directory, so the resolved group -- never the request's
+# optional parameter -- is what a derived record is filed under and checked
+# against. Recording the unresolved value would misidentify the record's source
+# and make the explicit form fail to retrieve a record the implicit form
+# created.
+_resolved_run_group(study::String, run::String, group::Union{String,Nothing}) =
+    isnothing(group) ? _run_group(study, run) : group
+
 function _derived_run_directory(study::String, run::String; group=nothing)
     joinpath(_run_project_dir(study, run; group), "derived", "validated-statistics")
 end
@@ -508,7 +527,7 @@ end
     _statistics_guard() do
         err = _validate_run_request(study, run)
         !isnothing(err) && return err
-        group = _req_group(req)
+        group = _resolved_run_group(study, run, _req_group(req))
         body = _statistics_body(req)
         _statistics_fields(body, ("numeric_policy", "table", "prefix", "groups",
                                   "time_limit_seconds", "taxonomic_level", "rank", "colFilters", "filter"))
@@ -602,7 +621,7 @@ end
     _statistics_guard() do
         err = _validate_run_request(study, run)
         !isnothing(err) && return err
-        group = _req_group(req)
+        group = _resolved_run_group(study, run, _req_group(req))
         directory = _derived_run_directory(study, run; group)
         record = load_derived_analysis(directory, id)
         _check_derived_source(record, "study_id", study)

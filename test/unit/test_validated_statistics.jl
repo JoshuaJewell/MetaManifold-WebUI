@@ -203,6 +203,10 @@ function _vs_make_run(root::String)
         DBInterface.execute(con, """INSERT INTO merged_aliases VALUES
             ('seq2', 'G', 2, 20, 200, 9007199254740993),
             ('seq1', 'G', 1, 10, 100, 1), ('seq3', 'H', 4, 40, 400, 3)""")
+        # An unbounded integer is an integer the detector cannot name, so it
+        # must be refused rather than silently dropped.
+        DBInterface.execute(con, "CREATE TABLE merged_bignum (SeqName VARCHAR, Genus VARCHAR, s1 BIGINT, counted BIGNUM)")
+        DBInterface.execute(con, "INSERT INTO merged_bignum VALUES ('x', 'G', 1, 2)")
         DBInterface.execute(con, """CREATE TABLE merged_subgroups (
             SeqName VARCHAR, Genus VARCHAR, A_one BIGINT, A_two BIGINT, AB_one BIGINT)""")
         DBInterface.execute(con, """INSERT INTO merged_subgroups VALUES
@@ -447,4 +451,82 @@ end
     @test length(multibyte_payload) < limit
     @test ncodeunits(multibyte_payload) > limit
     @test_throws MetaManifold.NumericPolicy.ResourceLimitError VALIDATED_SV._statistics_body((; body = multibyte_payload))
+end
+
+@testset "Saved-table filter columns are quoted, not interpolated" begin
+    _vs_with_root() do root
+        _vs_make_run(root)
+        path = "/api/v1/studies/studyV/runs/run1/statistics/summaries"
+        # A column name the safe-name contract for *tables* still admits as a
+        # saved table's column: `odd"sample` already exists in merged_aliases.
+        request = Dict("numeric_policy" => Dict("mode" => "exact_counts"),
+                       "table" => "merged_aliases", "taxonomic_level" => "Genus")
+        for filters in (Dict("filter" => "G"),
+                        Dict("colFilters" => Dict("Genus" => Dict("text" => "G"))),
+                        Dict("colFilters" => Dict("Genus" => Dict("include" => ["G"]))),
+                        Dict("colFilters" => Dict("Genus" => Dict("exclude" => ["H"]))),
+                        Dict("colFilters" => Dict("Pident" => Dict("min" => 1, "max" => 99))))
+            response = _vs_post(path, merge(request, filters))
+            @test response.status == 200
+        end
+        # The quoted identifier itself also builds valid SQL. `min` on a sample
+        # column is refused by the exact-integer count-filter guard, which runs
+        # after the predicate is built, so reaching that refusal -- and not a
+        # 500 from malformed SQL -- is the regression under test.
+        quoted = _vs_post(path, merge(request,
+            Dict("colFilters" => Dict("odd\"sample" => Dict("min" => 1)))))
+        @test quoted.status == 422
+        @test occursin("count-filter", String(quoted.body))
+    end
+end
+
+@testset "An unbounded integer cannot be silently omitted" begin
+    _vs_with_root() do root
+        _vs_make_run(root)
+        path = "/api/v1/studies/studyV/runs/run1/statistics/summaries"
+        for mode in ("exact_counts", "high_precision")
+            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => mode),
+                "table" => "merged_bignum"))
+            @test response.status == 422
+            @test occursin("BIGNUM", String(response.body))
+        end
+        directory = joinpath(root, "projects", "studyV", "run1", "derived", "validated-statistics")
+        @test !isdir(directory) || isempty(readdir(directory))
+    end
+end
+
+@testset "A grouped run files and retrieves its record under the resolved group" begin
+    _vs_with_root() do root
+        _vs_make_run(root)
+        # A second run that lives inside a group directory.
+        grouped = joinpath(root, "data", "studyV", "grpA", "runG")
+        mkpath(grouped)
+        touch(joinpath(grouped, "g1_R1.fastq.gz"))
+        write(joinpath(grouped, "pipeline.yml"), "analysis:\n  exclude_categories: []\n")
+        merge_dir = joinpath(root, "projects", "studyV", "grpA", "runG", "merged")
+        mkpath(merge_dir)
+        db = DuckDB.DB(joinpath(merge_dir, "results.duckdb"))
+        con = DBInterface.connect(db)
+        try
+            DBInterface.execute(con, """CREATE TABLE merged (
+                SeqName VARCHAR, Genus VARCHAR, g1 BIGINT, g2 BIGINT)""")
+            DBInterface.execute(con, "INSERT INTO merged VALUES ('seq1', 'G', 1, 2), ('seq2', 'H', 3, 4)")
+        finally
+            DBInterface.close!(con)
+            close(db)
+        end
+        request = Dict("numeric_policy" => Dict("mode" => "exact_counts"),
+                       "table" => "merged", "taxonomic_level" => "Genus")
+        implicit = _vs_post("/api/v1/studies/studyV/runs/runG/statistics/summaries", request)
+        @test implicit.status == 200
+        id = String(JSON3.read(String(implicit.body)).analysis_id)
+        @test isfile(joinpath(root, "projects", "studyV", "grpA", "runG", "derived",
+                              "validated-statistics", "$id.json"))
+        # The record names the group it was actually read from, so the explicit
+        # query form retrieves it instead of failing the source check.
+        loaded = _vs_get("/api/v1/studies/studyV/runs/runG/statistics/derived/$id?group=grpA")
+        @test loaded.status == 200
+        @test JSON3.read(String(loaded.body)).source.run_group == "grpA"
+        @test _vs_get("/api/v1/studies/studyV/runs/runG/statistics/derived/$id").status == 200
+    end
 end

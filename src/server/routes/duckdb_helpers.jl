@@ -5,6 +5,12 @@
 using JSON3, DataFrames, OrderedCollections, DuckDB, DBInterface
 
 ## DuckDB SQL helpers
+# A double-quoted DuckDB identifier, with an embedded quote doubled. Results
+# come from saved and uploaded tables whose column names are not restricted to
+# the safe-name set, so every identifier that reaches SQL is quoted here rather
+# than interpolated between raw quotes.
+_sql_identifier(name::AbstractString) = "\"" * replace(name, "\"" => "\"\"") * "\""
+
 function _duckdb_columns(con, table::String)
     result = DBInterface.execute(con, "SELECT column_name FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position", [table])
     df = DataFrame(result)
@@ -136,7 +142,7 @@ function _build_where(params::Dict{String,String}, columns::Vector{String})
         col = k[5:end]
         col in col_set || continue
         isempty(v) && continue
-        push!(clauses, "LOWER(CAST(\"$col\" AS VARCHAR)) LIKE ?")
+        push!(clauses, "LOWER(CAST($(_sql_identifier(col)) AS VARCHAR)) LIKE ?")
         push!(sql_params, "%" * lowercase(v) * "%")
     end
 
@@ -149,7 +155,7 @@ function _build_where(params::Dict{String,String}, columns::Vector{String})
             push!(clauses, "1 = 0")  # empty include = match nothing
         else
             placeholders = join(["?" for _ in vals], ", ")
-            push!(clauses, "CAST(\"$col\" AS VARCHAR) IN ($placeholders)")
+            push!(clauses, "CAST($(_sql_identifier(col)) AS VARCHAR) IN ($placeholders)")
             append!(sql_params, vals)
         end
     end
@@ -161,7 +167,7 @@ function _build_where(params::Dict{String,String}, columns::Vector{String})
         isempty(v) && continue
         vals = split(v, "|")
         placeholders = join(["?" for _ in vals], ", ")
-        push!(clauses, "CAST(\"$col\" AS VARCHAR) NOT IN ($placeholders)")
+        push!(clauses, "CAST($(_sql_identifier(col)) AS VARCHAR) NOT IN ($placeholders)")
         append!(sql_params, vals)
     end
 
@@ -171,7 +177,7 @@ function _build_where(params::Dict{String,String}, columns::Vector{String})
         col in col_set || continue
         threshold = tryparse(Float64, v)
         isnothing(threshold) && continue
-        push!(clauses, "TRY_CAST(\"$col\" AS DOUBLE) IS NOT NULL AND TRY_CAST(\"$col\" AS DOUBLE) >= ?")
+        push!(clauses, "TRY_CAST($(_sql_identifier(col)) AS DOUBLE) IS NOT NULL AND TRY_CAST($(_sql_identifier(col)) AS DOUBLE) >= ?")
         push!(sql_params, threshold)
     end
 
@@ -181,13 +187,13 @@ function _build_where(params::Dict{String,String}, columns::Vector{String})
         col in col_set || continue
         threshold = tryparse(Float64, v)
         isnothing(threshold) && continue
-        push!(clauses, "TRY_CAST(\"$col\" AS DOUBLE) IS NOT NULL AND TRY_CAST(\"$col\" AS DOUBLE) <= ?")
+        push!(clauses, "TRY_CAST($(_sql_identifier(col)) AS DOUBLE) IS NOT NULL AND TRY_CAST($(_sql_identifier(col)) AS DOUBLE) <= ?")
         push!(sql_params, threshold)
     end
 
     filter_q = get(params, "filter", nothing)
     if !isnothing(filter_q) && !isempty(filter_q)
-        col_checks = join(["LOWER(CAST(\"$c\" AS VARCHAR)) LIKE ?" for c in columns], " OR ")
+        col_checks = join(["LOWER(CAST($(_sql_identifier(c)) AS VARCHAR)) LIKE ?" for c in columns], " OR ")
         push!(clauses, "($col_checks)")
         for _ in columns
             push!(sql_params, "%" * lowercase(filter_q) * "%")
