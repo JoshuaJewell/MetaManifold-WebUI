@@ -124,6 +124,15 @@ end
     # Rounding is performed by integer quotient/remainder, not Float64/Printf.
     @test occursin("3dp = -0.013", to_display(exact_value(big(-25)//2000); digits=3))
     @test occursin("0dp = 1", to_display(exact_value(big(1)//2); digits=0))
+    for T in (Int8, Int16, Int32, Int64, Int128)
+        smallest = typemin(T)
+        @test to_display(exact_value(smallest // one(T)); digits=0) ==
+            "$smallest/1 (exact; 0dp = $smallest)"
+        @test to_display(exact_value(smallest // T(3)); digits=6) ==
+            to_display(exact_value(BigInt(smallest) // 3); digits=6)
+    end
+    @test endswith(to_display(exact_value(typemin(Int64) // 3); digits=6),
+        "6dp = -3074457345618258602.666667)")
     @test to_storage(exact_value(3)) == 3
     @test to_storage(exact_value(big(2)^53)) == string(big(2)^53)
     @test to_storage(exact_value(big(1)//3)) == "1/3"

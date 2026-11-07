@@ -402,7 +402,8 @@ function _rendered_decimal(x::Rational, digits::Integer)
     digits <= MAX_ROUND_DIGITS || throw(ResourceLimitError(
         "display decimal places", MAX_ROUND_DIGITS, Int(digits)))
     scale = big(10)^digits
-    scaled = _rounded_scaled(abs(numerator(x)), denominator(x), scale)
+    # abs(typemin(T)) overflows for fixed-width signed integers. Widen first.
+    scaled = _rounded_scaled(abs(big(numerator(x))), denominator(x), scale)
     sign_string = numerator(x) < 0 && !iszero(scaled) ? "-" : ""
     digits == 0 && return string(sign_string, scaled)
     whole, frac = divrem(scaled, scale)
