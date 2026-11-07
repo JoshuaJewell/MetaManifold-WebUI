@@ -254,6 +254,7 @@ vignettes/*.pdf
 ## Documentation kept local except published release notes
 docs/*
 !docs/release-notes/
+!docs/guide/
 
 # translation temp files
 
