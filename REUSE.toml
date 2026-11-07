@@ -34,3 +34,9 @@ path = "data/MiSeq_SOP/**/*.fastq.gz"
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2019 Patrick D. Schloss"
 SPDX-License-Identifier = "CC-BY-4.0"
+
+[[annotations]]
+path = "test/fixtures/jcs_oracle.jsonl"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>"
+SPDX-License-Identifier = "MPL-2.0"

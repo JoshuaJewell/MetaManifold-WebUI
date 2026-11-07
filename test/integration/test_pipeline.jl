@@ -50,7 +50,7 @@ include("threaded_checks.jl")
 
     tcfg = YAML.load_file(tools_config)
     vsearch_path = let e = get(tcfg, "vsearch", nothing)
-        e isa Dict ? get(e, "path", "vsearch") : something(e, "vsearch")
+        e isa Dict ? something(get(e, "path", nothing), "vsearch") : something(e, "vsearch")
     end
     if isnothing(Sys.which(string(vsearch_path))) && !isfile(string(vsearch_path))
         @warn "Integration test skipped: vsearch not found at '$vsearch_path'"

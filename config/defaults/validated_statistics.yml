@@ -1,0 +1,262 @@
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: MPL-2.0
+
+---
+{
+  schema: "metamanifold.statistics-method-catalogue.v1",
+  catalogue: {
+    id: "metamanifold.statistics-method-catalogue.v1",
+    status: "pending_review",
+    review_status: "independent scientific review and upstream release approval pending",
+    review_reference: "https://github.com/JoshuaJewell/MetaManifold-WebUI/issues/65",
+    scope: "v1 permits exact descriptive summaries and high-precision descriptive diversity; parametric fits and resampling remain catalogued but unimplemented; exact statistical tests are deferred; symbolic mathematics is out of scope",
+    claim_language: "descriptive only; no hypothesis test, confidence interval, significance claim or estimator coverage guarantee is made by a supported method in this release",
+  },
+  methods: [
+    {
+      id: "exact-descriptive-summaries",
+      status: "supported",
+      summary: "Per-sample and per-group integer totals, observed richness, and exact rational proportions.",
+      implementation: "src/analysis/exact_summaries.jl",
+      response_types: [
+        "non-negative integer counts",
+        "unit-denominator rational counts",
+      ],
+      designs: [
+        "per-sample summaries; independence is not required for this arithmetic",
+        "optional alignment-preserving sample groups",
+      ],
+      supported_conditions: [
+        "counts are exact non-negative integers or rationals with denominator one",
+        "sample and feature labels are non-blank and unique",
+        "the validated matrix is at most the published cell limit",
+        "a zero-total sample or group is reported as undefined, not as zero",
+      ],
+      unsupported_conditions: [
+        "negative, fractional, missing, NaN or infinite counts",
+        "floating-point counts through the HTTP boundary",
+        "labels outside the I-JSON string contract",
+        "any hypothesis test, confidence interval or significance claim",
+      ],
+      uncertainty: "not estimated; this is a descriptive transformation, not an estimator with a sampling distribution claim",
+      effect_sizes: "not applicable; totals and proportions are the reported quantities",
+      multiple_testing: "not applicable; no hypothesis test is performed",
+      diagnostics: [
+        "counts",
+        "total",
+        "proportions",
+        "proportions_defined",
+        "status",
+        "warnings",
+      ],
+      warnings: [
+        "a zero-total sample has undefined proportions",
+        "floating-point input is refused rather than upgraded",
+        "proportions describe the supplied counts; they do not remove sampling or measurement error",
+      ],
+      references: [
+        "Shannon, C. E. (1948). A mathematical theory of communication.",
+        "Simpson, E. H. (1949). Measurement of diversity.",
+      ],
+      evidence: [
+        "test/unit/test_exact_summaries.jl",
+        "test/unit/test_statistics_boundaries.jl",
+        "test/unit/test_statistics_adversarial.jl",
+        "test/unit/test_statistics_properties.jl",
+        "test/references/exact_summary_reference.py",
+        "docs/statistics/numeric-contracts.md",
+      ],
+    },
+    {
+      id: "high-precision-descriptive-diversity",
+      status: "supported",
+      summary: "Observed richness, Shannon entropy and Gini-Simpson diversity computed from exact integer counts at an explicit MPFR precision.",
+      implementation: "src/analysis/high_precision.jl",
+      response_types: [
+        "non-negative integer counts",
+      ],
+      designs: [
+        "per-sample summaries; independence is not required for this arithmetic",
+      ],
+      supported_conditions: [
+        "counts are exact non-negative integers",
+        "precision_bits is greater than 53 and at most the published limit",
+        "the exact rational budget covers the Gini-Simpson intermediate",
+        "a zero-total sample is reported as undefined, not as zero",
+      ],
+      unsupported_conditions: [
+        "floating-point counts",
+        "group summaries in high_precision mode",
+        "interpreting the MPFR result as exact or as an uncertainty interval",
+        "any hypothesis test or significance claim",
+      ],
+      uncertainty: "no sampling uncertainty is estimated; the recorded precision is arithmetic precision only and higher precision is not exactness",
+      effect_sizes: "not applicable; the diversity indices are the reported quantities",
+      multiple_testing: "not applicable; no hypothesis test is performed",
+      diagnostics: [
+        "total",
+        "richness",
+        "shannon",
+        "gini_simpson",
+        "precision_bits",
+        "achieved_precision_bits",
+        "display",
+        "status",
+        "warnings",
+      ],
+      warnings: [
+        "higher precision reduces arithmetic rounding error, not biological or sampling uncertainty",
+        "MPFR results are approximations and are labelled approximate",
+        "display values are separately rounded and are not storage values",
+      ],
+      references: [
+        "Shannon, C. E. (1948). A mathematical theory of communication.",
+        "Simpson, E. H. (1949). Measurement of diversity.",
+        "MPFR: correctly rounded multiple-precision floating-point arithmetic.",
+      ],
+      evidence: [
+        "test/unit/test_high_precision.jl",
+        "test/references/check_high_precision_references.py",
+        "test/unit/test_statistics_boundaries.jl",
+        "test/unit/test_statistics_adversarial.jl",
+        "test/unit/test_statistics_properties.jl",
+        "docs/statistics/numeric-contracts.md",
+      ],
+    },
+    {
+      id: "parametric-model-fits",
+      status: "unsupported",
+      reason: "not implemented in this release; a method may only be implemented after its conditions document, convergence and identifiability checks, known-answer evidence and independent review are published",
+      summary: "Maximum-likelihood parametric fits, including count and composition models.",
+      response_types: [
+        "not applicable in this release",
+      ],
+      designs: [
+        "not applicable in this release",
+      ],
+      supported_conditions: [
+        "not applicable in this release",
+      ],
+      unsupported_conditions: [
+        "all parametric fits are unavailable until separately approved and validated",
+        "no ordinary or validated endpoint may fall back to a parametric model",
+      ],
+      uncertainty: "not estimated because no method in this entry is implemented",
+      effect_sizes: "not applicable",
+      multiple_testing: "not applicable",
+      diagnostics: [
+        "not applicable",
+      ],
+      warnings: [
+        "selecting a model name does not perform a fit in this release",
+      ],
+      references: [
+        "The existing R-backed differential workflow remains the only implemented inferential path; it is outside this catalogue.",
+      ],
+      evidence: [],
+    },
+    {
+      id: "nonparametric-resampling",
+      status: "unsupported",
+      reason: "not implemented in this release; exchangeability or resampling units, seeds, Monte Carlo limitations and coverage evidence must be published before a method can be supported",
+      summary: "Permutation and bootstrap analyses.",
+      response_types: [
+        "not applicable in this release",
+      ],
+      designs: [
+        "not applicable in this release",
+      ],
+      supported_conditions: [
+        "not applicable in this release",
+      ],
+      unsupported_conditions: [
+        "all permutation and bootstrap methods are unavailable until separately approved and validated",
+        "a seed alone is not a validation of exchangeability",
+      ],
+      uncertainty: "not estimated because no method in this entry is implemented",
+      effect_sizes: "not applicable",
+      multiple_testing: "not applicable",
+      diagnostics: [
+        "not applicable",
+      ],
+      warnings: [
+        "no resampling method is available in this release",
+      ],
+      references: [
+        "Anderson, M. J. (2001). A new method for non-parametric multivariate analysis of variance.",
+      ],
+      evidence: [],
+    },
+    {
+      id: "exact-statistical-tests",
+      status: "deferred",
+      reason: "deferred beyond the initial descriptive increment; tracked separately and requiring its own assumptions, supported designs, computational limits, known-answer cases and validation",
+      summary: "Exact Fisher, permutation and negative-binomial tests.",
+      response_types: [
+        "not applicable in this release",
+      ],
+      designs: [
+        "not applicable in this release",
+      ],
+      supported_conditions: [
+        "not applicable in this release",
+      ],
+      unsupported_conditions: [
+        "no exact test is implemented by the validated statistics layer in this release",
+        "an approximate method must not be substituted silently when an exact method is infeasible",
+      ],
+      uncertainty: "not applicable because no exact test is implemented",
+      effect_sizes: "not applicable",
+      multiple_testing: "not applicable",
+      diagnostics: [
+        "not applicable",
+      ],
+      warnings: [
+        "exact tests are deferred and remain unavailable",
+      ],
+      references: [
+        "R. A. Fisher (1935). The Design of Experiments.",
+      ],
+      evidence: [],
+    },
+    {
+      id: "symbolic-mathematics",
+      status: "out_of_scope",
+      reason: "symbolic algebra is outside the descriptive-statistics scope of upstream issue #65",
+      summary: "Symbolic algebraic manipulation.",
+      response_types: [
+        "not applicable",
+      ],
+      designs: [
+        "not applicable",
+      ],
+      supported_conditions: [
+        "not applicable",
+      ],
+      unsupported_conditions: [
+        "symbolic mathematics is not implemented by this descriptive-statistics layer",
+      ],
+      uncertainty: "not applicable",
+      effect_sizes: "not applicable",
+      multiple_testing: "not applicable",
+      diagnostics: [
+        "not applicable",
+      ],
+      warnings: [
+        "no symbolic result is claimed",
+      ],
+      references: [
+        "JoshuaJewell/MetaManifold-WebUI issue #65",
+      ],
+      evidence: [],
+    },
+  ],
+  limits: {
+    max_request_bytes: 16777216,
+    max_cells: 100000,
+    max_precision_bits: 4096,
+    max_denominator_bits: 65536,
+    max_count_bits: 4096,
+    max_round_digits: 100,
+  },
+}
