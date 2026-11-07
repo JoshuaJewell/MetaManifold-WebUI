@@ -202,4 +202,4 @@ function main()
     return metrics
 end
 
-abspath(PROGRAM_FILE) == @__FILE__ && main()
+abspath(PROGRAM_FILE) == (@__FILE__) && main()

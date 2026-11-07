@@ -76,4 +76,4 @@ function main()
     @info "Fetch complete" data=DATA_DIR expected=EXPECTED_DIR
 end
 
-abspath(PROGRAM_FILE) == @__FILE__ && main()
+abspath(PROGRAM_FILE) == (@__FILE__) && main()

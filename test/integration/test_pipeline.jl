@@ -27,6 +27,8 @@
 #
 # The test is skipped gracefully if tools or databases are unavailable.
 
+include("threaded_checks.jl")
+
 @testset "Integration: MiSeq SOP pipeline" begin
 
     PROJECT_ROOT = joinpath(@__DIR__, "..", "..")
@@ -107,14 +109,17 @@
     # Runs share one process, so no stage may change its working directory: two
     # runs doing so in parallel left the server in one run's folder, where every
     # later relative path (./databases among them) resolved.
+    #
+    # The runs go through threaded_checks, not a bare Threads.@threads: on the pinned
+    # Julia a @test in a @threads task reports to no testset (see threaded_checks.jl).
     start_dir = pwd()
-    Threads.@threads for (i, project) in collect(enumerate(projects))
+    threaded_checks(projects; name = p -> basename(p.dir)) do i, project
         n_samples = length(filter(f -> endswith(f, ".fastq.gz"), readdir(project.data_dir))) ÷ 2
 
         errors = validate_project(project, db_config)
         if !isempty(errors)
             @warn "Integration test: run $(basename(project.dir)) skipped - validation failed"
-            continue
+            return
         end
 
         # Stage 0: FastQC/MultiQC over the raw reads. No later stage reads its output,
