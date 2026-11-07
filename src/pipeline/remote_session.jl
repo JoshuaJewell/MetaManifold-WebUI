@@ -81,10 +81,13 @@ function _with_owner(f, path; on_interrupt=nothing)
 end
 
 # Every foreground transport is interruptible, including uploads and downloads.
-# Killing one of these SSH processes never signals the detached workload.
+# Killing one of these SSH processes never signals the detached workload. The
+# remote locale is fixed for the internal protocol commands so a translated
+# shell or dd diagnostic cannot be mistaken for a protocol reply by a status
+# parse; nothing here presents output to a person.
 function _capture(cmd)
     out = Pipe()
-    p = run(pipeline(cmd; stdout=out); wait=false)
+    p = run(pipeline(setenv(cmd, "LC_ALL" => "C"); stdout=out); wait=false)
     close(out.in)
     try
         bytes = read(out)
@@ -147,6 +150,10 @@ end
 # Cancellation covers the whole owner-locked operation, including hashing and
 # command construction before a reconnect. Read the durable journal so the stop
 # always addresses the attempt's original host/key, even after settings change.
+# `connection` is the transport of the operation being interrupted, if there is
+# one: an interactive password prompt cannot be answered from an interrupt
+# handler, so a live master is reused and only a transport failure (typically a
+# ControlPath whose master has already gone) falls back to a fresh connection.
 function _request_cancellation(journal_path, connection)
     isfile(journal_path) || return
     journal = JSON3.read(read(journal_path, String), Dict{String,Any})
@@ -157,14 +164,24 @@ function _request_cancellation(journal_path, connection)
     journal["cancel_requested"] = true
     _save_journal(journal_path, journal)
     ctl = joinpath(tempdir(), "mm_$(uuid4())")
-    ssh, _ = isnothing(connection) ? _transport(target, ctl) : connection
+    own = isnothing(connection)
+    ssh, _ = own ? _transport(target, ctl) : connection
     try
-        _cancel_remote(ssh, target, dir)
+        try
+            _cancel_remote(ssh, target, dir)
+        catch
+            # A master that is already gone leaves the attempt running; try
+            # once more over a transport this handler opens and owns.
+            own && rethrow()
+            own = true
+            ssh, _ = _transport(target, ctl)
+            _cancel_remote(ssh, target, dir)
+        end
         rm(journal_path; force=true)
     catch cleanup_error
         @warn "Remote cancellation not acknowledged; retry the stage to finish cancelling" host=target.host directory=dir exception=cleanup_error
     finally
-        if isnothing(connection)
+        if own
             try _capture(`ssh -o ControlPath=$ctl -O exit $(target.host)`) catch end
         end
     end
@@ -278,6 +295,39 @@ function _sweep(ssh, target)
     _capture(ssh(target.host, script))
 end
 
+# Recovery paths reach the stage without relaunching it: a verified receipt, or
+# a completed attempt retrieved for the first time. The stage's four entry points
+# truncate their log before calling the runner, so without this the retry would
+# keep only the header and lose the command and diagnostics that the remote
+# attempt has already produced. Only a missing local log is replayed; anything
+# the local side already wrote is left untouched.
+function _replay_remote_log(ssh, target, dir, log_path)
+    _remote_state(ssh, target, dir) == "missing" && return
+    open(io -> write(io, _control(ssh, target, dir, "log 0")), log_path, "a")
+end
+
+# `on_receipt` and `before_run` run inside the owner lock, and a stage callback
+# may probe a remote database or tool. A callback that catches every exception
+# turns a cancellation into an ordinary error: no stop is requested, and the
+# detached workload keeps running while the local stage reports itself
+# cancelled. An interrupt is therefore surfaced once the callback finishes
+# whatever it is doing, so `_with_owner` sees exactly one stop request.
+function _interruptible(f, args...)
+    interrupted = InterruptException[]
+    result = try
+        f(args...)
+    catch e
+        e isa InterruptException || e isa CompositeException || rethrow()
+        e isa InterruptException && push!(interrupted, e)
+        e isa CompositeException && append!(interrupted,
+            [x for x in e.exceptions if x isa InterruptException])
+        nothing
+    finally
+    end
+    isempty(interrupted) || throw(first(interrupted))
+    result
+end
+
 """
     run_remote(emit, target, command_for; inputs, outputs, optional_outputs,
                before_run, on_receipt, prepare_local, log_path, stage, context)
@@ -313,17 +363,32 @@ function run_remote(emit, target, command_for::Function;
         # The host/root are part of the identity. Retain an obsolete journal for
         # its original destination rather than deleting a path on the new host.
         if !isnothing(journal) && journal["identity"] != identity
+            old_identity = JSON3.read(journal["identity"])
+            old_target = (; host=String(old_identity[2]), base=String(old_identity[3]),
+                threads=old_identity[5], identity_file=get(journal, "identity_file", target.identity_file))
+            old_dir = _check_directory(journal, old_target)
+            old_ctl = joinpath(tempdir(), "mm_$(uuid4())")
+            old_ssh, _ = isnothing(_connection) ? _transport(old_target, old_ctl) : _connection
             if journal["cancel_requested"]
                 # A settings change cannot erase a pending stop request. Use
                 # the journal's original host/root/key, not the new target.
-                old_identity = JSON3.read(journal["identity"])
-                old_target = (; host=String(old_identity[2]), base=String(old_identity[3]),
-                    threads=old_identity[5], identity_file=get(journal, "identity_file", target.identity_file))
-                old_dir = _check_directory(journal, old_target)
-                old_ctl = joinpath(tempdir(), "mm_$(uuid4())")
-                old_ssh, _ = isnothing(_connection) ? _transport(old_target, old_ctl) : _connection
                 try
                     _cancel_remote(old_ssh, old_target, old_dir)
+                finally
+                    if isnothing(_connection)
+                        try _capture(`ssh -o ControlPath=$old_ctl -O exit $(old_target.host)`) catch end
+                    end
+                end
+            else
+                # The superseded attempt is abandoned, not awaited: the new
+                # identity must be able to launch immediately. It is reclaimed
+                # on a best-effort basis -- a denial (an unreachable host, a
+                # newer worker that refuses) must not stop the fresh attempt.
+                try
+                    _cancel_remote(old_ssh, old_target, old_dir)
+                catch superseded_error
+                    superseded_error isa InterruptException && rethrow()
+                    @warn "Superseded remote attempt not reclaimed; it will be swept once its marker is old enough" host=old_target.host directory=old_dir exception=superseded_error
                 finally
                     if isnothing(_connection)
                         try _capture(`ssh -o ControlPath=$old_ctl -O exit $(old_target.host)`) catch end
@@ -356,10 +421,11 @@ function run_remote(emit, target, command_for::Function;
                 # cleanup has already removed (notably taxonomy databases).
                 # Receipt recovery can restore caller metadata, but must not
                 # repeat checks that require the old staging inputs.
-                isnothing(on_receipt) || on_receipt(ssh, dir)
+                isnothing(on_receipt) || _interruptible(on_receipt, ssh, dir)
                 if _remote_state(ssh, target, dir) != "missing"
                     _control(ssh, target, dir, "cleanup")
                 end
+                isfile(log_path) || _replay_remote_log(ssh, target, dir, log_path)
                 emit("  Recovered verified outputs for $stage")
                 return nothing
             end
@@ -379,10 +445,23 @@ function run_remote(emit, target, command_for::Function;
                 command_for(dir) # restore the caller's resolved command record
             else
                 emit("  Reattaching $stage on $(target.host):$dir (no upload)")
-                isnothing(before_run) || before_run(ssh, dir)
+                isnothing(before_run) || _interruptible(before_run, ssh, dir)
             end
             if journal["failed"] || state == "interrupted" ||
                     (startswith(state, "exit ") && state != "exit 0")
+                _control(ssh, target, dir, "retry")
+                journal["failed"] = false
+                _save_journal(journal_path, journal)
+            elseif state == "exit 0"
+                # The workload finished and its exit marker is retained, but no
+                # receipt was stored: either an earlier fetch failed to find a
+                # required output, or the local process died between the marker
+                # and the receipt. Leaving the marker makes `start` refuse (the
+                # attempt is terminal) and `retry` refuse (it succeeded), so the
+                # stage would be wedged until its state was deleted by hand.
+                # Retrieval is still the first thing tried, and every byte is
+                # checksum-verified against the remote copy.
+                emit("  Retrieving completed $stage outputs from $(target.host) without relaunching")
                 _control(ssh, target, dir, "retry")
                 journal["failed"] = false
                 _save_journal(journal_path, journal)
@@ -413,6 +492,10 @@ function run_remote(emit, target, command_for::Function;
                 sleep(_poll_interval)
             end
             emit("  Retrieving $(length(outputs)) output file(s) from $(target.host)")
+            # A failed fetch (a missing required output, a truncated transfer)
+            # throws with the attempt's exit marker still in place. The next run
+            # takes the `exit 0` branch above and retries retrieval instead of
+            # relaunching, so a short read never wedges the stage.
             _fetch_outputs(ssh, scp, target, dir, outputs, optional_outputs)
             journal["retrieved"] = Dict(abspath(path) => (isfile(path) ? _digest(path) : nothing)
                 for (_, path) in [outputs; optional_outputs])

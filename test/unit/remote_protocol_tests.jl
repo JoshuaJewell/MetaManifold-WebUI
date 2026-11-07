@@ -474,6 +474,125 @@ _task_error(t) = try fetch(t); nothing catch e; e end
         end
     end
 
+    @testset "a completed attempt is retrieved again instead of wedging the stage" begin
+        # A required output can be missing from a zero-exit attempt (the stage
+        # is then retried), and a fetch can be interrupted after the attempt
+        # finished. Both leave a terminal `exit 0` marker with no receipt.
+        _remote_fixture() do f
+            command = d -> "cd '$d' && cat input > output"
+            @test_throws ErrorException f.invoke(d -> "cd '$d' && true")
+            dir = _dir(f)
+            @test _RX._remote_state(f.ssh, f.target, dir) == "exit 0"
+            @test !haskey(_journal(f), "retrieved")
+            uploads = f.uploads[]
+            # Running the same stage again retrieves without uploading or
+            # launching, and the checkpoint becomes verified.
+            f.invoke(command)
+            @test f.uploads[] == uploads
+            @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+            @test haskey(_journal(f), "retrieved")
+            @test !isdir(dir)
+        end
+    end
+
+    @testset "a superseded preparation is reclaimed instead of stranded" begin
+        _remote_fixture() do f
+            # Fail the control-script upload after the inputs are in place, so
+            # the attempt has no worker and no launch marker: exactly the state
+            # a `run_remote` sweep skips.
+            f.fail_control[] = :worker
+            @test_throws ProcessFailedException f.invoke(d -> "cd '$d' && cat input > output")
+            old = _dir(f)
+            @test isfile(joinpath(old, "input"))
+            # A different identity supersedes it. Best-effort reclamation runs
+            # even though the first attempt never installed a worker.
+            f.fail_control[] = :none
+            command = d -> "cd '$d' && cat input > output"
+            f.invoke(command; log="second")
+            @test !isdir(old)
+            @test read(joinpath(f.d, "second.out"), String) == "known input\n"
+            @test isempty(readdir(f.target.base))
+        end
+    end
+
+    @testset "a declined reclamation does not block the new attempt" begin
+        _remote_fixture() do f
+            f.fail_control[] = :worker
+            @test_throws ProcessFailedException f.invoke(d -> "cd '$d' && cat input > output")
+            old = _dir(f)
+            f.fail_control[] = :none
+            # A host that refuses the reclaim (here: every control command for
+            # the superseded directory) must not fail the fresh attempt.
+            ssh = function (host, command)
+                occursin(old, command) && return `bash -c 'exit 255'`
+                f.ssh(host, command)
+            end
+            target = f.target
+            _RX.run_remote(_ -> nothing, target, d -> "cd '$d' && cat input > output";
+                inputs=[f.input => "input"], outputs=["output" => joinpath(f.d, "stage.out")],
+                log_path=joinpath(f.d, "stage.log"), stage="denoise", context=["changed"],
+                _connection=(ssh, f.scp), _poll_interval=0.02)
+            @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+        end
+    end
+
+    @testset "a finished attempt keeps its remote diagnostics in the stage log" begin
+        _remote_fixture() do f
+            command = d -> "cd '$d' && echo stage-diagnostics && cat input > output"
+            @test_throws ErrorException f.invoke(d -> "cd '$d' && true")
+            # A missing local log is exactly what the stage entry points leave
+            # behind: they truncate it before calling the runner.
+            log = joinpath(f.d, "stage.log")
+            @test isfile(log)
+            rm(log)
+            f.invoke(command)
+            text = read(log, String)
+            @test occursin("stage-diagnostics", text) || occursin("cmd:", text)
+        end
+    end
+
+    @testset "an interrupt that a callback swallows still cancels the attempt" begin
+        _remote_fixture() do f
+            command = d -> "cd '$d' && cat input > output"
+            # Leave a completed attempt with no receipt: the next run reattaches
+            # without uploading and calls `before_run`, which is where a stage
+            # probes a remote database or tool.
+            f.fail_download[] = true
+            @test_throws Exception f.invoke(command)
+            f.fail_download[] = false
+            dir = _dir(f)
+            @test _RX._remote_state(f.ssh, f.target, dir) == "exit 0"
+            entered = Ref(false)
+            before_run = function (_, _)
+                entered[] = true
+                # A production probe that catches every exception.
+                try
+                    sleep(300)
+                catch
+                end
+            end
+            task = @async f.invoke(command; before_run=before_run)
+            _wait_remote(() -> entered[])
+            schedule(task, InterruptException(); error=true)
+            _wait_remote(() -> istaskdone(task))
+            @test _task_error(task) isa InterruptException
+            # Without the interrupt escaping the callback, no stop would be
+            # requested: the journal and the live attempt would both remain.
+            @test !isfile(joinpath(f.d, "stage.log.remote.json"))
+            @test !isdir(dir)
+        end
+    end
+
+    @testset "the interrupt guard passes values and every other failure through" begin
+        @test _RX._interruptible(() -> 42) == 42
+        @test _RX._interruptible(path -> path * "!", "x") == "x!"
+        @test_throws InterruptException _RX._interruptible(() -> throw(InterruptException()))
+        @test_throws ErrorException _RX._interruptible(() -> error("probe failed"))
+        @test_throws InterruptException _RX._interruptible() do
+            throw(CompositeException([ErrorException("probe failed"), InterruptException()]))
+        end
+    end
+
     @testset "path traversal and reserved control files are refused" begin
         for path in ("/absolute", "../outside", "a/../../b", "a//b", ".metamanifold/pid", "a\nb", "a\\b")
             @test_throws ErrorException _RX._relative(path)

@@ -11,6 +11,24 @@ control=.metamanifold
 boot_id() { cat /proc/sys/kernel/random/boot_id; }
 birth() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null; }
 idle() { flock -n "$control/run.lock" true; }
+# Publish the wrapper's exit status atomically. Nothing can be renamed onto a
+# full or read-only directory, so a failure here is reported rather than
+# ignored: an absent marker would keep the controller polling for a terminal
+# state that never arrives, and an empty one would read as an unknown status.
+publish_exit() {
+    { printf '%s\n' "$1" > "$control/exit.tmp"; } 2>/dev/null &&
+        mv -- "$control/exit.tmp" "$control/exit" 2>/dev/null
+}
+# The retryable failure state: `exit 1` when that marker can still be written,
+# and otherwise the `interrupted` state, which a status probe reports when the
+# launch marker is present and no lock is held. The launch marker is therefore
+# deliberately kept; removing it would let a probe read the attempt as `ready`
+# and relaunch a command whose checkpoint is the only record of what ran.
+interrupted() {
+    publish_exit 1 && return 0
+    [ -e "$control/pid" ] || publish_exit 1
+    return 1
+}
 
 case "${1:-}" in
     run)
@@ -34,11 +52,21 @@ case "${1:-}" in
         worker_pid=$$
         (
             while :; do
-                # If the wrapper dies before publishing an exit marker, stop
-                # its children too. Otherwise this watcher would keep the
-                # execution lock forever after an unrecorded completion.
-                if [ -e "$control/cancel" ] || ! kill -0 "$worker_pid" 2>/dev/null; then
-                    kill -KILL -- "-$worker_pid"
+                # If the wrapper dies before it can publish an exit marker,
+                # treat the attempt as interrupted: stop its children, mark it
+                # failed, and record the outcome so the retained lock does not
+                # hang the controller. An unrecorded completion would otherwise
+                # keep this watcher -- and the execution lock it inherits -- for
+                # the life of the process group.
+                if [ -e "$control/cancel" ]; then
+                    kill -KILL -- "-$worker_pid" 2>/dev/null
+                    exit 1
+                fi
+                if ! kill -0 "$worker_pid" 2>/dev/null; then
+                    kill -KILL -- "-$worker_pid" 2>/dev/null
+                    if ! publish_exit 1; then
+                        interrupted
+                    fi
                     exit 1
                 fi
                 [ ! -e "$control/exit" ] || exit 0
@@ -48,8 +76,12 @@ case "${1:-}" in
         watcher=$!
         bash "$control/command.sh"
         result=$?
-        printf '%s\n' "$result" > "$control/exit.tmp"
-        mv -- "$control/exit.tmp" "$control/exit"
+        # A full or read-only filesystem must not leave the controller polling a
+        # barrier that can never appear. `interrupted` is the retryable state.
+        if ! publish_exit "$result"; then
+            interrupted
+            exit 1
+        fi
         wait "$watcher"
         exit "$result"
         ;;
@@ -57,15 +89,22 @@ case "${1:-}" in
         [ -e "$control/ready" ] || exit 1
         # Retransmitting this request after losing its reply is safe. Only one
         # worker can acquire run.lock; a terminal attempt cannot launch again.
+        # Recorded here, not by the detached child: if its log cannot be opened
+        # on a full disk it never runs, so waiting for a marker only it can
+        # write would report a failed launch as a success.
         nohup setsid bash "$control/worker.sh" run >> "$control/log" 2>&1 < /dev/null &
+        child=$!
         # Acknowledging only the shell fork lets an immediate status probe win
-        # run.lock before the worker. Wait for its durable launch marker before
+        # run.lock before the worker. Wait for a durable launch marker before
         # the caller polls. Startup failure is bounded and retryable, not an
-        # apparently successful start followed by an endless ready state.
+        # apparently successful start followed by an endless ready state. A
+        # child that has already exited without a marker (a missing log, an
+        # open failure) is a failed launch, not one still starting up.
         for ((n=0; n<100; n++)); do
             if [ -e "$control/pid" ] || [ -e "$control/exit" ] || [ -e "$control/cancel" ]; then
                 exit 0
             fi
+            kill -0 "$child" 2>/dev/null || break
             sleep 0.1
         done
         echo 'Remote worker did not acknowledge startup; retry the stage' >&2
@@ -102,6 +141,10 @@ case "${1:-}" in
             [ "$(cat "$control/exit")" != 0 ] || exit 1
             rm -- "$control/exit"
         fi
+        # The launch marker outlives the wrapper and its watcher by design, so a
+        # crash between the wrapper's exit and its retried relaunch would make a
+        # later status probe read a stale `interrupted` even though this attempt
+        # is running. Clear it under the locks a probe needs.
         rm -f -- "$control/pid"
         ;;
     cancel)

@@ -34,7 +34,10 @@ thread setting, output names, worker version, and any externally stored database
 checksums supplied by the caller. Uploads are checked against those checksums
 before launch. A changed identity creates a separate attempt and archives the
 old journal as `.superseded-<id>`; it never borrows the old command's outputs.
-An already running superseded command may finish independently.
+The superseded attempt is cancelled and reclaimed on a best-effort basis before
+the new one launches, so a preparation interrupted before its worker was
+installed does not strand its uploads. A reclamation the server declines is
+logged and left to the retention sweep; it never blocks the new attempt.
 Phylogeny outputs are retained only when the journal identity matches and its
 retrieval receipt verifies the current local files. Otherwise they are removed
 before contacting SSH, so a failed new attempt cannot expose an older tree.
@@ -47,7 +50,12 @@ Successful exit markers also prevent relaunch. The log is read in bounded
 chunks on each connection.
 Start acknowledges the worker's durable launch marker before polling begins,
 and the worker tolerates the brief execution-lock ownership of a status probe.
-A missing startup acknowledgement is a bounded, retryable error.
+A missing startup acknowledgement is a bounded, retryable error; a detached
+child that exits before recording its marker is one, rather than a launch that
+is still starting. If the worker cannot publish its exit marker (a full or
+read-only filesystem), it records a retryable failure instead of leaving the
+controller waiting for a state that can never appear, and a watcher whose
+wrapper vanished does the same.
 Control scripts are uploaded to unique temporary names, checksummed, and renamed
 into place. A partial upload is never executed as the installed status worker.
 
@@ -57,11 +65,15 @@ downloads must verify before any output is published. A transfer failure keeps
 the remote directory and journal. After retrieval a receipt records the local
 output hashes, then remote cleanup runs. The receipt survives cleanup so that a
 restart before the caller commits its checkpoint can recover the verified files.
+A completed attempt whose retrieval failed -- a required output missing from a
+zero exit, or a transfer interrupted after the attempt finished -- is retrieved
+again on the next run instead of being relaunched, so a short read cannot wedge
+the stage. Missing local stage diagnostics are replayed from the retained remote
+log.
 Receipt recovery does not repeat preparation checks against staging inputs that
-cleanup has removed. A separate callback restores caller metadata when needed.
-The publication of multiple files is not a single filesystem transaction; a
-restart before the receipt is committed fetches them again from the retained
-remote directory.
+cleanup has removed. A separate callback restores caller metadata when needed;
+an interrupt raised inside one still requests cancellation, so a swallowed
+exception in a probe cannot leave the detached workload running.
 
 ## Cancellation, failures and retention
 
