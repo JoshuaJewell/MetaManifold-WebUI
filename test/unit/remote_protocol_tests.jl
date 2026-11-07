@@ -553,15 +553,9 @@ _task_error(t) = try fetch(t); nothing catch e; e end
 
     @testset "an interrupt that a callback swallows still cancels the attempt" begin
         _remote_fixture() do f
-            command = d -> "cd '$d' && cat input > output"
-            # Leave a completed attempt with no receipt: the next run reattaches
-            # without uploading and calls `before_run`, which is where a stage
-            # probes a remote database or tool.
-            f.fail_download[] = true
-            @test_throws Exception f.invoke(command)
-            f.fail_download[] = false
-            dir = _dir(f)
-            @test _RX._remote_state(f.ssh, f.target, dir) == "exit 0"
+            # The workload stays alive, so cancellation is observable: a
+            # swallowed interrupt would leave both the journal and the attempt.
+            command = d -> "cd '$d' && echo started > started && sleep 300"
             entered = Ref(false)
             before_run = function (_, _)
                 entered[] = true
@@ -572,12 +566,15 @@ _task_error(t) = try fetch(t); nothing catch e; e end
                 end
             end
             task = @async f.invoke(command; before_run=before_run)
-            _wait_remote(() -> entered[])
+            _wait_remote(() -> isfile(joinpath(f.d, "stage.log.remote.json")) && entered[])
+            # `before_run` receives this attempt's directory; the command has
+            # already published its marker and is still running.
+            dir = only(readdir(f.target.base; join=true))
+            # The wrapper may not have taken the execution lock yet.
+            @test _RX._remote_state(f.ssh, f.target, dir) in ("running", "ready", "preparing")
             schedule(task, InterruptException(); error=true)
             _wait_remote(() -> istaskdone(task))
             @test _task_error(task) isa InterruptException
-            # Without the interrupt escaping the callback, no stop would be
-            # requested: the journal and the live attempt would both remain.
             @test !isfile(joinpath(f.d, "stage.log.remote.json"))
             @test !isdir(dir)
         end
