@@ -63,7 +63,10 @@ Each requirement is checked before the code is read.
    merge, so every commit must build, pass the tests and carry a message that
    stands on its own. Once review has started, add commits, and rebase only when
    asked to. If `main` moves before the merge, you will be asked to rebase onto
-   it and re-sign.
+   it and re-sign. When two ready pull requests start from the same commit, the
+   maintainer may instead rebase the second onto the first and sign it; you stay
+   its author, and that pull request is then closed by hand rather than marked
+   merged.
 
 ## Licence and copyright
 
@@ -137,7 +140,10 @@ cd frontend && bun run test
 
 ## Contributions written with coding agents
 
-The same rules apply, and a named person answers for every line of the diff.
+The same rules apply, and a named person answers for every line of the diff. A
+commit may name a coding agent as its author or co-author, but the contributor
+who submits the pull request commits and signs it, and answers for it as if they
+had written it themselves.
 
 ## Getting help
 
