@@ -473,7 +473,8 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
 
     # Files go up and come back under their file-map names, flat in the staging
     # directory, so the commands can use the bare names.
-    function _run_remote_step(files, step::Step, s, seed, target, log_path, emit, records)
+    function _run_remote_step(files, step::Step, s, seed, target, log_path, emit, records;
+                              _connection=nothing)
         cmds = Ref(String[])
         inputs  = [files[n] => n for n in step.inputs]
         outputs = [(n == "placement.jplace" ? "RAxML_portableTree.epa.jplace" : n) => files[n]
@@ -490,7 +491,9 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
             "cd $staging_dir && " * join(cmds[], " && ")
         end
         run_remote(emit, target, command_for; inputs, outputs, optional_outputs=extras,
-                   before_run, on_receipt=before_run, log_path, stage=something(step.remote, step.name))
+                   before_run, on_receipt=before_run,
+                   prepare_local=verified -> (verified || _clear_step!(files, step)),
+                   log_path, stage=something(step.remote, step.name), _connection)
         cmds[]
     end
 
@@ -576,13 +579,13 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
                 _set_step!(dir, step.name; state="running", where, started=_now())
                 started  = Provenance.timestamp()
                 log_path = joinpath(log_dir, "$(step.name).log")
-                recovering = !isnothing(target) && isfile(log_path * ".remote.json")
-                if !recovering
+                if isnothing(target)
                     reset_tool_logs(log_path)
                     _clear_step!(files, step)
                 else
-                    # Retain receipt-verified output files, never a prior
-                    # settings key that could bless different new outputs.
+                    isfile(log_path * ".remote.json") || reset_tool_logs(log_path)
+                    # The runner checks identity and output receipts under its
+                    # owner lock, then clears unverified outputs before SSH.
                     rm(_key_path(files, step); force=true)
                 end
                 rm(joinpath(dir, "qc", "$(step.name).json"); force=true)

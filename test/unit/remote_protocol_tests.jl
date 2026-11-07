@@ -8,6 +8,7 @@ using JSON3
 const _RX = MetaManifold.RemoteExec
 
 function _remote_fixture(f)
+    @info "Remote execution regression" case=Test.get_testset().description
     mktempdir() do d
         target = (; host="fixture", base=joinpath(d, "remote"), identity_file=nothing, threads=2)
         mkpath(target.base)
@@ -16,6 +17,7 @@ function _remote_fixture(f)
         uploads = Ref(0)
         downloads = Ref(0)
         fail_download = Ref(false)
+        fail_control = Ref(:none)
         drop_status = Ref(false)
         drop_start_reply = Ref(false)
         fail_cancel = Ref(false)
@@ -45,6 +47,10 @@ function _remote_fixture(f)
             else
                 uploads[] += 1
                 destination = dst[length("fixture:")+1:end]
+                if (fail_control[] == :worker && src == _RX._WORKER) ||
+                   (fail_control[] == :command && occursin("/.metamanifold/command.sh", destination))
+                    return `bash -c 'head -c 2 -- "$1" > "$2"; exit 255' _ $src $destination`
+                end
                 `cp -- $src $destination`
             end
         end
@@ -58,7 +64,7 @@ function _remote_fixture(f)
                 _connection=(ssh, scp), _poll_interval=0.02)
         end
         try
-            f((; d, target, input, uploads, downloads, fail_download, drop_status,
+            f((; d, target, input, uploads, downloads, fail_download, fail_control, drop_status,
                 drop_start_reply, fail_cancel, retries, invoke, ssh, scp))
         finally
             # Never let a failed assertion strand a detached test process.
@@ -79,6 +85,28 @@ _dir(f, log="stage") = _journal(f, log)["directory"]
 _task_error(t) = try fetch(t); nothing catch e; e end
 
 @testset "Durable remote execution protocol" begin
+    @testset "interrupted control uploads remain retryable and cancellable" begin
+        for part in (:command, :worker), cancel in (false, true)
+            _remote_fixture() do f
+                f.fail_control[] = part
+                command = d -> "cd '$d' && cat input > output"
+                @test_throws ProcessFailedException f.invoke(command)
+                dir = _dir(f)
+                @test !isfile(joinpath(dir, ".metamanifold", "worker.sh"))
+                @test _RX._remote_state(f.ssh, f.target, dir) == "missing"
+                if cancel
+                    _RX._request_cancellation(joinpath(f.d, "stage.log.remote.json"), (f.ssh, f.scp))
+                    @test !isfile(joinpath(f.d, "stage.log.remote.json"))
+                else
+                    f.fail_control[] = :none
+                    f.invoke(command)
+                    @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+                end
+                @test !isdir(dir)
+            end
+        end
+    end
+
     @testset "detached command, output verification, receipt and log" begin
         _remote_fixture() do f
             command = d -> "cd '$d' && echo started && cat input > output"

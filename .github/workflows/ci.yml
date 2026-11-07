@@ -268,6 +268,7 @@ jobs:
           '
 
       - name: Run tests
+        timeout-minutes: 25
         env:
           CI_TAXONOMY_DB: databases/pr2_ci_subset_dada2.fasta
           R_LIBS_SITE: /usr/local/lib/R/site-library:/usr/lib/R/site-library:/usr/lib/R/library

@@ -187,18 +187,24 @@ function _prepare(ssh, scp, target, dir, command, identity, inputs, outputs, opt
     isempty(uploads) || _capture(ssh(target.host,
         "cd $(_sq(dir)) && printf %s $(_sq(sums)) | sha256sum -c --strict -"))
     isnothing(before_run) || before_run(ssh, dir)
+    # Unique temporary names keep an interrupted transfer from exposing or
+    # later modifying the installed control scripts. Publish only checked bytes.
+    command_part = "$_CONTROL/command.sh.part-$(uuid4())"
+    worker_part = "$_CONTROL/worker.sh.part-$(uuid4())"
     mktemp() do path, io
         write(io, command * "\n")
         close(io)
-        _capture(scp(path, "$(target.host):$dir/$_CONTROL/command.sh"))
+        _capture(scp(path, "$(target.host):$dir/$command_part"))
     end
-    _capture(scp(_WORKER, "$(target.host):$dir/$_CONTROL/worker.sh"))
-    control_sums = "$(JSON3.read(identity)[7])  $_CONTROL/worker.sh\n" *
-                   "$(bytes2hex(sha256(command * "\n")))  $_CONTROL/command.sh\n"
+    _capture(scp(_WORKER, "$(target.host):$dir/$worker_part"))
+    control_sums = "$(JSON3.read(identity)[7])  $worker_part\n" *
+                   "$(bytes2hex(sha256(command * "\n")))  $command_part\n"
     _capture(ssh(target.host,
         "command -v bash flock setsid nohup sha256sum dd >/dev/null && " *
         "test -r /proc/sys/kernel/random/boot_id && cd $(_sq(dir)) && " *
         "printf %s $(_sq(control_sums)) | sha256sum -c --strict - && " *
+        "mv -- $(_sq(command_part)) $_CONTROL/command.sh && " *
+        "mv -- $(_sq(worker_part)) $_CONTROL/worker.sh && " *
         "touch $(_sq("$dir/$_CONTROL/ready"))"))
 end
 
@@ -241,6 +247,14 @@ function _fetch_outputs(ssh, scp, target, dir, outputs, optional_outputs)
     end
 end
 
+function _verified_receipt(journal, outputs, optional_outputs)
+    receipt = get(journal, "retrieved", nothing)
+    !isnothing(receipt) &&
+        all(get(receipt, abspath(p), nothing) isa AbstractString for (_, p) in outputs) &&
+        all(haskey(receipt, abspath(p)) for (_, p) in optional_outputs) &&
+        all(isnothing(h) ? !ispath(p) : isfile(p) && _digest(p) == h for (p, h) in receipt)
+end
+
 function _sweep(ssh, target)
     # Only terminal attempts older than seven days are eligible. In particular,
     # the age of a directory says nothing about whether its command is alive.
@@ -266,13 +280,15 @@ end
 
 """
     run_remote(emit, target, command_for; inputs, outputs, optional_outputs,
-               before_run, on_receipt, log_path, stage, context)
+               before_run, on_receipt, prepare_local, log_path, stage, context)
 
 Run a detached command and retrieve verified outputs. A durable journal beside
 `log_path` reattaches the same workflow after a restart. Content identity includes
 the command, input checksums, output names, target and caller-supplied `context`.
 Different workflows have different attempt directories even for equal content.
 Transport failures retain the attempt; InterruptException explicitly cancels it.
+`prepare_local(verified_receipt)` runs under the owner lock before network access;
+callers may retain published outputs only for a matching, verified receipt.
 See docs/guide/remote-execution.md for the protocol, assumptions and recovery limits.
 """
 function run_remote(emit, target, command_for::Function;
@@ -280,6 +296,7 @@ function run_remote(emit, target, command_for::Function;
                     optional_outputs::AbstractVector{<:Pair}=Pair{String,String}[],
                     before_run::Union{Function,Nothing}=nothing,
                     on_receipt::Union{Function,Nothing}=nothing,
+                    prepare_local::Union{Function,Nothing}=nothing,
                     log_path::AbstractString, stage::AbstractString, context=String[],
                     _connection=nothing, _poll_interval=1.0)
     mkpath(dirname(log_path))
@@ -290,6 +307,9 @@ function run_remote(emit, target, command_for::Function;
         ctl = joinpath(tempdir(), "mm_$(uuid4())")
         ssh, scp = isnothing(_connection) ? _transport(target, ctl) : _connection
         journal = isfile(journal_path) ? JSON3.read(read(journal_path, String), Dict{String,Any}) : nothing
+        verified_receipt = !isnothing(journal) && journal["identity"] == identity &&
+            !journal["cancel_requested"] && _verified_receipt(journal, outputs, optional_outputs)
+        isnothing(prepare_local) || prepare_local(verified_receipt)
         # The host/root are part of the identity. Retain an obsolete journal for
         # its original destination rather than deleting a path on the new host.
         if !isnothing(journal) && journal["identity"] != identity
@@ -331,10 +351,7 @@ function run_remote(emit, target, command_for::Function;
             # the caller committing its own stage checkpoint. Keep it until
             # content changes; reuse requires the actual local output bytes.
             receipt = get(journal, "retrieved", nothing)
-            if !isnothing(receipt) &&
-                    all(get(receipt, abspath(p), nothing) isa AbstractString for (_, p) in outputs) &&
-                    all(haskey(receipt, abspath(p)) for (_, p) in optional_outputs) &&
-                    all(isnothing(h) ? !ispath(p) : isfile(p) && _digest(p) == h for (p, h) in receipt)
+            if _verified_receipt(journal, outputs, optional_outputs)
                 # Preparation checks may read uploaded files that successful
                 # cleanup has already removed (notably taxonomy databases).
                 # Receipt recovery can restore caller metadata, but must not

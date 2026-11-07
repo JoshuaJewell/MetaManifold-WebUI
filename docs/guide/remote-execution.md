@@ -35,6 +35,9 @@ checksums supplied by the caller. Uploads are checked against those checksums
 before launch. A changed identity creates a separate attempt and archives the
 old journal as `.superseded-<id>`; it never borrows the old command's outputs.
 An already running superseded command may finish independently.
+Phylogeny outputs are retained only when the journal identity matches and its
+retrieval receipt verifies the current local files. Otherwise they are removed
+before contacting SSH, so a failed new attempt cannot expose an older tree.
 
 The remote `.metamanifold` directory contains the command, worker, log, process
 identity, locks and exit marker. The worker is detached with `nohup setsid` and
@@ -42,6 +45,8 @@ has no SSH standard streams. Repeating a launch request after losing its reply
 cannot start another workload while the attempt's execution lock is held.
 Successful exit markers also prevent relaunch. The log is read in bounded
 chunks on each connection.
+Control scripts are uploaded to unique temporary names, checksummed, and renamed
+into place. A partial upload is never executed as the installed status worker.
 
 The exit status is published by rename. Outputs are downloaded to unique
 temporary local files and checked against remote SHA-256 checksums. All required

@@ -88,6 +88,7 @@ using MetaManifold.Categories, MetaManifold.CompositionLibrary
 @testset "MetaManifold" begin
 
     for f in _selected_files()
+        @info "Running unit tests" file=f
         include(joinpath(@__DIR__, "unit", f))
     end
 

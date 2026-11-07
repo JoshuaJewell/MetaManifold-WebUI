@@ -59,6 +59,65 @@ _ph_factory() = YAML.load_file(joinpath(@__DIR__, "..", "..", "config", "default
     @test !("-redo" in split(remote_command))
 end
 
+@testset "Remote phylogeny clears outputs without a matching verified receipt" begin
+    if Sys.islinux()
+        for changed in (:settings, :input, :output)
+            mktempdir() do root
+                rdir = joinpath(root, "reference")
+                files = _PH.reference_files(rdir)
+                input = files["reference.trim.fasta"]
+                mkpath(dirname(input))
+                write(input, ">a\nACGT\n>b\nACGA\n>c\nACGG\n>d\nACGC\n")
+                tool = joinpath(root, "iqtree-fixture")
+                write(tool, """
+                #!/bin/sh
+                if [ "\$1" = --version ]; then echo 'IQ-TREE version 3.1.4'; exit 0; fi
+                printf '(a:1,b:1,c:1,d:1);\\n' > reference.treefile
+                cp reference.treefile reference.contree
+                """)
+                chmod(tool, 0o700)
+                target = (; host="fixture", base=mkpath(joinpath(root, "remote")),
+                    identity_file=nothing, threads=2, tools=Dict("iqtree" => tool))
+                offline = Ref(false)
+                uploads = Ref(0)
+                ssh = (_, cmd) -> offline[] ? `bash -c 'exit 255'` : `bash -c $cmd`
+                scp = function (src, dst)
+                    if startswith(src, "fixture:")
+                        `cp -- $(src[9:end]) $dst`
+                    else
+                        uploads[] += 1
+                        `cp -- $src $(dst[9:end])`
+                    end
+                end
+                step = only(s for s in _PH.REFERENCE_STEPS if s.name == "tree")
+                settings = _PH.placement_settings(_ph_factory())
+                log = joinpath(rdir, "logs", "tree.log")
+                records = Dict{String,MetaManifold.Provenance.ToolRecord}()
+                invoke() = _PH._run_remote_step(files, step, settings, 123, target, log,
+                    _ -> nothing, records; _connection=(ssh, scp))
+                invoke()
+                tree = read(files["reference.treefile"], String)
+                count = uploads[]
+                invoke() # Valid receipt survives remote cleanup and a caller restart.
+                @test read(files["reference.treefile"], String) == tree
+                @test uploads[] == count
+                if changed == :settings
+                    settings["reference"]["tree"]["model"] = "GTR+G"
+                elseif changed == :input
+                    write(input, replace(read(input, String), "ACGT" => "TCGT"))
+                else
+                    write(files["reference.treefile"], "stale or damaged output")
+                end
+                offline[] = true
+                @test_throws ProcessFailedException invoke()
+                @test !isfile(files["reference.treefile"])
+                @test !isfile(files["reference.contree"])
+                @test_throws ErrorException _PH.check_placement(_PH.placement_files(joinpath(root, "placement"), rdir))
+            end
+        end
+    end
+end
+
 # Sequences related by a simple tree: two clades of four, and query fragments from each.
 function _ph_sequences(rng)
     rand_seq(n) = join(rand(rng, ['A', 'C', 'G', 'T'], n))
