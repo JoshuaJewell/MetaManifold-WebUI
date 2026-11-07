@@ -8,6 +8,15 @@ using MetaManifold
 using MetaManifold.Canonical: jcs_bytes, jcs_sha256, ijson_read
 using JSON3, SHA, Test
 
+@testset "Canonical escaped control characters" begin
+    original = Dict("quoted\"key" => "\b\f\r\t\n\\\"")
+    encoded = jcs_bytes(original)
+    @test String(copy(encoded)) == "{\"quoted\\\"key\":\"\\b\\f\\r\\t\\n\\\\\\\"\"}"
+    decoded = ijson_read(encoded)
+    @test decoded["quoted\"key"] == original["quoted\"key"]
+    @test jcs_bytes(decoded) == encoded
+end
+
 @testset "Untrusted JSON nesting is bounded before parsing" begin
     @test_throws ArgumentError ijson_read(repeat("[", 65) * "0" * repeat("]", 65))
     @test ijson_read(JSON3.write(Dict("label" => repeat("[", 1000)))).label == repeat("[", 1000)

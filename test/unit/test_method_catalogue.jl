@@ -29,6 +29,8 @@ end
     @test occursin(r"^[0-9a-f]{64}$", loaded.fingerprint)
 
     supported = supported_method_ids(document)
+    @test method_by_id(document, "exact-descriptive-summaries")["status"] == "supported"
+    @test method_by_id(document, "not-a-method") === nothing
     @test supported == ["exact-descriptive-summaries", "high-precision-descriptive-diversity"]
     @test !("parametric-model-fits" in supported)
     @test !("nonparametric-resampling" in supported)

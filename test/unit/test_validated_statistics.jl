@@ -194,6 +194,9 @@ function _vs_make_run(root::String)
         DBInterface.execute(con, "INSERT INTO merged_null VALUES ('x', 'G', NULL)")
         DBInterface.execute(con, "CREATE TABLE merged_decimal (SeqName VARCHAR, Genus VARCHAR, s1 BIGINT, s2 DECIMAL(18,0))")
         DBInterface.execute(con, "INSERT INTO merged_decimal VALUES ('x', 'G', 1, 2)")
+        for saved_name in ("filtered-v1", "2026.01")
+            DBInterface.execute(con, "CREATE TABLE \"$(saved_name)\" AS SELECT * FROM merged")
+        end
     finally
         DBInterface.close!(con)
         close(db)
@@ -225,6 +228,31 @@ end
         @test isfile(joinpath(root, "projects", "studyV", "run1", "derived",
                               "validated-statistics", "$id.json"))
         @test !isfile(joinpath(root, "projects", "studyV", "run1", "merged", "$id.json"))
+
+        # Omitted table selects the pipeline output, while saved composition
+        # tables share the same safe-name contract as their creation routes.
+        default_request = filter(pair -> first(pair) != "table", request)
+        default_response = _vs_post(path, default_request)
+        @test default_response.status == 200
+        @test JSON3.read(String(default_response.body)).analysis_id == id
+        for saved_name in ("filtered-v1", "2026.01")
+            saved_response = _vs_post(path, merge(request, Dict("table" => saved_name)))
+            @test saved_response.status == 200
+            saved = JSON3.read(String(saved_response.body))
+            @test saved.samples == result.samples
+            @test saved.analysis_id != id # provenance identifies the source table
+        end
+        for invalid in ("", "merged\n", "merged;DROP TABLE merged", "../merged", 123, true, nothing, ["merged"])
+            invalid_response = _vs_post(path, merge(request, Dict("table" => invalid)))
+            @test invalid_response.status == 400
+        end
+        @test _vs_post(path, request).status == 200 # invalid names did not mutate the source
+        sequence_request = filter(pair -> first(pair) != "taxonomic_level", request)
+        sequence_response = _vs_post(path, merge(sequence_request, Dict("time_limit_seconds" => 30)))
+        @test sequence_response.status == 200
+        sequence_result = JSON3.read(String(sequence_response.body))
+        @test Set(sequence_result.samples[1].features) == Set(["seq1", "seq2", "seq3"])
+        @test only(filter(x -> x.label == "s1", sequence_result.samples)).total == 7
 
         repeated = JSON3.read(String(_vs_post(path, request).body))
         @test repeated.analysis_id == id
@@ -273,6 +301,15 @@ end
 end
 
 @testset "Statistics request body preserves byte buffers and counts UTF-8 bytes" begin
+    @test_throws ErrorException VALIDATED_SV._statistics_guard(() -> error("unexpected failure"))
+    @test_throws InterruptException VALIDATED_SV._statistics_guard(() -> throw(InterruptException()))
+    _vs_with_root() do _
+        escaped = merge(_VS_EXACT_BODY, Dict("sample_labels" => ["sample\"1", "sample\\2"]))
+        # Escapes and digits inside labels must not be read as number tokens.
+        escaped_response = _vs_post("/api/v1/statistics/summaries", escaped)
+        @test escaped_response.status == 200
+        @test [s.label for s in JSON3.read(String(escaped_response.body)).samples] == escaped["sample_labels"]
+    end
     raw_bytes = Vector{UInt8}(codeunits("{\"counts\":[[1,2]]}"))
     parsed_bytes = VALIDATED_SV._statistics_body((; body = raw_bytes); reject_noninteger_tokens = true)
     @test collect(parsed_bytes.counts[1]) == [1, 2]

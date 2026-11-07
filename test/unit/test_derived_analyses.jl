@@ -8,6 +8,23 @@ using MetaManifold.DerivedAnalyses
 using MetaManifold.ExactSummaries
 using MetaManifold.NumericPolicy
 
+@testset "Derived records fail closed on invalid JSON and failed publication" begin
+    DA = MetaManifold.DerivedAnalyses
+    @test sprint(showerror, DerivedAnalysisError("invalid_record", "invalid JSON")) == "invalid JSON"
+    @test_throws DerivedAnalysisError DA._validate_bytes(Vector{UInt8}(codeunits("{")))
+    mktempdir() do root
+        source, config, result = Dict("run" => "r"), Dict("mode" => "exact_counts"), Dict("value" => 1)
+        id = derived_analysis_id(source, config, result)
+        # A non-file destination blocks publication. The error must escape and
+        # the temporary file must be removed, without changing that destination.
+        destination = joinpath(root, "$id.json")
+        mkdir(destination)
+        @test_throws Base.IOError persist_derived_analysis(root; source, config, result)
+        @test isdir(destination)
+        @test readdir(root) == ["$id.json"]
+    end
+end
+
 @testset "Immutable content-addressed derived analyses" begin
     mktempdir() do root
         directory = joinpath(root, "derived")

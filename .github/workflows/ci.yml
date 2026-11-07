@@ -323,6 +323,14 @@ jobs:
       - name: Process coverage
         uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38  # v1.2.2
 
+      - name: Retain raw Julia coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: julia-coverage
+          path: lcov.info
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v6.0.2
         with:

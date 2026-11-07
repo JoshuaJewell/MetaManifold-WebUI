@@ -5,6 +5,23 @@ using Test
 using MetaManifold.NumericPolicy
 using MetaManifold.Canonical
 
+@testset "Numeric storage and precision metadata across float widths" begin
+    for (value, bits) in ((Float16(0.5), 11), (Float32(0.5), 24), (0.5, 53))
+        wrapped = approximate_value(value)
+        @test wrapped.precision_bits == bits
+        @test to_storage(wrapped) === 0.5
+        @test encode_json_number(value) === 0.5
+    end
+    @test encode_json_number(42) == 42
+    @test encode_json_number(big(2)^53) == "9007199254740992"
+    @test encode_json_number(BigFloat(0.5)) == "0.5"
+    for value in (BigFloat(Inf), BigFloat(NaN), true, "1", nothing)
+        @test_throws UnsupportedRepresentationError encode_json_number(value)
+    end
+    @test_throws UnsupportedRepresentationError require_count(1//2)
+    @test occursin("count overflow", sprint(showerror, CountOverflowError(big(1), big(2))))
+end
+
 @testset "Policy validation and ambient rounding cannot change the claim" begin
     invalid = NumericPolicySpec(:high_precision, MAX_PRECISION_BITS + 1, 4096, 6)
     @test_throws ArgumentError assert_mode(invalid, :high_precision)

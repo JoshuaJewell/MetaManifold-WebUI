@@ -453,8 +453,10 @@ end
         cancellation = _statistics_cancellation(body)
         haskey(body, :sampleReads) && throw(ArgumentError(
             "sampleReads filtering uses the legacy Float64/SQL-SUM path and is not supported for validated statistics"))
-        table = string(get(body, :table, "asvs"))
-        occursin(r"^[A-Za-z][A-Za-z0-9_]*$", table) || throw(ArgumentError("invalid table name"))
+        table = get(body, :table, "merged")
+        (table isa AbstractString && Validation.is_safe_name(table)) ||
+            throw(ArgumentError("invalid table name"))
+        table = String(table)
         prefix_raw = get(body, :prefix, nothing)
         prefix = isnothing(prefix_raw) ? nothing : string(prefix_raw)
         level_raw = get(body, :taxonomic_level, get(body, :rank, nothing))

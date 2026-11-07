@@ -354,7 +354,7 @@ function exact_value(x)
 end
 
 _float_bits(x) = x isa BigFloat ? precision(x) :
-                 x isa Float64 ? 53 : x isa Float32 ? 24 : x isa Float16 ? 16 : nothing
+                 x isa Float64 ? 53 : x isa Float32 ? 24 : x isa Float16 ? 11 : nothing
 
 function approximate_value(x; bits::Union{Integer,Nothing}=nothing)
     x isa AbstractFloat || throw(UnsupportedRepresentationError(
