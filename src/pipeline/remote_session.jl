@@ -81,13 +81,10 @@ function _with_owner(f, path; on_interrupt=nothing)
 end
 
 # Every foreground transport is interruptible, including uploads and downloads.
-# Killing one of these SSH processes never signals the detached workload. The
-# remote locale is fixed for the internal protocol commands so a translated
-# shell or dd diagnostic cannot be mistaken for a protocol reply by a status
-# parse; nothing here presents output to a person.
+# Killing one of these SSH processes never signals the detached workload.
 function _capture(cmd)
     out = Pipe()
-    p = run(pipeline(setenv(cmd, "LC_ALL" => "C"); stdout=out); wait=false)
+    p = run(pipeline(cmd; stdout=out); wait=false)
     close(out.in)
     try
         bytes = read(out)
