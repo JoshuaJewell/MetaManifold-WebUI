@@ -7,6 +7,7 @@ import type { AnnotationSource, ComparisonRunSpec } from '../api/types'
 import { NameDialog } from '../components/NameDialog'
 import { useToast } from '../components/Toast'
 import { FigureEditor } from './FigureEditor'
+import { emptyHistory, record, redo, undo, undoKey, type History } from './history'
 import { newFigure, type FigureDoc } from './types'
 import styles from './Figure.module.css'
 
@@ -24,6 +25,8 @@ export function FigureBuilder({ study, runs, source }: {
   const [dialog, setDialog] = useState<'new' | 'rename' | null>(null)
   const pending = useRef<FigureDoc | null>(null)
   const timer = useRef<number | undefined>(undefined)
+  // Edits to the open figure, for undo and redo; cleared when another figure opens.
+  const [history, setHistory] = useState<History<FigureDoc>>(emptyHistory)
 
   const flush = useCallback(() => {
     if (timer.current) window.clearTimeout(timer.current)
@@ -42,6 +45,7 @@ export function FigureBuilder({ study, runs, source }: {
   const open = async (id: string) => {
     flush()
     const req = ++openRequest.current
+    setHistory(emptyHistory())
     if (!id) { setDoc(null); return }
     try {
       const d = await api.figures.get(study, id)
@@ -52,12 +56,38 @@ export function FigureBuilder({ study, runs, source }: {
     if (list && list.length && !doc && openRequest.current === 0) open(list[0].id)
   }, [list]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const change = (next: FigureDoc) => {
+  const show = (next: FigureDoc) => {
     setDoc(next)
     pending.current = next
     if (timer.current) window.clearTimeout(timer.current)
     timer.current = window.setTimeout(flush, 600)
   }
+  const change = (next: FigureDoc) => {
+    if (doc) setHistory(h => record(h, doc, Date.now()))
+    show(next)
+  }
+  const step = (dir: 'undo' | 'redo') => {
+    if (!doc) return
+    const r = (dir === 'undo' ? undo : redo)(history, doc)
+    if (!r) return
+    setHistory(r.history)
+    show(r.doc)
+  }
+
+  // Ctrl+Z undoes and Ctrl+Shift+Z or Ctrl+Y redoes, anywhere on the page, figure edits
+  // included in text boxes; not while a dialog is open.
+  const stepRef = useRef(step)
+  stepRef.current = step
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const dir = undoKey(e)
+      if (!dir || dialog) return
+      e.preventDefault()
+      stepRef.current(dir)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [dialog])
 
   const remove = async () => {
     if (!doc || !window.confirm(`Delete the figure "${doc.title}"? This cannot be undone.`)) return
@@ -82,6 +112,8 @@ export function FigureBuilder({ study, runs, source }: {
         )}
         <button className="btn" onClick={() => setDialog('new')}>New figure</button>
         {doc && <button className="btn" onClick={() => setDialog('rename')}>Rename</button>}
+        {doc && <button className="btn" disabled={!history.past.length} title="Undo (Ctrl+Z)" onClick={() => step('undo')}>Undo</button>}
+        {doc && <button className="btn" disabled={!history.future.length} title="Redo (Ctrl+Shift+Z or Ctrl+Y)" onClick={() => step('redo')}>Redo</button>}
         {doc && <button className="btn btn-danger" onClick={remove}>Delete</button>}
       </div>
 

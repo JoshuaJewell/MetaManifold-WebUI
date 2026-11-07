@@ -28,12 +28,53 @@ export type ChartSpec =
 
 export type ChartKind = ChartSpec['kind']
 
+/** A picture uploaded to the figure, drawn inside the pane. */
+export interface PaneImage {
+  /** Stored file name, from the figure's image upload. */
+  file: string
+  /** contain shows all of it; cover fills the pane and crops the overflow. */
+  fit: 'contain' | 'cover'
+}
+
+/** One line of a text pane. *word* sets italics and **word** bold. */
+export interface TextLine {
+  text: string
+  /** Size in pt; absent uses the figure's text size. */
+  sizePt?: number
+  colour?: string
+}
+
+export interface PaneText {
+  lines: TextLine[]
+  align: 'left' | 'center' | 'right'
+  valign: 'top' | 'middle' | 'bottom'
+  /** Turned a quarter: 90 reads top to bottom, -90 bottom to top. */
+  rotate?: 0 | 90 | -90
+  /** Moves the text right and down by this many mm, to line it up with something beside it. */
+  offsetMm?: [number, number]
+}
+
+/** The box a text is laid out in, and the SVG transform that turns it into a w × h pane. */
+export function textFrame(t: PaneText, w: number, h: number): { w: number; h: number; transform: string | undefined } {
+  const [dx, dy] = (t.offsetMm ?? [0, 0]).map(v => v * PX_PER_MM)
+  const shift = dx || dy ? `translate(${dx},${dy}) ` : ''
+  if (t.rotate === -90) return { w: h, h: w, transform: `${shift}translate(0,${h}) rotate(-90)` }
+  if (t.rotate === 90) return { w: h, h: w, transform: `${shift}translate(${w},0) rotate(90)` }
+  return { w, h, transform: shift ? shift.trim() : undefined }
+}
+
 export interface FigurePane {
   chart: ChartSpec | null
+  /** Shown when the pane has no chart. */
+  image?: PaneImage | null
+  /** Shown when the pane has no chart or image; under a picture, its caption. */
+  text?: PaneText | null
   /** Replaces the chart's own title; empty hides it, null keeps it. */
   title: string | null
   /** Text for the x-axis title; null keeps the chart's own. */
   xTitle: string | null
+  /** Text for every y-axis title; empty hides them, absent keeps the chart's own. */
+  yTitle?: string | null
   style?: PaneStyle
 }
 
@@ -43,12 +84,38 @@ export interface PaneStyle {
   tickAngle?: number
   /** Label every x category instead of letting Plotly skip some. */
   allTicks?: boolean
+  /** Leave out the x or y tick labels, as for a grid of many samples. */
+  hideXTicks?: boolean
+  hideYTicks?: boolean
   /** Opacity of line-only traces, such as the lines joining paired samples. */
   lineOpacity?: number
   /** Outline width of sample points, in px. */
   pointBorder?: number
+  /** Opacity of box fills. */
+  fillOpacity?: number
   /** Opacity of sample points. */
   pointOpacity?: number
+  /** Draw bars or boxes horizontally, categories down the side. */
+  horizontal?: boolean
+  /** Write each series' name inside its bar segments, where it fits, in place of a legend. */
+  labelSegments?: boolean
+  /** Leave out the chart's own notes, such as test results or why a test did not run. */
+  hideNotes?: boolean
+  /** Leave this pane's series out of the group's legend. */
+  hideFromLegend?: boolean
+  /** Gridlines along the value axis: none, or darker so they show over category bands. */
+  grid?: 'none' | 'strong'
+  /** Step between ticks on a fixed value axis; absent shows its ends and middle. */
+  valueStep?: number
+  /** Fixed start and end of the value axis, so charts side by side share a scale. */
+  valueRange?: [number, number]
+  /** Label of a bracket joining the first two categories, such as a test's p-value. */
+  compareLabel?: string
+  /** A faint band behind each category whose label is named in the figure's colours,
+   *  across the whole pane, so bands line up with the same rows beside them. */
+  categoryBands?: boolean
+  /** Leave out a grid chart's row headers, for labelling the rows beside it. */
+  hideRowHeaders?: boolean
   /** Space between the columns of a grid chart, as a fraction of the pane. */
   gridGap?: number
   /** Space between its rows; room for the upper row's tick labels. */
@@ -65,6 +132,10 @@ export interface FigureGroup {
   cols: number
   /** Height relative to the other groups. */
   weight: number
+  /** Width of each column relative to the others; absent gives equal widths. */
+  colWeights?: number[]
+  /** Height of each row relative to the others; absent gives equal heights. */
+  rowWeights?: number[]
   /** CSS colour behind the group, or null for none. */
   background: string | null
   /** right: Plotly's legend on the top-right pane. top and bottom: one
@@ -72,6 +143,10 @@ export interface FigureGroup {
   legend: LegendPlacement | 'shared'
   /** Title drawn above the group, and above a top legend. */
   title?: string | null
+  /** Sets the one-row legend in italics, as for genus and species names. */
+  legendItalic?: boolean
+  /** Sets the one-row legend in bold. */
+  legendBold?: boolean
   panes: FigurePane[]
 }
 
@@ -87,10 +162,14 @@ export interface FigureDoc {
     heightMm: number
     marginMm: number
   }
-  font: { family: 'Arial' | 'Times New Roman'; sizePt: number; titlePt?: number; tickPt?: number }
+  /** titleBold sets chart and group titles in bold. */
+  font: { family: 'Arial' | 'Times New Roman'; sizePt: number; titlePt?: number; tickPt?: number; titleBold?: boolean }
   /** Colour for every trace with this legend name, across all panes. */
   colours?: Record<string, string>
-  letters: { case: 'lower' | 'upper'; sizePt: number }
+  /** Text shown in place of a run, group or category label on the axes and grid headers. */
+  labels?: Record<string, string>
+  /** none draws only the letters a group sets itself. */
+  letters: { case: 'lower' | 'upper' | 'none'; sizePt: number }
   groupGapMm: number
   /** Resolution of the PNG saved beside the layout and of raster exports. */
   rasterDpi?: number
@@ -132,7 +211,16 @@ export function resizeGroup(g: FigureGroup, rows: number, cols: number): FigureG
   for (let r = 0; r < rows; r++)
     for (let c = 0; c < cols; c++)
       panes.push(r < g.rows && c < g.cols ? g.panes[r * g.cols + c] : emptyPane())
-  return { ...g, rows, cols, weight: g.weight === g.rows ? rows : g.weight, panes }
+  const colWeights = g.colWeights && Array.from({ length: cols }, (_, c) => g.colWeights![c] ?? 1)
+  const rowWeights = g.rowWeights && Array.from({ length: rows }, (_, r) => g.rowWeights![r] ?? 1)
+  return { ...g, rows, cols, weight: g.weight === g.rows ? rows : g.weight, panes, colWeights, rowWeights }
+}
+
+/** Each column's share of the group width, summing to 1. */
+export function columnShares(g: FigureGroup): number[] {
+  const w = Array.from({ length: g.cols }, (_, c) => Math.max(0.1, g.colWeights?.[c] ?? 1))
+  const total = w.reduce((a, b) => a + b, 0)
+  return w.map(x => x / total)
 }
 
 export function newFigure(title: string): Omit<FigureDoc, 'id'> {
@@ -146,11 +234,13 @@ export function newFigure(title: string): Omit<FigureDoc, 'id'> {
   }
 }
 
-/** The letter each group shows, counting only groups without their own label. */
+/** The letter each group shows, counting only groups without their own label.
+ *  Empty when letters are off and the group sets none. */
 export function groupLetters(doc: FigureDoc): string[] {
   let n = 0
   return doc.groups.map(g => {
     if (g.label != null) return g.label
+    if (doc.letters.case === 'none') return ''
     const l = String.fromCharCode(97 + n++)
     return doc.letters.case === 'upper' ? l.toUpperCase() : l
   })
@@ -169,6 +259,67 @@ export const titlePt = (doc: FigureDoc) => doc.font.titlePt ?? doc.font.sizePt *
 export const tickPt = (doc: FigureDoc) => doc.font.tickPt ?? doc.font.sizePt * 0.9
 
 const PT_TO_MM = MM_PER_IN / 72
+
+export interface TextRun { text: string; bold: boolean; italic: boolean }
+export interface TextLineLayout {
+  /** Baseline, in px from the pane's top. */
+  y: number
+  x: number
+  anchor: 'start' | 'middle' | 'end'
+  sizePx: number
+  fill: string
+  runs: TextRun[]
+}
+
+/** Split *italic*, **bold** and ***bold italic*** markup into runs. Unpaired markers stay as text. */
+export function parseRuns(text: string): TextRun[] {
+  const runs: TextRun[] = []
+  const re = /\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*/g
+  let at = 0
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (m.index > at) runs.push({ text: text.slice(at, m.index), bold: false, italic: false })
+    runs.push(m[1] != null ? { text: m[1], bold: true, italic: true }
+            : m[2] != null ? { text: m[2], bold: true, italic: false } : { text: m[3], bold: false, italic: true })
+    at = re.lastIndex
+  }
+  if (at < text.length || !runs.length) runs.push({ text: text.slice(at), bold: false, italic: false })
+  return runs
+}
+
+/** A picture pane's split: the picture's height, then its caption's, in the units of `h`.
+ *  The caption takes its lines' natural height, at most half the pane. */
+export function captionSplit(pane: FigurePane, doc: FigureDoc, h: number): { imageH: number; captionH: number } {
+  if (!pane.image || !pane.text?.lines.length) return { imageH: h, captionH: 0 }
+  const natural = pane.text.lines.reduce((a, l) => a + (l.sizePt ?? doc.font.sizePt) * PX_PER_PT * 1.2, 0)
+  const captionH = Math.min(h / 2, natural)
+  return { imageH: h - captionH, captionH }
+}
+
+/** Where each line of a text pane goes in a pane w × h px. Lines are 1.2 em apart.
+ *  With `measure` (a run's width in px at a size), when a line is wider than 94% of the pane,
+ *  every line shrinks by the same factor, so their sizes keep their proportions. */
+export function layoutText(t: PaneText, doc: FigureDoc, w: number, h: number,
+                           measure?: (run: TextRun, sizePx: number) => number): TextLineLayout[] {
+  const runs = t.lines.map(l => parseRuns(l.text))
+  const natural = t.lines.map(l => (l.sizePt ?? doc.font.sizePt) * PX_PER_PT)
+  // Shrunk text keeps a small margin, so neighbouring panes do not touch.
+  const fit = Math.min(1, ...natural.map((size, i) => {
+    const width = measure ? runs[i].reduce((a, r) => a + measure(r, size), 0) : 0
+    return width > w * 0.94 ? w * 0.94 / width : 1
+  }))
+  const sizes = natural.map(s => s * fit)
+  const total = sizes.reduce((a, s) => a + s * 1.2, 0)
+  let top = t.valign === 'top' ? 0 : t.valign === 'bottom' ? h - total : (h - total) / 2
+  const anchor = t.align === 'left' ? 'start' : t.align === 'right' ? 'end' : 'middle'
+  const x = t.align === 'left' ? 0 : t.align === 'right' ? w : w / 2
+  return t.lines.map((l, i) => {
+    const size = sizes[i]
+    // The baseline sits where the line's 1.2 em box puts a cap height of about 0.7 em in the middle.
+    const y = top + size * 0.95
+    top += size * 1.2
+    return { y, x, anchor, sizePx: size, fill: l.colour ?? '#222222', runs: runs[i] }
+  })
+}
 
 export interface GroupGeometry {
   box: Box
@@ -215,9 +366,15 @@ export function figureGeometry(doc: FigureDoc): FigureGeometry {
         if (place === 'top') top += lh
         else bottom -= lh
       }
-      const pw = box.w / g.cols, ph = (bottom - top) / g.rows
+      const shares = columnShares(g)
+      const lefts = shares.map((_, c) => shares.slice(0, c).reduce((a, b) => a + b, 0))
+      const rw = Array.from({ length: g.rows }, (_, r) => Math.max(0.1, g.rowWeights?.[r] ?? 1))
+      const rTotal = rw.reduce((a, b) => a + b, 0)
+      const rh = rw.map(v => (bottom - top) * v / rTotal)
+      const tops = rh.map((_, r) => top + rh.slice(0, r).reduce((a, b) => a + b, 0))
       const panes = g.panes.map((_, k) => ({
-        x: box.x + (k % g.cols) * pw, y: top + Math.floor(k / g.cols) * ph, w: pw, h: ph,
+        x: box.x + lefts[k % g.cols] * box.w, y: tops[Math.floor(k / g.cols)],
+        w: shares[k % g.cols] * box.w, h: rh[Math.floor(k / g.cols)],
       }))
       return { box, letter: letters[i], title, legend, panes }
     }),

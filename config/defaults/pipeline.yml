@@ -284,6 +284,13 @@ phylogeny:
       # gappa --threshold: placement mass a branch must gather before a query
       # is assigned to it, from 0.5 to 1.
       threshold: 0.8
+  # The tree viewer.
+  viewer:
+    italics:
+      # Capitalised words that are not taxon names, kept upright when a tree's
+      # labels set only genus and species in italics.
+      exceptions:
+        - "Outgroup"
 
 ## Read QC reports
 fastqc:

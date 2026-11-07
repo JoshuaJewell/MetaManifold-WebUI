@@ -353,6 +353,19 @@ export const api = {
       }
       return res.json() as Promise<{ file: string }>
     },
+    /** Store a PNG or JPEG for an image pane; the reply names the stored file. */
+    uploadImage: async (study: string, id: string, image: Blob) => {
+      const res = await fetch(apiUrl(`/api/v1/studies/${study}/figures/${id}/images`), {
+        method: 'POST', headers: { 'Content-Type': image.type || 'application/octet-stream' }, body: image,
+      })
+      if (!res.ok) {
+        const err: ApiError = await res.json().catch(() => ({ error: 'network_error', message: res.statusText }))
+        throw Object.assign(new Error(err.message), { apiError: err, status: res.status })
+      }
+      return res.json() as Promise<{ file: string }>
+    },
+    imageUrl: (study: string, id: string, file: string) =>
+      apiUrl(`/api/v1/studies/${study}/figures/${id}/images/${encodeURIComponent(file)}`),
   },
 
   referenceTrees: {

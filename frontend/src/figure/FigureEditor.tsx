@@ -9,11 +9,11 @@ import { AddToReport } from '../components/AddToReport'
 import { useToast } from '../components/Toast'
 import { saveBlob } from '../utils/download'
 import { clearChartCache, fetchChart, paneFigure, parseColour, type PlotSpec } from './charts'
-import { figurePdf, figurePng, figureSvg, figureTiff } from './export'
-import { layoutLegend, legendEntries, mergeEntries, type LegendEntry } from './legend'
+import { figurePdf, figurePng, figureSvg, figureTiff, imageDataUrl } from './export'
+import { layoutLegend, mergeEntries, paneLegendEntries, textWidth, type LegendEntry } from './legend'
 import { PaneEditor } from './PaneEditor'
 import {
-  PAGE_SIZES, PX_PER_MM, PX_PER_PT, figureGeometry, legendPlacement, newGroup, resizeGroup, tickPt, titlePt,
+  PAGE_SIZES, PX_PER_MM, PX_PER_PT, captionSplit, figureGeometry, layoutText, textFrame, legendPlacement, newGroup, resizeGroup, tickPt, titlePt,
   type FigureDoc, type FigureGroup, type FigurePane, type LegendPlacement, type PageSize,
 } from './types'
 import styles from './Figure.module.css'
@@ -35,20 +35,24 @@ const fontFamily = (doc: FigureDoc) =>
   doc.font.family === 'Arial' ? 'Arial, Helvetica, sans-serif' : '"Times New Roman", Times, serif'
 
 /** A group's horizontal legend, positioned inside its strip. */
-function GroupLegend({ entries, doc, box }: { entries: LegendEntry[]; doc: FigureDoc; box: { x: number; y: number; w: number; h: number } }) {
+function GroupLegend({ entries, doc, box, italic, bold }: {
+  entries: LegendEntry[]; doc: FigureDoc; box: { x: number; y: number; w: number; h: number }; italic?: boolean; bold?: boolean
+}) {
   const family = fontFamily(doc)
   const w = box.w * PX_PER_MM, h = box.h * PX_PER_MM
-  const lay = layoutLegend(entries, w, doc.font.sizePt * PX_PER_PT, family)
+  const lay = layoutLegend(entries, w, doc.font.sizePt * PX_PER_PT, family, italic, bold)
   return (
     <div style={{ position: 'absolute', left: box.x * PX_PER_MM, top: box.y * PX_PER_MM, width: w, height: h,
-                  fontFamily: family, fontSize: lay.fontPx, color: '#444', pointerEvents: 'none' }}>
+                  fontFamily: family, fontSize: lay.fontPx, fontStyle: italic ? 'italic' : undefined,
+                  fontWeight: bold ? 'bold' : undefined, color: '#444', pointerEvents: 'none' }}>
       {lay.items.map(it => (
         <span key={it.entry.name}>
           <span style={{ position: 'absolute', left: it.x, top: (h - lay.swatch) / 2, width: lay.swatch, height: lay.swatch,
                          background: it.entry.fill, boxSizing: 'border-box',
                          border: it.entry.stroke ? `1px solid ${it.entry.stroke}` : undefined,
                          borderRadius: it.entry.shape === 'circle' ? '50%' : 0 }} />
-          <span style={{ position: 'absolute', left: it.textX, top: 0, lineHeight: `${h}px`, whiteSpace: 'nowrap' }}>{it.entry.name}</span>
+          <span style={{ position: 'absolute', left: it.textX, top: 0, lineHeight: `${h}px`, whiteSpace: 'nowrap',
+                         fontStyle: italic || it.entry.italic ? 'italic' : undefined }}>{it.entry.name}</span>
         </span>
       ))}
     </div>
@@ -67,6 +71,61 @@ async function buildPanes(study: string, doc: FigureDoc): Promise<(PlotSpec | nu
       widthPx: box.w * PX_PER_MM, heightPx: box.h * PX_PER_MM,
     })
   }))))
+}
+
+/** Every image pane's picture as a data URL, keyed by file. */
+async function loadImages(study: string, doc: FigureDoc): Promise<Record<string, string>> {
+  const files = new Set(doc.groups.flatMap(g => g.panes.flatMap(p => !p.chart && p.image?.file ? [p.image.file] : [])))
+  const entries = await Promise.all([...files].map(async f =>
+    [f, await imageDataUrl(api.figures.imageUrl(study, doc.id, f))] as const))
+  return Object.fromEntries(entries)
+}
+
+/** The page as one SVG, with every chart fetched and every picture inlined. */
+async function pageSvg(study: string, doc: FigureDoc) {
+  const [panes, images] = await Promise.all([buildPanes(study, doc), loadImages(study, doc)])
+  return figureSvg(doc, panes, images)
+}
+
+/** A text pane, drawn the way the export draws it. */
+function PaneTextView({ pane, doc, w, h }: { pane: FigurePane; doc: FigureDoc; w: number; h: number }) {
+  if (!pane.text) return null
+  const frame = textFrame(pane.text, w, h)
+  return (
+    <svg width={w} height={h} style={{ display: 'block', overflow: 'visible' }}>
+      <g transform={frame.transform}>
+      {layoutText(pane.text, doc, frame.w, frame.h, (r, s) => textWidth(r.text, s, fontFamily(doc), r.italic, r.bold)).map((l, i) => (
+        <text key={i} x={l.x} y={l.y} fontFamily={fontFamily(doc)} fontSize={l.sizePx} fill={l.fill} textAnchor={l.anchor}>
+          {l.runs.map((r, k) => (
+            <tspan key={k} fontWeight={r.bold ? 'bold' : undefined} fontStyle={r.italic ? 'italic' : undefined}>{r.text}</tspan>
+          ))}
+        </text>
+      ))}
+      </g>
+    </svg>
+  )
+}
+
+function PaneContent(props: {
+  study: string; figureId: string; pane: FigurePane; doc: FigureDoc
+  showLegend: boolean; w: number; h: number; version: number
+  onEntries: (entries: LegendEntry[]) => void
+}) {
+  const { study, figureId, pane, doc, w, h } = props
+  if (pane.chart) return <PanePlot {...props} />
+  if (pane.image && !pane.image.file) return <div className={styles.paneEmpty}>Choose a picture for this pane.</div>
+  if (pane.image) {
+    const { imageH, captionH } = captionSplit(pane, doc, h)
+    return (
+      <>
+        <img src={api.figures.imageUrl(study, figureId, pane.image.file)} alt="" draggable={false}
+          style={{ display: 'block', width: w, height: imageH, objectFit: pane.image.fit }} />
+        {captionH > 0 && <PaneTextView pane={pane} doc={doc} w={w} h={captionH} />}
+      </>
+    )
+  }
+  if (pane.text) return <PaneTextView pane={pane} doc={doc} w={w} h={h} />
+  return <div className={styles.paneEmpty}>Empty pane. Select it to choose a chart, picture or text.</div>
 }
 
 function PanePlot({ study, pane, doc, showLegend, w, h, version, onEntries }: {
@@ -88,7 +147,7 @@ function PanePlot({ study, pane, doc, showLegend, w, h, version, onEntries }: {
       .then(raw => {
         if (cancelled) return
         const fig = paneFigure(raw, pane, doc, { showLegend, widthPx: w, heightPx: h })
-        onEntries(legendEntries(fig))
+        onEntries(paneLegendEntries(fig, pane))
         return Plotly.react(el, fig.data as Plotly.Data[], fig.layout, { staticPlot: true, displayModeBar: false })
       })
       .catch(e => { if (!cancelled) setError(errorMessage(e)) })
@@ -157,8 +216,7 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
   }
 
   const exportAs = async (format: 'pdf' | 'png' | 'tif'): Promise<{ blob: Blob; ext: string }> => {
-    const panes = await buildPanes(study, doc)
-    const svg = await figureSvg(doc, panes)
+    const svg = await pageSvg(study, doc)
     const blob = format === 'pdf' ? await figurePdf(doc, svg)
                : format === 'png' ? await figurePng(doc, svg, dpi)
                : await figureTiff(doc, svg, dpi)
@@ -182,9 +240,9 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
     const gen = ++renderGen.current
     const t = window.setTimeout(async () => {
       try {
-        const panes = await buildPanes(study, doc)
+        const svg = await pageSvg(study, doc)
         if (gen !== renderGen.current) return
-        const png = await figurePng(doc, await figureSvg(doc, panes), dpi)
+        const png = await figurePng(doc, svg, dpi)
         if (gen !== renderGen.current) return
         const { file } = await api.figures.saveRaster(study, doc.id, png)
         setSavedImage(`${file} at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`)
@@ -196,6 +254,8 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
   }, [doc, version, study]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const page = PAGE_SIZES[doc.page.size]
+  /** The group's letter, or its position when it has none. */
+  const groupName = (i: number) => geo.groups[i]?.letter || String(i + 1)
   const num = (v: string, min: number, max: number, fallback: number) =>
     Math.min(max, Math.max(min, Number.isFinite(Number(v)) && v !== '' ? Number(v) : fallback))
 
@@ -279,6 +339,11 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
                 onChange={e => onChange({ ...doc, font: { ...doc.font, titlePt: num(e.target.value, 4, 36, 10) } })} />
             </label>
             <label className={styles.field}>
+              <span>Bold titles</span>
+              <input type="checkbox" checked={doc.font.titleBold ?? false}
+                onChange={e => onChange({ ...doc, font: { ...doc.font, titleBold: e.target.checked || undefined } })} />
+            </label>
+            <label className={styles.field}>
               <span>Tick labels (pt)</span>
               <input type="number" min={3} max={24} step={0.5} value={tickPt(doc)}
                 onChange={e => onChange({ ...doc, font: { ...doc.font, tickPt: num(e.target.value, 3, 24, 7) } })} />
@@ -291,9 +356,10 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
             <label className={styles.field}>
               <span>Letter case</span>
               <select value={doc.letters.case}
-                onChange={e => onChange({ ...doc, letters: { ...doc.letters, case: e.target.value as 'lower' | 'upper' } })}>
+                onChange={e => onChange({ ...doc, letters: { ...doc.letters, case: e.target.value as FigureDoc['letters']['case'] } })}>
                 <option value="lower">a, b, c</option>
                 <option value="upper">A, B, C</option>
+                <option value="none">None</option>
               </select>
             </label>
             <label className={styles.field}>
@@ -305,6 +371,7 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
 
           <ColourEditor doc={doc} onChange={onChange}
             names={mergeEntries(Object.values(paneEntries)).map(e => e.name)} />
+          <LabelEditor doc={doc} onChange={onChange} />
 
           <div className={styles.section}>
             <div className={styles.sectionTitle}>
@@ -318,7 +385,7 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
             {doc.groups.map((g, i) => (
               <div key={g.id} className={`${styles.groupRow} ${i === sel.group ? styles.selected : ''}`}
                 onClick={() => setSel({ group: i, pane: null })}>
-                <strong style={{ minWidth: 18 }}>{geo.groups[i].letter}</strong>
+                <strong style={{ minWidth: 18 }}>{groupName(i)}</strong>
                 <span>{g.rows} × {g.cols}</span>
                 <span className={styles.spacer} />
                 <button className="btn btn-sm" aria-label="Move group up" disabled={i === 0}
@@ -328,7 +395,7 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
                 <button className="btn btn-sm btn-danger" aria-label="Remove group" disabled={doc.groups.length === 1}
                   onClick={e => {
                     e.stopPropagation()
-                    if (!window.confirm(`Remove group ${geo.groups[i].letter} and its panes?`)) return
+                    if (!window.confirm(`Remove group ${groupName(i)} and its panes?`)) return
                     onChange({ ...doc, groups: doc.groups.filter((_, k) => k !== i) })
                     setSel({ group: Math.max(0, i - 1), pane: null })
                   }}>✕</button>
@@ -338,7 +405,7 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
 
           {group && (
             <div className={styles.section}>
-              <div className={styles.sectionTitle}>Group {geo.groups[sel.group]?.letter}</div>
+              <div className={styles.sectionTitle}>Group {groupName(sel.group)}</div>
               <label className={styles.field}>
                 <span>Title</span>
                 <input type="text" value={group.title ?? ''} placeholder="None"
@@ -359,6 +426,38 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
                     onChange={e => setGroup(sel.group, resizeGroup(group, group.rows, num(e.target.value, 1, 6, 1)))} />
                 </span>
               </div>
+              {group.cols > 1 && (
+                <div className={styles.field}>
+                  <span>Column widths</span>
+                  <span className={styles.inline}>
+                    {Array.from({ length: group.cols }, (_, c) => (
+                      <input key={c} type="number" min={0.25} max={12} step={0.25} style={{ width: 52 }}
+                        value={group.colWeights?.[c] ?? 1} aria-label={`Width of column ${c + 1}`}
+                        onChange={e => {
+                          const w = Array.from({ length: group.cols }, (_, k) => group.colWeights?.[k] ?? 1)
+                          w[c] = num(e.target.value, 0.25, 12, 1)
+                          setGroup(sel.group, { ...group, colWeights: w.every(x => x === 1) ? undefined : w })
+                        }} />
+                    ))}
+                  </span>
+                </div>
+              )}
+              {group.rows > 1 && (
+                <div className={styles.field}>
+                  <span>Row heights</span>
+                  <span className={styles.inline}>
+                    {Array.from({ length: group.rows }, (_, r) => (
+                      <input key={r} type="number" min={0.25} max={12} step={0.05} style={{ width: 52 }}
+                        value={group.rowWeights?.[r] ?? 1} aria-label={`Height of row ${r + 1}`}
+                        onChange={e => {
+                          const w = Array.from({ length: group.rows }, (_, k) => group.rowWeights?.[k] ?? 1)
+                          w[r] = num(e.target.value, 0.25, 12, 1)
+                          setGroup(sel.group, { ...group, rowWeights: w.every(x => x === 1) ? undefined : w })
+                        }} />
+                    ))}
+                  </span>
+                </div>
+              )}
               <label className={styles.field}>
                 <span>Height share</span>
                 <input type="number" min={0.25} max={12} step={0.25} value={group.weight}
@@ -375,6 +474,20 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
                   <option value="none">None</option>
                 </select>
               </label>
+              {(legendPlacement(group) === 'top' || legendPlacement(group) === 'bottom') && (
+                <label className={styles.field}>
+                  <span>Italic legend</span>
+                  <input type="checkbox" checked={group.legendItalic ?? false}
+                    onChange={e => setGroup(sel.group, { ...group, legendItalic: e.target.checked || undefined })} />
+                </label>
+              )}
+              {(legendPlacement(group) === 'top' || legendPlacement(group) === 'bottom') && (
+                <label className={styles.field}>
+                  <span>Bold legend</span>
+                  <input type="checkbox" checked={group.legendBold ?? false}
+                    onChange={e => setGroup(sel.group, { ...group, legendBold: e.target.checked || undefined })} />
+                </label>
+              )}
               <div className={styles.field}>
                 <span>Background</span>
                 <span className={styles.inline}>
@@ -390,11 +503,11 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
           )}
 
           {group && sel.pane != null && group.panes[sel.pane] && (
-            <PaneEditor study={study} runs={runs} source={source} pane={group.panes[sel.pane]}
+            <PaneEditor study={study} figureId={doc.id} runs={runs} source={source} pane={group.panes[sel.pane]}
               onChange={p => setPane(sel.group, sel.pane!, p)} />
           )}
           {group && sel.pane == null && (
-            <p style={{ color: 'var(--color-muted-fg)', margin: 0 }}>Select a pane on the page to choose its chart.</p>
+            <p style={{ color: 'var(--color-muted-fg)', margin: 0 }}>Select a pane on the page to choose what it shows.</p>
           )}
         </div>
 
@@ -418,12 +531,12 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
                       const selected = sel.group === gi && sel.pane === pi
                       return (
                         <div key={pi} role="button" tabIndex={0}
-                          aria-label={`Group ${gg.letter}, pane ${pi + 1}`}
+                          aria-label={`Group ${groupName(gi)}, pane ${pi + 1}`}
                           className={`${styles.pane} ${selected ? styles.selected : ''}`}
                           style={{ left: box.x * PX_PER_MM, top: box.y * PX_PER_MM, width: w, height: h }}
                           onClick={() => setSel({ group: gi, pane: pi })}
                           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel({ group: gi, pane: pi }) } }}>
-                          <PanePlot study={study} pane={p} doc={doc}
+                          <PaneContent study={study} figureId={doc.id} pane={p} doc={doc}
                             showLegend={showsLegend(g, pi)} w={w} h={h} version={version}
                             onEntries={e => reportEntries(`${g.id}:${pi}`, e)} />
                         </div>
@@ -433,20 +546,21 @@ export function FigureEditor({ study, runs, source, doc, onChange }: {
                       <div style={{ position: 'absolute', left: gg.title.x * PX_PER_MM, top: gg.title.y * PX_PER_MM,
                                     width: gg.title.w * PX_PER_MM, height: gg.title.h * PX_PER_MM,
                                     lineHeight: `${gg.title.h * PX_PER_MM}px`, textAlign: 'center', color: '#444',
-                                    fontFamily: fontFamily(doc), fontSize: titlePt(doc) * PX_PER_PT, pointerEvents: 'none' }}>
+                                    fontFamily: fontFamily(doc), fontSize: titlePt(doc) * PX_PER_PT, pointerEvents: 'none',
+                                    fontWeight: doc.font.titleBold ? 'bold' : undefined }}>
                         {g.title}
                       </div>
                     )}
                     {gg.legend && (
-                      <GroupLegend doc={doc} box={gg.legend}
+                      <GroupLegend doc={doc} box={gg.legend} italic={g.legendItalic} bold={g.legendBold}
                         entries={mergeEntries(g.panes.map((p, pi) => p.chart ? paneEntries[`${g.id}:${pi}`] ?? [] : []))} />
                     )}
-                    <span className={styles.letter} style={{
+                    {gg.letter && <span className={styles.letter} style={{
                       left: b.x * PX_PER_MM + doc.letters.sizePt * PX_PER_PT * 0.15,
                       top: b.y * PX_PER_MM,
                       fontSize: doc.letters.sizePt * PX_PER_PT,
                       fontFamily: doc.font.family === 'Arial' ? 'Arial, Helvetica, sans-serif' : '"Times New Roman", Times, serif',
-                    }}>{gg.letter}</span>
+                    }}>{gg.letter}</span>}
                   </div>
                 )
               })}
@@ -488,6 +602,39 @@ function ColourEditor({ doc, names, onChange }: { doc: FigureDoc; names: string[
             onClick={() => { set({ ...colours, [adding]: '#888888' }); setAdding('') }}>Set colour</button>
         </div>
       )}
+    </div>
+  )
+}
+
+/** Display text for run, group and category labels, applied to every pane. */
+function LabelEditor({ doc, onChange }: { doc: FigureDoc; onChange: (doc: FigureDoc) => void }) {
+  const labels = doc.labels ?? {}
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const set = (next: Record<string, string>) => onChange({ ...doc, labels: next })
+  return (
+    <div className={styles.section}>
+      <div className={styles.sectionTitle}>Labels</div>
+      {Object.entries(labels).map(([name, shown]) => (
+        <div key={name} className={styles.field}>
+          <span title={name} style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+          <span className={styles.inline} style={{ flexWrap: 'nowrap' }}>
+            <input type="text" value={shown} aria-label={`Shown text for ${name}`} style={{ flex: 1, minWidth: 0 }}
+              onChange={e => set({ ...labels, [name]: e.target.value })} />
+            <button className="btn btn-sm" aria-label={`Show ${name} as it is`}
+              onClick={() => { const { [name]: _, ...rest } = labels; set(rest) }}>✕</button>
+          </span>
+        </div>
+      ))}
+      <div className={styles.inline} style={{ flexWrap: 'nowrap' }}>
+        <input type="text" value={from} placeholder="Label, e.g. Large Intestine" aria-label="Label to replace"
+          style={{ flex: 1, minWidth: 0, font: 'inherit' }} onChange={e => setFrom(e.target.value)} />
+        <input type="text" value={to} placeholder="Shown as" aria-label="Text to show instead"
+          style={{ flex: 1, minWidth: 0, font: 'inherit' }} onChange={e => setTo(e.target.value)} />
+        <button className="btn btn-sm" disabled={!from.trim()}
+          onClick={() => { set({ ...labels, [from.trim()]: to }); setFrom(''); setTo('') }}>Add</button>
+      </div>
+      <span style={{ color: 'var(--color-muted-fg)' }}>Underscores already show as spaces; name the label with spaces.</span>
     </div>
   )
 }

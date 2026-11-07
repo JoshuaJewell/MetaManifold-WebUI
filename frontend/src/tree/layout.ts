@@ -55,6 +55,8 @@ export interface TreeSettings {
   /** Tip labels beside each tip, or in one column past the deepest tip. */
   tipLabels:         'tips' | 'aligned'
   tipJustify:        'left' | 'right'
+  /** An italic label is italic throughout, or only in its genus and species names. */
+  italics:           'label' | 'taxa'
   /** Newick file in the same study whose support values are mapped by bipartition. */
   supportTree:       string | null
   newickInternal:    'support' | 'names' | 'both'
@@ -66,7 +68,7 @@ export const DEFAULT_SETTINGS: TreeSettings = {
   fontSize: 11, rowHeight: 14, size: 700, zoom: 1,
   showSupport: true, supportMin: 0, showInternalNames: true,
   placements: 'best', bestLwrThreshold: 0.95, placementMinLwr: 0.1, placementLabels: false, wedge: 'isosceles',
-  collapsedCounts: true, tipLabels: 'tips', tipJustify: 'left',
+  collapsedCounts: true, tipLabels: 'tips', tipJustify: 'left', italics: 'label',
   symbols: {
     placements: { show: true, shape: 'circle', fill: { hex: '#e8590c', alpha: 0.6 }, stroke: { hex: '#e8590c', alpha: 1 }, minSize: 5, maxSize: 18 },
     support:    { show: false, shape: 'circle', fill: { hex: '#495057', alpha: 0.8 }, stroke: { hex: '#495057', alpha: 0 }, minSize: 2, maxSize: 8 },

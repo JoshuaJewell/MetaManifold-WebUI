@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AddToReport } from '../components/AddToReport'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
-import type { TreeFile, TreeFileInfo } from '../api/types'
+import type { ConfigMap, TreeFile, TreeFileInfo } from '../api/types'
 import { useApi } from '../hooks/useApi'
 import { Skeleton } from '../components/Skeleton'
 import { useToast } from '../components/Toast'
@@ -23,6 +23,7 @@ import { ImportPanel } from '../tree/ImportPanel'
 import { DatasetControls } from '../tree/controls'
 import { Inspector } from '../tree/Inspector'
 import { saveBlob } from '../utils/download'
+import { PDF_TEXT } from '../figure/export'
 
 function renameOp(key: string, name: string | null, side: string): TreeOp {
   return key.startsWith('split:') && name !== null ? { op: 'rename', key, name, side } : { op: 'rename', key, name }
@@ -38,6 +39,8 @@ export interface TreeSource {
   list: () => Promise<TreeFileInfo[]>
   /** The study whose report a figure goes to, if any. */
   study: string | null
+  /** Settings in force: the study's for a study tree, the defaults for a reference tree. */
+  config: () => Promise<ConfigMap>
 }
 
 export function TreeView() {
@@ -49,6 +52,7 @@ export function TreeView() {
     saveView: (f, doc) => api.trees.saveView(study!, f, doc),
     list: () => api.trees.list(study!),
     study: study!,
+    config: () => api.config.getStudy(study!),
   }), [study])
   return <TreeLoader source={source} file={file!} />
 }
@@ -63,6 +67,7 @@ export function ReferenceTreeView() {
     saveView: (_, doc) => api.referenceTrees.saveView(id!, doc),
     list: () => Promise.resolve([]),
     study: null,
+    config: () => api.config.getDefault(),
   }), [id])
   return <TreeLoader source={source} file="" />
 }
@@ -116,6 +121,13 @@ function TreeCanvas({ source, tree, src, toast }: {
 }) {
   const initial = useMemo(() => readDoc(tree.view), [tree])
   const ix = useMemo(() => indexTree(src), [src])
+  const [italicExceptions, setItalicExceptions] = useState<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    source.config().then(cfg => {
+      const v = cfg['phylogeny.viewer.italics.exceptions']?.value
+      setItalicExceptions(new Set(Array.isArray(v) ? v.map(String) : []))
+    }).catch(() => setItalicExceptions(new Set()))
+  }, [source])
   const [hist, setHist] = useState<{ ops: TreeOp[]; redo: TreeOp[] }>({ ops: initial.ops ?? [], redo: [] })
   const { ops, redo } = hist
   const [settings, setSettings] = useState<TreeSettings>(initial.settings ?? DEFAULT_SETTINGS)
@@ -346,6 +358,35 @@ function TreeCanvas({ source, tree, src, toast }: {
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg)
   }
   const exportSvg = () => saveBlob(new Blob([svgMarkup()], { type: 'image/svg+xml' }), `${baseName}.svg`)
+  // Vector PDF at the drawn size (1 px = 0.75 pt), text kept as text in the built-in Helvetica.
+  const exportPdf = async () => {
+    try {
+      const [{ jsPDF }, { svg2pdf }] = await Promise.all([import('jspdf'), import('svg2pdf.js')])
+      const svg = new DOMParser().parseFromString(svgMarkup(), 'image/svg+xml').documentElement as unknown as SVGSVGElement
+      const walker = document.createTreeWalker(svg, NodeFilter.SHOW_TEXT)
+      for (let node = walker.nextNode(); node; node = walker.nextNode())
+        for (const [re, to] of PDF_TEXT) node.nodeValue = node.nodeValue!.replace(re, to)
+      const px = [parseFloat(svg.getAttribute('width')!), parseFloat(svg.getAttribute('height')!)]
+      // Without a viewBox svg2pdf reads px as pt and draws the tree a third too large.
+      svg.setAttribute('viewBox', `0 0 ${px[0]} ${px[1]}`)
+      const w = px[0] * 0.75, h = px[1] * 0.75
+      const pdf = new jsPDF({ unit: 'pt', format: [w, h], orientation: w > h ? 'landscape' : 'portrait' })
+      // svg2pdf reads computed styles, so the SVG has to be in the document while it runs.
+      const host = document.createElement('div')
+      host.style.cssText = 'position:fixed;left:-100000px;top:0;visibility:hidden'
+      host.appendChild(svg)
+      document.body.appendChild(host)
+      try {
+        await svg2pdf(svg, pdf, { x: 0, y: 0, width: w, height: h })
+      } finally {
+        host.remove()
+      }
+      pdf.setProperties({ title: baseName })
+      saveBlob(pdf.output('blob'), `${baseName}.pdf`)
+    } catch (e) {
+      toast.error(`PDF export failed: ${e instanceof Error ? e.message : e}`)
+    }
+  }
   const exportPng = () => {
     const img = new Image()
     const url = URL.createObjectURL(new Blob([svgMarkup()], { type: 'image/svg+xml' }))
@@ -525,6 +566,11 @@ function TreeCanvas({ source, tree, src, toast }: {
             <option value="left">aligned, left-justified</option>
             <option value="right">aligned, right-justified</option>
           </select></label>}
+          <label>Italics <select value={settings.italics} title="How labels styled italic are set"
+            onChange={e => set('italics', e.target.value as TreeSettings['italics'])}>
+            <option value="label">whole label</option>
+            <option value="taxa">genus and species only</option>
+          </select></label>
           <label><input type="checkbox" checked={settings.legend} onChange={e => set('legend', e.target.checked)} /> Size legend</label>
         </div>
         <div className={styles.row}>
@@ -552,6 +598,7 @@ function TreeCanvas({ source, tree, src, toast }: {
           <span className={styles.label}>Export</span>
           <button className="btn" onClick={exportSvg}>SVG</button>
           <button className="btn" onClick={exportPng}>PNG</button>
+          <button className="btn" onClick={exportPdf}>PDF</button>
           <button className="btn" onClick={exportNewick}>Newick</button>
           <select value={settings.newickInternal} title="Internal node labels in the Newick export"
             onChange={e => set('newickInternal', e.target.value as TreeSettings['newickInternal'])}>
@@ -571,7 +618,8 @@ function TreeCanvas({ source, tree, src, toast }: {
             onClick={e => { if (e.target === svgRef.current) setSelClade(null) }}>
             {legendRows.length > 0 && <Legend rows={legendRows} settings={settings} />}
             <g transform={legendH ? `translate(0 ${legendH})` : undefined}>
-              <TreeShapes layout={layout} settings={settings} selSubtree={selSubtree} matchSet={matchSet}
+              <TreeShapes layout={layout} settings={settings} italicExceptions={italicExceptions}
+                selSubtree={selSubtree} matchSet={matchSet}
                 onSelect={d => setSelClade(d.clade)}
                 onToggle={toggleCollapse}
                 onRename={startRename} />

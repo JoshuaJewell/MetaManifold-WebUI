@@ -51,6 +51,9 @@ end
         bad(Dict("reference" => Dict("trim" => Dict("method" => "tight"))))
         bad(Dict("reference" => Dict("trim" => Dict("residue_overlap" => 0.75))))
         bad(Dict("placement" => Dict("trim" => Dict("conservation" => 150))))
+        bad(Dict("viewer" => Dict("italics" => Dict("exceptions" => "Outgroup"))))
+        bad(Dict("viewer" => Dict("italics" => Dict("exceptions" => ["Out group"]))))
+        @test s["viewer"]["italics"]["exceptions"] == ["Outgroup"]
     end
 
     @testset "trimAl flags follow the trim method" begin

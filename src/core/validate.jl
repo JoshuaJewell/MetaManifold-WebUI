@@ -335,6 +335,9 @@ export validate_environment, validate_project, ValidationError,
         at = get(sub(pl, "accumulate"), "threshold", 0.95)
         (_is_number(at) && 0.5 <= at <= 1) ||
             _err(errors, ctx, "phylogeny.placement.accumulate.threshold must be between 0.5 and 1 (got: $(repr(at)))")
+        ex = get(sub(sub(ph, "viewer"), "italics"), "exceptions", String[])
+        (ex isa AbstractVector && all(w -> w isa AbstractString && occursin(r"\A\S+\z", w), ex)) ||
+            _err(errors, ctx, "phylogeny.viewer.italics.exceptions must be a list of single words (got: $(repr(ex)))")
     end
 
     ## Pipeline Config Validation

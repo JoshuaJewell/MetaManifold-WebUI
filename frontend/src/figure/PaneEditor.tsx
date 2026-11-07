@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FACET_DIMENSIONS, type AnnotationSource, type CategorySet, type ComparisonRunSpec, type FacetDimension } from '../api/types'
+import { errorMessage } from '../api/errorMessage'
 import { useSharedResultsTables } from '../components/annotationShared'
-import type { AlphaMetricKey, ChartKind, ChartSpec, FigurePane, PaneStyle } from './types'
+import { useToast } from '../components/Toast'
+import type { AlphaMetricKey, ChartKind, ChartSpec, FigurePane, PaneStyle, PaneText, TextLine } from './types'
 import styles from './Figure.module.css'
 
 const specKey = (r: ComparisonRunSpec) => `${r.group ?? ''}|${r.run}|${r.prefix ?? ''}`
@@ -29,8 +31,11 @@ function defaultChart(kind: ChartKind, prev: ChartSpec | null, runs: ComparisonR
   return { ...base, kind, tag: 'rank', value: 'Genus', topN: 15, relative: true, mode: 'stacked', keepEmpty: false, facet: null }
 }
 
-export function PaneEditor({ study, runs, source, pane, onChange }: {
+const newText = (): PaneText => ({ lines: [{ text: '' }], align: 'center', valign: 'middle' })
+
+export function PaneEditor({ study, figureId, runs, source, pane, onChange }: {
   study: string
+  figureId: string
   runs: ComparisonRunSpec[]
   source: AnnotationSource
   pane: FigurePane
@@ -74,14 +79,34 @@ export function PaneEditor({ study, runs, source, pane, onChange }: {
     <div className={styles.section}>
       <div className={styles.sectionTitle}>Pane</div>
       <label className={styles.field}>
-        <span>Chart</span>
-        <select value={chart?.kind ?? ''} onChange={e => onChange({
-          ...pane, chart: e.target.value ? defaultChart(e.target.value as ChartKind, chart, runs, source) : null,
-        })}>
+        <span>Shows</span>
+        <select value={chart?.kind ?? (pane.image ? 'image' : pane.text ? 'text' : '')} onChange={e => {
+          const v = e.target.value
+          // A picture pane's text is its caption, so it is kept while the pane stays a picture.
+          if (v === 'image') onChange({ ...pane, chart: null, image: pane.image ?? { file: '', fit: 'contain' }, text: pane.image ? pane.text : null })
+          else if (v === 'text') onChange({ ...pane, chart: null, image: null, text: pane.text ?? newText() })
+          else onChange({ ...pane, image: null, text: null,
+                          chart: v ? defaultChart(v as ChartKind, chart, runs, source) : null })
+        }}>
           <option value="">Empty</option>
           {(Object.keys(KIND_LABELS) as ChartKind[]).map(k => <option key={k} value={k}>{KIND_LABELS[k]}</option>)}
+          <option value="image">Picture</option>
+          <option value="text">Text</option>
         </select>
       </label>
+      {!chart && pane.image && (
+        <ImageFields study={study} figureId={figureId} pane={pane} onChange={onChange} />
+      )}
+      {!chart && pane.image && (pane.text
+        ? <>
+            <div className={styles.inline}>
+              <span style={{ fontWeight: 600 }}>Caption</span>
+              <button className="btn btn-sm" onClick={() => onChange({ ...pane, text: null })}>Remove caption</button>
+            </div>
+            <TextFields text={pane.text} onChange={text => onChange({ ...pane, text })} />
+          </>
+        : <button className="btn btn-sm" onClick={() => onChange({ ...pane, text: { ...newText(), valign: 'top' } })}>Add caption</button>)}
+      {!chart && !pane.image && pane.text && <TextFields text={pane.text} onChange={text => onChange({ ...pane, text })} />}
       {chart && (
         <>
           <label className={styles.field}>
@@ -163,7 +188,7 @@ export function PaneEditor({ study, runs, source, pane, onChange }: {
                     const [rows, cols] = e.target.value.split('|')
                     set({ facet: e.target.value ? { rows: rows as FacetDimension, cols: cols as FacetDimension } : null })
                   }}>
-                  <option value="">One chart</option>
+                  <option value="">One pooled bar per run</option>
                   {FACET_DIMENSIONS.flatMap(r => FACET_DIMENSIONS.filter(c => c !== r).map(c => (
                     <option key={`${r}|${c}`} value={`${r}|${c}`}>Rows by {r}, columns by {c}</option>
                   )))}
@@ -203,9 +228,124 @@ export function PaneEditor({ study, runs, source, pane, onChange }: {
             <input type="text" value={pane.xTitle ?? ''} placeholder="Chart's own"
               onChange={e => onChange({ ...pane, xTitle: e.target.value === '' ? null : e.target.value })} />
           </label>
+          <label className={styles.field}>
+            <span>Y-axis title</span>
+            <input type="text" value={pane.yTitle ?? ''} placeholder="Chart's own" disabled={pane.yTitle === ''}
+              onChange={e => onChange({ ...pane, yTitle: e.target.value === '' ? null : e.target.value })} />
+          </label>
+          <label className={styles.inline}>
+            <input type="checkbox" checked={pane.yTitle === ''}
+              onChange={e => onChange({ ...pane, yTitle: e.target.checked ? '' : null })} />
+            No y-axis title
+          </label>
         </>
       )}
     </div>
+  )
+}
+
+/** Upload a picture and choose how it fills the pane. */
+function ImageFields({ study, figureId, pane, onChange }: {
+  study: string; figureId: string; pane: FigurePane; onChange: (pane: FigurePane) => void
+}) {
+  const toast = useToast()
+  const [busy, setBusy] = useState(false)
+  const upload = async (f: File | undefined) => {
+    if (!f) return
+    setBusy(true)
+    try {
+      const { file } = await api.figures.uploadImage(study, figureId, f)
+      // Replacing the picture keeps its caption.
+      onChange({ ...pane, chart: null, image: { file, fit: pane.image?.fit ?? 'contain' } })
+    } catch (e) {
+      toast.error(`Picture not uploaded: ${errorMessage(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <label className={styles.field}>
+        <span>Picture</span>
+        <input type="file" accept="image/png,image/jpeg" disabled={busy}
+          onChange={e => { upload(e.target.files?.[0]); e.target.value = '' }} />
+      </label>
+      {busy && <span style={{ color: 'var(--color-muted-fg)' }}>Uploading…</span>}
+      {pane.image?.file && (
+        <label className={styles.field}>
+          <span>Fit</span>
+          <select value={pane.image.fit} onChange={e => onChange({ ...pane, image: { ...pane.image!, fit: e.target.value as 'contain' | 'cover' } })}>
+            <option value="contain">Whole picture</option>
+            <option value="cover">Fill the pane, cropping</option>
+          </select>
+        </label>
+      )}
+      <span style={{ color: 'var(--color-muted-fg)' }}>PNG or JPEG. A PNG keeps its transparency.</span>
+    </>
+  )
+}
+
+/** Lines of text, each with its own size and colour. */
+function TextFields({ text, onChange }: { text: PaneText; onChange: (text: PaneText) => void }) {
+  const setLine = (i: number, patch: Partial<TextLine>) =>
+    onChange({ ...text, lines: text.lines.map((l, k) => k === i ? { ...l, ...patch } : l) })
+  return (
+    <>
+      <div className={styles.field}>
+        <span>Align</span>
+        <span className={styles.inline}>
+          <select value={text.align} aria-label="Horizontal alignment"
+            onChange={e => onChange({ ...text, align: e.target.value as PaneText['align'] })}>
+            <option value="left">Left</option>
+            <option value="center">Centre</option>
+            <option value="right">Right</option>
+          </select>
+          <select value={text.valign} aria-label="Vertical alignment"
+            onChange={e => onChange({ ...text, valign: e.target.value as PaneText['valign'] })}>
+            <option value="top">Top</option>
+            <option value="middle">Middle</option>
+            <option value="bottom">Bottom</option>
+          </select>
+          <select value={text.rotate ?? 0} aria-label="Rotation"
+            onChange={e => onChange({ ...text, rotate: Number(e.target.value) === 0 ? undefined : Number(e.target.value) as 90 | -90 })}>
+            <option value="0">Upright</option>
+            <option value="-90">Turned, reading up</option>
+            <option value="90">Turned, reading down</option>
+          </select>
+        </span>
+      </div>
+      <div className={styles.field}>
+        <span>Move (mm)</span>
+        <span className={styles.inline}>
+          {(['right', 'down'] as const).map((dir, k) => (
+            <input key={dir} type="number" step={0.1} style={{ width: 60 }} aria-label={`Move ${dir}, in mm`} placeholder={dir}
+              value={text.offsetMm?.[k] ?? ''}
+              onChange={e => {
+                const o: [number, number] = [...(text.offsetMm ?? [0, 0])] as [number, number]
+                o[k] = Number(e.target.value) || 0
+                onChange({ ...text, offsetMm: o[0] || o[1] ? o : undefined })
+              }} />
+          ))}
+        </span>
+      </div>
+      {text.lines.map((l, i) => (
+        <div key={i} className={styles.inline} style={{ flexWrap: 'nowrap' }}>
+          <input type="text" value={l.text} aria-label={`Line ${i + 1}`} style={{ flex: 1, minWidth: 0, font: 'inherit' }}
+            onChange={e => setLine(i, { text: e.target.value })} />
+          <input type="number" min={4} max={72} step={0.5} style={{ width: 52 }} aria-label={`Size of line ${i + 1} in pt`}
+            value={l.sizePt ?? ''} placeholder="pt"
+            onChange={e => setLine(i, { sizePt: e.target.value === '' ? undefined : Math.min(72, Math.max(4, Number(e.target.value) || 8)) })} />
+          <input type="color" value={l.colour ?? '#222222'} aria-label={`Colour of line ${i + 1}`}
+            onChange={e => setLine(i, { colour: e.target.value })} />
+          <button className="btn btn-sm" aria-label={`Remove line ${i + 1}`} disabled={text.lines.length === 1}
+            onClick={() => onChange({ ...text, lines: text.lines.filter((_, k) => k !== i) })}>✕</button>
+        </div>
+      ))}
+      <div className={styles.inline}>
+        <button className="btn btn-sm" onClick={() => onChange({ ...text, lines: [...text.lines, { text: '' }] })}>Add line</button>
+        <span style={{ color: 'var(--color-muted-fg)' }}>*italic*, **bold**. Blank size uses the text size.</span>
+      </div>
+    </>
   )
 }
 
@@ -239,6 +379,16 @@ function PaneStyleFields({ pane, onChange }: { pane: FigurePane; onChange: (pane
         <input type="checkbox" checked={style.allTicks ?? false} onChange={e => set('allTicks', e.target.checked || undefined)} />
         Label every x category
       </label>
+      <div className={styles.inline}>
+        <label className={styles.inline}>
+          <input type="checkbox" checked={style.hideXTicks ?? false} onChange={e => set('hideXTicks', e.target.checked || undefined)} />
+          No x tick labels
+        </label>
+        <label className={styles.inline}>
+          <input type="checkbox" checked={style.hideYTicks ?? false} onChange={e => set('hideYTicks', e.target.checked || undefined)} />
+          No y tick labels
+        </label>
+      </div>
       {hasLines && (
         <label className={styles.field}>
           <span>Pair lines opacity</span>
@@ -253,11 +403,77 @@ function PaneStyleFields({ pane, onChange }: { pane: FigurePane; onChange: (pane
             onChange={e => set('pointBorder', numberOrUndefined(e.target.value, 0, 4))} />
         </label>
       )}
+      {chart?.kind === 'alpha' && (
+        <label className={styles.field}>
+          <span>Box fill opacity</span>
+          <input type="number" min={0} max={1} step={0.05} value={style.fillOpacity ?? ''} placeholder="Chart's own"
+            onChange={e => set('fillOpacity', numberOrUndefined(e.target.value, 0, 1))} />
+        </label>
+      )}
       {hasPoints && (
         <label className={styles.field}>
           <span>Point opacity</span>
           <input type="number" min={0} max={1} step={0.05} value={style.pointOpacity ?? ''} placeholder="Chart's own"
             onChange={e => set('pointOpacity', numberOrUndefined(e.target.value, 0, 1))} />
+        </label>
+      )}
+      {(chart?.kind === 'composition' || chart?.kind === 'alpha') && (
+        <label className={styles.inline}>
+          <input type="checkbox" checked={style.horizontal ?? false} onChange={e => set('horizontal', e.target.checked || undefined)} />
+          Horizontal
+        </label>
+      )}
+      {chart?.kind === 'composition' && (
+        <label className={styles.inline}>
+          <input type="checkbox" checked={style.labelSegments ?? false} onChange={e => set('labelSegments', e.target.checked || undefined)} />
+          Name segments inside the bars
+        </label>
+      )}
+      <label className={styles.field}>
+        <span>Comparison</span>
+        <input type="text" value={style.compareLabel ?? ''} placeholder="e.g. p = 0.015"
+          onChange={e => set('compareLabel', e.target.value || undefined)} />
+      </label>
+      <label className={styles.inline}>
+        <input type="checkbox" checked={style.hideFromLegend ?? false} onChange={e => set('hideFromLegend', e.target.checked || undefined)} />
+        Leave out of the group legend
+      </label>
+      <label className={styles.inline}>
+        <input type="checkbox" checked={style.categoryBands ?? false} onChange={e => set('categoryBands', e.target.checked || undefined)} />
+        Band each category in its colour
+      </label>
+      <label className={styles.field}>
+        <span>Gridlines</span>
+        <select value={style.grid ?? ''} onChange={e => set('grid', (e.target.value || undefined) as PaneStyle['grid'])}>
+          <option value="">Chart's own</option>
+          <option value="strong">Darker</option>
+          <option value="none">None</option>
+        </select>
+      </label>
+      {style.valueRange && (
+        <label className={styles.field}>
+          <span>Tick step</span>
+          <input type="number" step="any" min={0} value={style.valueStep ?? ''} placeholder="ends and middle"
+            onChange={e => set('valueStep', numberOrUndefined(e.target.value, 0, 1e9) || undefined)} />
+        </label>
+      )}
+      <div className={styles.field}>
+        <span>Value axis</span>
+        <span className={styles.inline}>
+          <input type="number" step="any" value={style.valueRange?.[0] ?? ''} placeholder="from" aria-label="Value axis start" style={{ width: 60 }}
+            onChange={e => { const v = numberOrUndefined(e.target.value, -1e9, 1e9); set('valueRange', v == null ? undefined : [v, style.valueRange?.[1] ?? v + 1]) }} />
+          <input type="number" step="any" value={style.valueRange?.[1] ?? ''} placeholder="to" aria-label="Value axis end" style={{ width: 60 }}
+            onChange={e => { const v = numberOrUndefined(e.target.value, -1e9, 1e9); set('valueRange', v == null ? undefined : [style.valueRange?.[0] ?? 0, v]) }} />
+        </span>
+      </div>
+      <label className={styles.inline}>
+        <input type="checkbox" checked={style.hideNotes ?? false} onChange={e => set('hideNotes', e.target.checked || undefined)} />
+        No chart notes (test results, warnings)
+      </label>
+      {isGrid && (
+        <label className={styles.inline}>
+          <input type="checkbox" checked={style.hideRowHeaders ?? false} onChange={e => set('hideRowHeaders', e.target.checked || undefined)} />
+          No row headers
         </label>
       )}
       {isGrid && (

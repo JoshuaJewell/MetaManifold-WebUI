@@ -4,11 +4,13 @@ import { useMemo } from 'react'
 import type { DNode, Rgba } from './model'
 import { collapsedLabel, supportValue, type LNode, type TreeLayout, type TreeSettings } from './layout'
 import styles from './Tree.module.css'
-import { fmt, SELECT_COLOUR } from './ui'
+import { fmt, SELECT_COLOUR, taxonRuns } from './ui'
 
-export function TreeShapes({ layout, settings, selSubtree, matchSet, onSelect, onToggle, onRename }: {
+export function TreeShapes({ layout, settings, italicExceptions, selSubtree, matchSet, onSelect, onToggle, onRename }: {
   layout: TreeLayout
   settings: TreeSettings
+  /** Capitalised words kept upright in taxa-only italics. */
+  italicExceptions: ReadonlySet<string>
   selSubtree: Set<number>
   matchSet: Set<number>
   onSelect: (d: DNode) => void
@@ -98,12 +100,17 @@ export function TreeShapes({ layout, settings, selSubtree, matchSet, onSelect, o
     return { x, y, anchor: atEnd ? 'end' as const : 'start' as const, transform: `rotate(${flip ? deg + 180 : deg} ${x} ${y})` }
   }
 
+  const taxaOnly = settings.italics === 'taxa'
   const textStyle = (d: DNode, boldDefault = false) => ({
-    fontStyle:   d.style.italic ? 'italic' : undefined,
+    fontStyle:   d.style.italic && !taxaOnly ? 'italic' : undefined,
     fontWeight:  (d.style.bold ?? boldDefault) ? 700 : undefined,
     fill:        d.style.label?.hex ?? 'currentColor',
     fillOpacity: d.style.label?.alpha,
   })
+
+  // In taxa-only mode an italic label sets just its genus and species names in italics.
+  const labelText = (d: DNode, text: string) => !(taxaOnly && d.style.italic) ? text
+    : taxonRuns(text, italicExceptions).map((r, k) => <tspan key={k} fontStyle={r.italic ? 'italic' : undefined}>{r.text}</tspan>)
 
   return (
     <g>
@@ -150,7 +157,7 @@ export function TreeShapes({ layout, settings, selSubtree, matchSet, onSelect, o
             <text key="wl" x={lp.x} y={lp.y} textAnchor={lp.anchor} transform={lp.transform} dominantBaseline="central"
               {...textStyle(d)} className={styles.label}
               onClick={() => onSelect(d)}
-              onDoubleClick={e => onRename(d, e.currentTarget)}>{label}</text>,
+              onDoubleClick={e => onRename(d, e.currentTarget)}>{labelText(d, label)}</text>,
           )
         } else if (d.tipKey !== null) {
           const lp = labelPos(n, 4)
@@ -161,7 +168,7 @@ export function TreeShapes({ layout, settings, selSubtree, matchSet, onSelect, o
               {...(hitMatch ? { fill: '#e8590c', fillOpacity: 1, fontWeight: 700 } : {})}
               className={styles.label}
               onClick={() => onSelect(d)}
-              onDoubleClick={e => onRename(d, e.currentTarget)}>{d.name}</text>,
+              onDoubleClick={e => onRename(d, e.currentTarget)}>{labelText(d, d.name)}</text>,
           )
         } else {
           if (settings.showSupport && d.support !== null && d.parent && supportValue(d.support) >= settings.supportMin) {
@@ -177,7 +184,7 @@ export function TreeShapes({ layout, settings, selSubtree, matchSet, onSelect, o
               <text key="n" x={n.x + 3} y={circular ? n.y - 3 : n.y + fs * 0.9}
                 fontSize={fs * 0.85} {...textStyle(d, true)} className={styles.label}
                 onClick={() => onSelect(d)}
-                onDoubleClick={e => onRename(d, e.currentTarget)}>{d.name}</text>,
+                onDoubleClick={e => onRename(d, e.currentTarget)}>{labelText(d, d.name)}</text>,
             )
           }
         }

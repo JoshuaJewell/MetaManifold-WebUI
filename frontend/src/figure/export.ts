@@ -1,8 +1,8 @@
 // © 2026 Joshua Benjamin Jewell. All rights reserved.
 // Licensed under the GNU Affero General Public License version 3 (AGPLv3).
 import Plotly from 'plotly.js-dist-min'
-import { PX_PER_MM, PX_PER_PT, MM_PER_IN, figureGeometry, titlePt, type FigureDoc } from './types'
-import { layoutLegend, legendEntries, mergeEntries } from './legend'
+import { PX_PER_MM, PX_PER_PT, MM_PER_IN, captionSplit, figureGeometry, layoutText, textFrame, titlePt, type FigureDoc, type PaneText } from './types'
+import { layoutLegend, mergeEntries, paneLegendEntries, textWidth } from './legend'
 import type { PlotSpec } from './charts'
 import { encodeTiff, pngWithDpi } from './encode'
 
@@ -34,8 +34,23 @@ function prefixIds(root: Element, prefix: string) {
   }
 }
 
-/** The whole page as one SVG, in CSS pixels at 96 per inch. */
-export async function figureSvg(doc: FigureDoc, panes: (PlotSpec | null)[][]): Promise<SVGSVGElement> {
+/** A stored picture as a data URL, so the page SVG carries it when drawn or saved. */
+export async function imageDataUrl(url: string): Promise<string> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Could not load a picture (${res.status})`)
+  const blob = await res.blob()
+  return new Promise((ok, fail) => {
+    const r = new FileReader()
+    r.onload = () => ok(r.result as string)
+    r.onerror = () => fail(new Error('Could not read a picture'))
+    r.readAsDataURL(blob)
+  })
+}
+
+/** The whole page as one SVG, in CSS pixels at 96 per inch. `images` maps each
+ *  image pane's file to its data URL. */
+export async function figureSvg(doc: FigureDoc, panes: (PlotSpec | null)[][],
+                                images: Record<string, string> = {}): Promise<SVGSVGElement> {
   const geo = figureGeometry(doc)
   const W = geo.page.w * PX_PER_MM, H = geo.page.h * PX_PER_MM
   const svg = document.createElementNS(SVG_NS, 'svg')
@@ -58,6 +73,49 @@ export async function figureSvg(doc: FigureDoc, panes: (PlotSpec | null)[][]): P
     const b = g.box
     if (group.background) svg.appendChild(rect(b.x * PX_PER_MM, b.y * PX_PER_MM, b.w * PX_PER_MM, b.h * PX_PER_MM, group.background))
     for (const [pi, box] of g.panes.entries()) {
+      const p = group.panes[pi]
+      const x = box.x * PX_PER_MM, y = box.y * PX_PER_MM, w = box.w * PX_PER_MM, h = box.h * PX_PER_MM
+      const drawText = (t: PaneText, tx: number, ty: number, tw: number, th: number) => {
+        const frame = textFrame(t, tw, th)
+        const holder = document.createElementNS(SVG_NS, 'g')
+        holder.setAttribute('transform', `translate(${tx},${ty})${frame.transform ? ' ' + frame.transform : ''}`)
+        svg.appendChild(holder)
+        for (const line of layoutText(t, doc, frame.w, frame.h, (r, s) => textWidth(r.text, s, family, r.italic, r.bold))) {
+          const el = document.createElementNS(SVG_NS, 'text')
+          for (const [k, v] of Object.entries({ x: line.x, y: line.y, 'font-family': family,
+                                                'font-size': line.sizePx, fill: line.fill, 'text-anchor': line.anchor }))
+            el.setAttribute(k, String(v))
+          for (const run of line.runs) {
+            const span = document.createElementNS(SVG_NS, 'tspan')
+            if (run.bold) span.setAttribute('font-weight', 'bold')
+            if (run.italic) span.setAttribute('font-style', 'italic')
+            span.textContent = run.text
+            el.appendChild(span)
+          }
+          holder.appendChild(el)
+        }
+      }
+      if (!p?.chart && p?.image && images[p.image.file]) {
+        const { imageH, captionH } = captionSplit(p, doc, h)
+        if (captionH && p.text) drawText(p.text, x, y + imageH, w, captionH)
+        const img = document.createElementNS(SVG_NS, 'image')
+        for (const [k, v] of Object.entries({ x, y, width: w, height: imageH, href: images[p.image.file],
+                                              preserveAspectRatio: p.image.fit === 'cover' ? 'xMidYMid slice' : 'xMidYMid meet' }))
+          img.setAttribute(k, String(v))
+        if (p.image.fit === 'cover') {
+          const clip = document.createElementNS(SVG_NS, 'clipPath')
+          clip.id = `img-clip-${n++}`
+          clip.appendChild(rect(x, y, w, imageH, '#000'))
+          svg.appendChild(clip)
+          img.setAttribute('clip-path', `url(#${clip.id})`)
+        }
+        svg.appendChild(img)
+        continue
+      }
+      if (!p?.chart && !p?.image && p?.text) {
+        drawText(p.text, x, y, w, h)
+        continue
+      }
       const fig = panes[gi]?.[pi]
       if (!fig) continue
       const pane = await paneSvg(fig)
@@ -67,21 +125,23 @@ export async function figureSvg(doc: FigureDoc, panes: (PlotSpec | null)[][]): P
       for (const child of Array.from(pane.childNodes)) wrap.appendChild(document.importNode(child, true))
       svg.appendChild(wrap)
     }
-    const text = (x: number, y: number, size: number, content: string, anchor = 'start') => {
+    const text = (x: number, y: number, size: number, content: string, anchor = 'start', italic = false, bold = false) => {
       const el = document.createElementNS(SVG_NS, 'text')
       for (const [k, v] of Object.entries({ x, y, 'font-family': family, 'font-size': size, fill: '#444444', 'text-anchor': anchor }))
         el.setAttribute(k, String(v))
+      if (italic) el.setAttribute('font-style', 'italic')
+      if (bold) el.setAttribute('font-weight', 'bold')
       el.textContent = content
       svg.appendChild(el)
     }
     if (g.title && group.title) {
       const size = titlePt(doc) * PX_PER_PT
-      text((g.title.x + g.title.w / 2) * PX_PER_MM, (g.title.y + g.title.h / 2) * PX_PER_MM + size * 0.35, size, group.title, 'middle')
+      text((g.title.x + g.title.w / 2) * PX_PER_MM, (g.title.y + g.title.h / 2) * PX_PER_MM + size * 0.35, size, group.title, 'middle', false, doc.font.titleBold)
     }
     if (g.legend) {
-      const entries = mergeEntries((panes[gi] ?? []).filter((p): p is PlotSpec => p != null).map(legendEntries))
+      const entries = mergeEntries((panes[gi] ?? []).flatMap((p, pi) => p ? [paneLegendEntries(p, group.panes[pi])] : []))
       const lx = g.legend.x * PX_PER_MM, ly = g.legend.y * PX_PER_MM, lh = g.legend.h * PX_PER_MM
-      const lay = layoutLegend(entries, g.legend.w * PX_PER_MM, doc.font.sizePt * PX_PER_PT, family)
+      const lay = layoutLegend(entries, g.legend.w * PX_PER_MM, doc.font.sizePt * PX_PER_PT, family, group.legendItalic, group.legendBold)
       for (const it of lay.items) {
         const cy = ly + lh / 2
         const sw = document.createElementNS(SVG_NS, it.entry.shape === 'circle' ? 'circle' : 'rect')
@@ -92,9 +152,10 @@ export async function figureSvg(doc: FigureDoc, panes: (PlotSpec | null)[][]): P
         if (it.entry.stroke) { attrs.stroke = it.entry.stroke; attrs['stroke-width'] = 1 }
         for (const [k, v] of Object.entries(attrs)) sw.setAttribute(k, String(v))
         svg.appendChild(sw)
-        text(lx + it.textX, cy + lay.fontPx * 0.35, lay.fontPx, it.entry.name)
+        text(lx + it.textX, cy + lay.fontPx * 0.35, lay.fontPx, it.entry.name, 'start', group.legendItalic || it.entry.italic, group.legendBold)
       }
     }
+    if (!g.letter) continue
     const size = doc.letters.sizePt * PX_PER_PT
     const t = document.createElementNS(SVG_NS, 'text')
     t.setAttribute('x', String(b.x * PX_PER_MM + size * 0.15))
@@ -110,7 +171,7 @@ export async function figureSvg(doc: FigureDoc, panes: (PlotSpec | null)[][]): P
 }
 
 // The PDF's built-in fonts cover Windows-1252 only.
-const PDF_TEXT: [RegExp, string][] = [[/\u2212/g, '-'], [/\u2264/g, '<='], [/\u2265/g, '>='], [/\u03bc/g, '\u00b5'], [/\u2009|\u202f/g, ' ']]
+export const PDF_TEXT: [RegExp, string][] = [[/\u2212/g, '-'], [/\u2264/g, '<='], [/\u2265/g, '>='], [/\u03bc/g, '\u00b5'], [/\u2009|\u202f/g, ' ']]
 
 export async function figurePdf(doc: FigureDoc, svg: SVGSVGElement): Promise<Blob> {
   const [{ jsPDF }, { svg2pdf }] = await Promise.all([import('jspdf'), import('svg2pdf.js')])
