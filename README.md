@@ -851,7 +851,7 @@ julia --project=. test/runtests.jl --integration    # adds the MiSeq SOP pipelin
 julia --project=. test/runtests.jl --server         # adds the HTTP server smoke tests
 ```
 
-Set `CI_SKIP_TAXONOMY=1` to skip taxonomy assignment in the integration run. The full suite loads R and every package and needs several GB of memory; on a small machine run a few files at a time. `cd frontend && bun run test` runs the frontend unit tests.
+The integration run assigns taxonomy against PR2 by default, which needs about 16 GiB of memory, because DADA2 holds about 262 KB per distinct lineage. Set `CI_TAXONOMY_DB=<fasta>` to use a smaller reference (CI cuts one with `config/ci/subset_pr2.jl`), or `CI_SKIP_TAXONOMY=1` to skip the stage. The full suite loads R and every package and needs several GB of memory; on a small machine run a few files at a time. `cd frontend && bun run test` runs the frontend unit tests.
 
 Name unit test files to run only those: `julia --project=. test/runtests.jl routes trees`. `dev/dev.sh` runs the development server, rebuilds and tests one job at a time, stopping and restarting the server around builds and tests (`dev/dev.sh` alone lists its commands). Deferred work is listed in `dev/TODO.md`.
 

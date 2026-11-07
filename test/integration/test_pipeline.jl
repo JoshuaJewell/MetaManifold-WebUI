@@ -9,6 +9,7 @@
 #
 # Coverage:
 #   - All pipeline stages through merge_taxa (both runs)
+#   - DADA2 taxonomy, against CI_TAXONOMY_DB when set, with a known-answer check
 #   - DuckDB results loading and query helpers
 #   - The differential abundance route on the two runs
 #
@@ -16,6 +17,9 @@
 #   - External tools installed (cutadapt, vsearch, swarm, cd-hit-est)
 #   - At least one taxonomy database downloaded (pr2 or silva)
 #   - Julia started with multiple threads (e.g. julia -t4)
+#
+# DADA2 taxonomy on the full PR2 needs about 16 GiB. CI_TAXONOMY_DB names a smaller reference
+# to use in its place (config/ci/subset_pr2.jl); CI_SKIP_TAXONOMY leaves the stage out.
 #
 # The test is skipped gracefully if tools or databases are unavailable.
 
@@ -89,6 +93,8 @@
     db_meta       = make_db_meta(db_config, db_name)
     r_lock_int    = ReentrantLock()
     skip_taxonomy = haskey(ENV, "CI_SKIP_TAXONOMY")
+    taxonomy_db   = haskey(ENV, "CI_TAXONOMY_DB") ? abspath(ENV["CI_TAXONOMY_DB"]) : dbs_loaded[dada2_key]
+    tax_levels    = String.(YAML.load_file(db_config)["databases"][db_name]["levels"])
 
     merged_results = Vector{Union{MergedTables,Nothing}}(undef, length(projects))
     asvs_results   = Vector{Union{ASVResult,Nothing}}(undef, length(projects))
@@ -129,8 +135,13 @@
 
         # Stage 2: DADA2 (then cd-hit), followed by SWARM (needs ASVs as input)
         asvs = lock(r_lock_int) do
-            dada2(project, trimmed, taxonomy_db=dbs_loaded[dada2_key],
+            dada2(project, trimmed, taxonomy_db=taxonomy_db,
                   skip_taxonomy=skip_taxonomy)
+        end
+        if !skip_taxonomy
+            tax = CSV.read(asvs.taxonomy, DataFrames.DataFrame)
+            @test nrow(tax) == count(startswith(">"), eachline(asvs.fasta))
+            @test all(l -> l in DataFrames.names(tax), tax_levels)
         end
         asvs = cdhit(project, asvs)
         otus = swarm(project, asvs)
@@ -142,7 +153,8 @@
         # the same marker the shell tools use, recoverable by a single grep.
         dada2_logs = joinpath(project.dir, "dada2", "Logs")
         for stage_log in ("filter_trim.log", "learn_errors.log", "denoise.log",
-                          "chimera_removal.log")
+                          "chimera_removal.log",
+                          (skip_taxonomy ? () : ("assign_taxonomy.log",))...)
             p = joinpath(dada2_logs, stage_log)
             @test isfile(p)
             @test any(l -> startswith(l, "[MetaManifold] cmd: R> "), readlines(p))
@@ -211,6 +223,32 @@
     end
 
     @test pwd() == start_dir
+
+    ## Known answer. MiSeq SOP is bacterial 16S and PR2 mostly eukaryotic 18S, so the runs above
+    # show that the stage works, not that it assigns correctly. A reference's own sequences
+    # should come back with their own genus.
+    if !skip_taxonomy && haskey(ENV, "CI_TAXONOMY_DB")
+        @testset "assignTaxonomy known answer" begin
+            lines     = first(eachline(taxonomy_db), 40)
+            headers   = lines[1:2:end]
+            seqs      = lines[2:2:end]
+            genus_at  = findfirst(==("Genus"), tax_levels)
+            expected  = [String(split(chopprefix(h, ">"), ';')[genus_at]) for h in headers]
+            r_funcs   = joinpath(PROJECT_ROOT, "src", "pipeline", "dada2", "dada2_functions.r")
+            matched   = lock(r_lock_int) do
+                R"""
+                suppressMessages(library(dada2))
+                source($r_funcs)
+                set.seed(1)
+                known <- run_assign_taxonomy($seqs, $taxonomy_db,
+                                             list(multithread = 2L, min_boot = 50L, levels = $tax_levels),
+                                             FALSE)$tax
+                """
+                rcopy(R"sum(known[, 'Genus'] == $expected, na.rm = TRUE)")
+            end
+            @test matched == length(seqs)
+        end
+    end
 
     ## Differential abundance route on the two runs. run_A has 2 samples and
     # run_B 1, so this checks only that the route answers with a well-formed

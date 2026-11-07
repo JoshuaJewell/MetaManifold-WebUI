@@ -242,6 +242,9 @@ jobs:
       - name: Download PR2 databases
         run: julia --project=. config/ci/download_databases.jl
 
+      - name: Cut a PR2 subset for DADA2 taxonomy
+        run: julia --project=. config/ci/subset_pr2.jl
+
       - name: Rebuild RCall against installed R
         run: julia --project=. -e 'import Pkg; Pkg.build("RCall")'
 
@@ -257,7 +260,7 @@ jobs:
 
       - name: Run tests
         env:
-          CI_SKIP_TAXONOMY: "1"
+          CI_TAXONOMY_DB: databases/pr2_ci_subset_dada2.fasta
           R_LIBS_SITE: /usr/local/lib/R/site-library:/usr/lib/R/site-library:/usr/lib/R/library
         # A failure also posts annotations, which the checks API serves without the full
         # log. Annotations are capped at 4096 bytes, so each failing assertion gets its own

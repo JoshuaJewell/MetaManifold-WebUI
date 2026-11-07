@@ -94,7 +94,7 @@ using MetaManifold.Categories, MetaManifold.CompositionLibrary
 
     ## Integration tests (opt-in)
     if RUN_INTEGRATION
-        using MetaManifold.DADA2, MetaManifold.OTUPipeline
+        using MetaManifold.DADA2, MetaManifold.OTUPipeline, RCall
         include("integration/test_pipeline.jl")
     else
         @info "Skipping integration tests (pass --integration to enable)"
