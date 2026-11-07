@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 module Config
 
 # Hierarchical config cascade and per-section content-hash helpers.
@@ -20,10 +23,6 @@ module Config
 # Stage skip guards hash the relevant YAML section from run_config.yml so
 # that any change at any level - global, study, or run - correctly
 # invalidates downstream checkpoints.
-#
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 export _section_stale, _write_section_hash, _begin_section, stage_run_count, _stale_keys,
        load_merged_config, write_run_config, stage_sections,

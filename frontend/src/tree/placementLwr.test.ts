@@ -1,4 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 // SPDX-License-Identifier: MPL-2.0
+
 import { describe, expect, test } from 'bun:test'
 import { bestLwr, buildDisplay, foldOps, indexTree, parseJplace } from './model'
 import { DEFAULT_SETTINGS, layoutTree } from './layout'

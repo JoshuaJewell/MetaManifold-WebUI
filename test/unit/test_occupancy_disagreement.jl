@@ -1,6 +1,7 @@
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
 # SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
-#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # MMW-01: the occupancy probe, and the two-thread disagreement test.
 #
 # The vsearch stage runs two independent searches, ASV and OTU, concurrently in

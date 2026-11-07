@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import { useEffect, useRef, useState } from 'react'
 import Plotly, { type Data, type Layout } from 'plotly.js-dist-min'
 

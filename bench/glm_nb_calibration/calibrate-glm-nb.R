@@ -1,4 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 # SPDX-License-Identifier: MPL-2.0
+
 # Fresh reproducer for the small-n question raised during upstream PR 62.
 # This is not the missing script that produced the earlier quoted rates.
 # Run from a checkout of PR 62: Rscript /path/to/calibrate-glm-nb.R

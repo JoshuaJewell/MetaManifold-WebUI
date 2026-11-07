@@ -1,4 +1,7 @@
 #!/usr/bin/env julia
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Compare predicted L6 (genus-level) taxa tables produced by the runner to
 # the expected ground truth recorded in expected/. For each dataset the
 # evaluator computes, per shared sample:

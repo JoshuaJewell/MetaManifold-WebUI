@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet, useLocation, useParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
@@ -133,7 +136,7 @@ export function Layout() {
         <div className="sidebar-legal">
           <div>{COPYRIGHT}</div>
           <div className="sidebar-legal-links">
-            <a href={LICENSE_URL} target="_blank" rel="noreferrer">AGPL-3.0</a> ·{' '}
+            <a href={LICENSE_URL} target="_blank" rel="noreferrer">AGPL-3.0-or-later</a> ·{' '}
             <a href={SOURCE_URL} target="_blank" rel="noreferrer">Source and Documentation</a>
           </div>
         </div>

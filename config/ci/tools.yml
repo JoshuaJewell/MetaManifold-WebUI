@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # CI-only tools config. All tools resolved from PATH.
 # Committed to the repo; the real config/tools.yml is gitignored.
 

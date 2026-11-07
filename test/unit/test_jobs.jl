@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Unit tests for the job queue's concurrency invariants and for the per-database
 # serialisation of the DuckDB store.
 #

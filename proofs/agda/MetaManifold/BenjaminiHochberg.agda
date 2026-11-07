@@ -1,6 +1,6 @@
--- SPDX-License-Identifier: AGPL-3.0-only
 -- SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
---
+-- SPDX-License-Identifier: MPL-2.0
+
 -- The Benjamini–Hochberg step-up adjustment, over exact rationals, with the
 -- properties a reader of a q-value table relies on proved rather than tested.
 --

@@ -1,4 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk> -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # Reproduce the small-sample glm_nb calibration result
 
 This is the simulation published in [upstream issue #64](https://github.com/JoshuaJewell/MetaManifold-WebUI/issues/64).

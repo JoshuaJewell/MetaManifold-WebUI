@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 @testset "merge_taxa mappings and corrections" begin
 
     @testset "_apply_single_mapping! remaps values" begin

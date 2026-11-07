@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: MPL-2.0
 # SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell <j.d.a.jewell@open.ac.uk>
-#
+# SPDX-License-Identifier: MPL-2.0
+
 # Sourced by CI steps. fetch_pinned downloads a pinned artifact with retries and,
 # on failure, annotates the cause. The caller checks the checksum and unpacks.
 #

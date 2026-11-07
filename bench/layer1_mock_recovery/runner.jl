@@ -1,4 +1,7 @@
 #!/usr/bin/env julia
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Drive MetaManifold's DADA2 pipeline against every dataset in datasets.yml
 # whose FASTQ inputs have been fetched. Writes per-dataset pipeline configs
 # under configs/, runs the pipeline with its outputs rooted under outputs/,

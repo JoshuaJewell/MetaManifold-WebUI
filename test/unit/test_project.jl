@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 @testset "ProjectSetup" begin
 
     @testset "new_project discovers leaf runs" begin

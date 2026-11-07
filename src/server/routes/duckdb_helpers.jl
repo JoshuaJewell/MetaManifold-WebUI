@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Shared DuckDB query helpers used by the route files
 using JSON3, DataFrames, OrderedCollections, DuckDB, DBInterface
 

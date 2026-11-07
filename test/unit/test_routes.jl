@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Unit tests for the HTTP server's route helper functions.
 #
 # The route helpers live in `MetaManifold.Server`. Calling them here (rather

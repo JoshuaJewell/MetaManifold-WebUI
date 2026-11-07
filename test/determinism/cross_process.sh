@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Run the determinism suite in two fresh Julia processes with different thread
 # counts and require identical output fingerprints from each.
 #

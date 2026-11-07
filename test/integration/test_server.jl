@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Integration smoke tests for the Oxygen.jl HTTP server.
 #
 # These tests start the server as a subprocess, so that they exercise the

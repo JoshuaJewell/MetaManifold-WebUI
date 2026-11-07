@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Copy packages into renv/library rather than linking them into renv's per-user
 # cache. That cache lives under ~/.cache (~/Library/Caches on macOS), which cache
 # cleaners treat as disposable; emptying it left every linked package dangling and

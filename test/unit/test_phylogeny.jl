@@ -1,5 +1,5 @@
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Phylogenetic placement: FASTA intake, settings, the command lines each step
 # builds, where each step runs, the QC summaries, and the routes.

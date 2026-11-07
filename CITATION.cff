@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 cff-version: 1.2.0
 message: "If you use MetaManifold in academic work, please cite it as follows."
 title: "MetaManifold: a Julia orchestrator for amplicon sequencing pipelines with an interactive web interface"
@@ -18,7 +21,11 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.23464266"
     description: "Version DOI: MetaManifold v0.1.0"
-license: AGPL-3.0-only
+license:
+  - AGPL-3.0-or-later
+  - MPL-2.0
+  - CC-BY-SA-4.0
+  - CC0-1.0
 repository-code: "https://github.com/JoshuaJewell/MetaManifold-WebUI"
 url: "https://github.com/JoshuaJewell/MetaManifold-WebUI"
 abstract: >-

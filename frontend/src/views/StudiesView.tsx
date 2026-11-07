@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import { Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useApi } from '../hooks/useApi'

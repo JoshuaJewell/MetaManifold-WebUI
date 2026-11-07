@@ -1,5 +1,5 @@
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Validation of the taxonomy source (VSEARCH or DADA2) named in a route.
 using JSON3, CSV, DataFrames, OrderedCollections, DuckDB, DBInterface, Dates

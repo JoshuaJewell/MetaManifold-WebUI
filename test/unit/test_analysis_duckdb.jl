@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 @testset "Analysis DuckDB helpers" begin
 
     # Set up an in-memory DuckDB with test data

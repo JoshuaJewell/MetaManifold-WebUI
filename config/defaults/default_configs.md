@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # Default Configuration
 
 In this directory is the baseline for every pipeline run on every

@@ -1,6 +1,7 @@
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
 # SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
-#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Differential abundance: Benjamini-Hochberg, TSS/RLE size factors, input
 # validation, the negative-binomial fit checked against a direct MASS::glm.nb
 # call, and clr_welch checked against direct zCompositions::cmultRepl and Welch

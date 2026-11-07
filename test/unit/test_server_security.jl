@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Unit tests for the server's request guards: the Origin allow-list, Oxygen's
 # docs and metrics being off, and the headers report uploads are served with.
 # Requests go through the app middleware in-process; no socket is opened.

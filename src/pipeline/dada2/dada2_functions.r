@@ -1,12 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: MPL-2.0
+
 # DADA2 amplicon sequencing functions
 #
 # R wrappers and functions for dada2.jl main workflow
 #
 # Notice:
-#
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 #
 # This work is based on the DADA2 tutorial by Benjamin J. Callahan, et al.,
 # available at https://benjjneb.github.io/dada2/tutorial.html, with modification

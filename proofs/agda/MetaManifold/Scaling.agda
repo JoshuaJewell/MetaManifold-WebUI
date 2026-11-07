@@ -1,6 +1,6 @@
--- SPDX-License-Identifier: AGPL-3.0-only
 -- SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
---
+-- SPDX-License-Identifier: MPL-2.0
+
 -- Library-size scaling (TSS) and median-of-ratios (RLE) over exact rationals:
 -- the parts of `tss_factors`, `rle_factors` and `_median` in
 -- `src/analysis/differential.jl` (branch feat/differential-abundance-nb,

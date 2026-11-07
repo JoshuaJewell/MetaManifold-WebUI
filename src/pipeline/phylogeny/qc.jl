@@ -1,5 +1,5 @@
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
 
 ## Quality summaries of the align and trim steps
 # Written to qc/<step>.json after the step runs and read by the page.

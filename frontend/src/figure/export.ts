@@ -1,5 +1,6 @@
-// © 2026 Joshua Benjamin Jewell. All rights reserved.
-// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import Plotly from 'plotly.js-dist-min'
 import { PX_PER_MM, PX_PER_PT, MM_PER_IN, captionSplit, figureGeometry, layoutText, textFrame, titlePt, type FigureDoc, type PaneText } from './types'
 import { layoutLegend, mergeEntries, paneLegendEntries, textWidth } from './legend'

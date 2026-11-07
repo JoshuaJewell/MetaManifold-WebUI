@@ -1,4 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
 // SPDX-License-Identifier: MPL-2.0
+
 import { describe, expect, test } from 'bun:test'
 import { taxonRuns } from './ui'
 

@@ -1,5 +1,5 @@
-// © 2026 Joshua Benjamin Jewell. All rights reserved.
-// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
 
 export const SOURCE_URL = 'https://github.com/JoshuaJewell/MetaManifold-WebUI'
 export const LICENSE_URL = `${SOURCE_URL}/blob/main/LICENSE`

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Template for tool path configuration. This is the default; new_project
 # copies it to config/tools.yml on first run, or install.sh generates that
 # copy. Edit the machine copy, not this template.

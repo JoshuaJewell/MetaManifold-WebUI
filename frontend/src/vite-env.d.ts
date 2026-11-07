@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 /// <reference types="vite/client" />
 
 declare module '*.module.css' {

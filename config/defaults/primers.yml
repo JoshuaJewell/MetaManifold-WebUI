@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 Forward:
   # Earth Microbiome Project 16S V4 (Parada/Apprill, 2016)
   EMP515F: "GTGYCAGCMGCCGCGGTAA"

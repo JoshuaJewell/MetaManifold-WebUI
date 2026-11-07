@@ -1,7 +1,8 @@
-module Analysis
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: MPL-2.0
 
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+module Analysis
 
 using DataFrames, JSON3, DuckDB, DBInterface, RCall
 using ..DiversityMetrics: richness, shannon, simpson, normalise_counts,

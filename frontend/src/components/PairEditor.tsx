@@ -1,5 +1,6 @@
-// © 2026 Joshua Benjamin Jewell. All rights reserved.
-// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import { inputStyle, editorRowStyle, patchAt, removeAt } from './EditorCard'
 import type { PrimerPair } from '../api/types'
 

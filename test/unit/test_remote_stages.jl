@@ -1,5 +1,5 @@
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
 
 # Bioserver offload: where a stage runs, how many threads it runs with, and what
 # reaches the remote command string. These are the decisions made before any SSH

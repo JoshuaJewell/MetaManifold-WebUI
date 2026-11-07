@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Writes a small DADA2 reference for CI, cut from the verified PR2 download.
 #
 # assignTaxonomy holds about 262 KB per distinct lineage. PR2 5.1.1 has 54,122 of them,

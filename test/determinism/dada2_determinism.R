@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # DADA2 determinism experiment: run on the compute server, not in CI.
 #
 # Answers, on real reads, the questions the Julia unit suite cannot:

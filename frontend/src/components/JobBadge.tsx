@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import type { JobStatus } from '../api/types'
 import styles from './JobBadge.module.css'
 

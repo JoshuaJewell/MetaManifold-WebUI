@@ -1,5 +1,6 @@
-// © 2026 Joshua Benjamin Jewell. All rights reserved.
-// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import { useEffect, useState } from 'react'
 import type { TreeFile } from '../api/types'
 import { indexTree, mapSupport, matchOps, parseTreeFile, type TreeOp } from './model'

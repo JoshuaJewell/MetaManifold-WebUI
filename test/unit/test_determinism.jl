@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Determinism of every output this codebase computes from a results table, from
 # config, and from the stochastic normalisation / ordination steps.
 #

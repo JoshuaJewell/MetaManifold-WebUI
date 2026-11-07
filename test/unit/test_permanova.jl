@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
-#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # PERMANOVA: each covariate is tested as its own sequential term, checked against
 # a direct vegan::adonis2 call; the permutation count and p-value floor are
 # reported; and a term within-block permutation cannot test is refused.

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 module Databases
 
 # Ensures all databases declared in the config are available locally,
@@ -11,10 +14,6 @@ module Databases
 # Keys follow the pattern  "<database_name>_<format>",  e.g. "pr2_dada2",
 # "pr2_vsearch".  Format names map to the sub-keys under each database entry
 # in the databases: config section.
-#
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 
 import Downloads
 using YAML, Logging, CodecZlib, SHA, OrderedCollections

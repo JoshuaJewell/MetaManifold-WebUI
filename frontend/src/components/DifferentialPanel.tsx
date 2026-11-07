@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
 // SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+// SPDX-License-Identifier: MPL-2.0
+
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { errorMessage } from '../api/errorMessage'

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Integration test: full pipeline run on the DADA2 MiSeq SOP dataset.
 #
 # Two runs committed under data/MiSeq_SOP/:

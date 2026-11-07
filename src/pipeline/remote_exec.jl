@@ -1,8 +1,7 @@
-module RemoteExec
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
 
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+module RemoteExec
 
 # One command on the bioserver, in a staging directory of its own. The inputs
 # are uploaded and checked, the command runs, the outputs come back, and the

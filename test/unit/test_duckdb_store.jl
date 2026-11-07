@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 @testset "DuckDBStore" begin
 
     @testset "load_results_db loads CSVs into DuckDB" begin

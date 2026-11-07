@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Sample total-read filtering.
 #
 # A sample is a column in the merged table, so a floor on a sample's total reads

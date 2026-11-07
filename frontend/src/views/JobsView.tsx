@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import { useCallback, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'

@@ -1,5 +1,6 @@
-// © 2026 Joshua Benjamin Jewell. All rights reserved.
-// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import { describe, expect, test } from 'bun:test'
 import { encodeTiff, lzwEncode, pngWithDpi } from './encode'
 import { emptyHistory, record, redo, undo, undoKey } from './history'

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: MPL-2.0
+
 # Regression checks for CSV assembly, without loading DADA2 or dplyr.
 # Run from the repository root: Rscript --vanilla test/unit/test_dada2_tables.R
 expressions <- parse("src/pipeline/dada2/dada2_functions.r")

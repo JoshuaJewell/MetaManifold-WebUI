@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Unit tests for the write gates that keep request values out of file paths:
 # config values used as file-name parts or remote command words, and the
 # pipeline tables the results routes may not delete. Requests run in-process

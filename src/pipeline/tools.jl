@@ -1,8 +1,8 @@
-module Tools
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: MPL-2.0
 
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+module Tools
 
 export cutadapt, vsearch, multiqc, cdhit, tool_bin, _sq, _run_logged, _run_killable, _safe_optional_args
 

@@ -1,5 +1,5 @@
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Precompile workload: the requests a first visit to a study and a run makes,
 # against a small temporary project, so the package cache holds the handlers'

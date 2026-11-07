@@ -1,4 +1,7 @@
 #!/usr/bin/env julia
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Fetch FASTQ inputs and expected-taxonomy ground truth for Layer 1 datasets.
 #
 # Reads datasets.yml; for any entry whose URL fields are populated, downloads

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 /** Alpha diversity metric filter for Plotly figures.
  *
  * The backend always returns a 3-panel figure (Richness, Shannon, Simpson).

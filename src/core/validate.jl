@@ -1,8 +1,8 @@
-module Validation
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: MPL-2.0
 
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+module Validation
 
 export validate_environment, validate_project, ValidationError,
        DENOVO_METHODS, REMOTE_STAGES, DADA2_REMOTE_STAGES, PHYLOGENY_REMOTE_STAGES,

@@ -1,5 +1,5 @@
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-# Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
 
 # Per-invocation command capture for the embedded R stages. The shell tools log
 # their resolved command line via PipelineLog.log_command; the DADA2 stages,

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 /** A simple skeleton loading placeholder. */
 export function Skeleton({ lines = 3 }: { lines?: number }) {
   const widths = ['60%', '80%', '45%', '70%', '55%']

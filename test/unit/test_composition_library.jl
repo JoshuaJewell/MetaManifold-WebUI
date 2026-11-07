@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Unit tests for the CompositionLibrary module: loading config/composition.yml.
 
 @testset "CompositionLibrary.load" begin

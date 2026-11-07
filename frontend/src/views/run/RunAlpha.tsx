@@ -1,5 +1,6 @@
-// © 2026 Joshua Benjamin Jewell. All rights reserved.
-// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import { useAnalysis } from '../../hooks/useAnalysis'
 import { AnalysisControls } from '../../components/AnalysisControls'
 import type { AnnotationSource, ColFilter } from '../../api/types'

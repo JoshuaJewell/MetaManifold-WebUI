@@ -1,3 +1,7 @@
+<!-- SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell -->
+<!-- SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk> -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # Contributing to MetaManifold
 
 This file sets out what a pull request must look like, how licensing and credit
@@ -70,22 +74,29 @@ Each requirement is checked before the code is read.
 
 ## Licence and copyright
 
-Source code is licensed under the AGPL-3.0 (`LICENSE`). `README.md` is licensed
-under CC BY-SA 4.0, as its Licence section states. A contribution is offered
-under the same terms, with one option: code you write yourself may be licensed
-under MPL-2.0. Mark each such file with an SPDX identifier and leave out the
-"Incompatible With Secondary Licenses" notice, since that notice prevents
-combining the file with AGPL code. Checking that your licence choice combines
-correctly is your responsibility. Documentation you write is CC BY-SA 4.0.
+Licensing is per file and follows the [REUSE](https://reuse.software) layout:
+
+| Files | Licence |
+|---|---|
+| Server: `src/server`, `scripts/serve.jl` and the tests that exercise them | AGPL-3.0-or-later |
+| Core, pipeline, analysis, frontend and tooling | MPL-2.0 |
+| Documentation | CC BY-SA 4.0 |
+| Lockfiles and generated manifests | CC0-1.0 |
+
+`LICENSE` holds the AGPL, because the project as shipped is AGPL. The licence texts
+are in `LICENSES/`. A contribution is offered under the licence for its path. Do
+not add the MPL "Incompatible With Secondary Licenses" notice, since it prevents
+combining a file with AGPL code.
 
 In a contribution PR:
 
-- leave `LICENSE`, `CITATION.cff` and the licence and acknowledgement sections of
-  `README.md` unchanged, and open an issue if one of them looks wrong;
-- add no `NOTICE` file and no `LICENSES/` directory, and do not restate this
-  project's licensing in your own files;
-- keep existing file headers exactly as they are, and add your copyright line only
-  to files you wrote;
+- give every new file `SPDX-FileCopyrightText` and `SPDX-License-Identifier` lines
+  at the top, using the licence for its path. A file that cannot hold a comment
+  goes in `REUSE.toml`. `reuse lint` must pass;
+- keep the existing copyright lines, and add your own to any file you change. You
+  keep the copyright in your work;
+- leave `LICENSE`, `LICENSES/`, `CITATION.cff` and the licence and acknowledgement
+  sections of `README.md` unchanged, and open an issue if one of them looks wrong;
 - put third-party attributions, such as the DADA2 tutorial used under CC BY 4.0,
   in the acknowledgements section of `README.md`.
 

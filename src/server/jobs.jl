@@ -1,8 +1,7 @@
-module JobQueue
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
+module JobQueue
 
 # In-memory job store. Single-user local server - no persistence needed.
     using Dates, UUIDs, JSON3

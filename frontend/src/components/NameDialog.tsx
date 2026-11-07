@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 import { useState, useRef, useEffect, useId } from 'react'
 import { errorMessage } from '../api/errorMessage'
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 @testset "Tools - _parse_cdhit_clstr" begin
     clstr_path = joinpath(tempdir(), "test_cdhit_$(getpid()).clstr")
     write(clstr_path, """

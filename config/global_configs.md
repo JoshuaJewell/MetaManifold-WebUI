@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # Global Configuration
 
 In this directory is the machine-level override. Anything written here

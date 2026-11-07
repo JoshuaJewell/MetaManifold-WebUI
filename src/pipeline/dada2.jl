@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 module DADA2
 
 # DADA2 amplicon sequencing pipeline - Julia orchestrator
@@ -14,10 +17,6 @@ module DADA2
 # Call dada2() to run all stages in sequence without stopping.
 #
 # Notice:
-#
-# © 2026 Joshua Benjamin Jewell. All rights reserved.
-#
-# This module is licensed under the GNU Affero General Public License version 3 (AGPLv3).
 #
 # This work is based on the DADA2 tutorial by Benjamin J. Callahan, et al.,
 # available at https://benjjneb.github.io/dada2/tutorial.html, with modification

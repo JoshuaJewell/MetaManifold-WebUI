@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Unit tests for the report basket, read funnel, config value checks and
 # stage-hash snapshots.
 using MetaManifold

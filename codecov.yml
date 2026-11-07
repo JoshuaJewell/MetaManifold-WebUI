@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 ## Codecov configuration
 # Only the Julia backend under src/ is instrumented (see the
 # julia-processcoverage step in CI); the TypeScript frontend is not measured

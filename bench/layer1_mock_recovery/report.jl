@@ -1,4 +1,7 @@
 #!/usr/bin/env julia
+# SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-License-Identifier: MPL-2.0
+
 # Render results/metrics.yml as a compact markdown report at results/report.md.
 # The summary table is one row per dataset; a per-sample appendix follows for
 # datasets with more than one shared sample. The report is regenerated wholesale

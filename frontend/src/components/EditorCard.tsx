@@ -1,6 +1,6 @@
-// © 2026 Joshua Benjamin Jewell. All rights reserved.
-// Licensed under the GNU Affero General Public License version 3 (AGPLv3).
-//
+// SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+// SPDX-License-Identifier: MPL-2.0
+
 // The collapsible card shared by the composition editors: a header that toggles
 // the body, and a save/delete footer gated on the same busy flag. FilterEditor
 // and CategorySetEditor supply only the fields between the two.

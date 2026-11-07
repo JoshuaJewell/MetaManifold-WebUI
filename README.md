@@ -1,6 +1,10 @@
+<!-- SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell -->
+<!-- SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk> -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # MetaManifold
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![License: AGPL-3.0-or-later and MPL-2.0](https://img.shields.io/badge/License-AGPL--3.0--or--later%20%2F%20MPL--2.0-blue.svg)](#licence)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23464265.svg)](https://doi.org/10.5281/zenodo.23464265)
 [![Julia 1.12](https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia)](https://julialang.org)
 [![R >= 4.0](https://img.shields.io/badge/R-%E2%89%A54.0-276DC3?logo=r)](https://www.r-project.org)
@@ -921,6 +925,13 @@ The following colleagues at the **Department of Parasitology, Charles University
 
 Copyright © 2026 Joshua Benjamin Jewell and contributors.
 
-Source code is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+MetaManifold as shipped is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE), because the server is. Individual files carry their own licence in an SPDX header, or in `REUSE.toml` if they cannot hold a comment:
 
-This documentation (README.md) is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+| Files | Licence |
+|---|---|
+| Server: `src/server`, `scripts/serve.jl` and the tests that exercise them | AGPL-3.0-or-later |
+| Core, pipeline, analysis, frontend and tooling | MPL-2.0 |
+| Documentation, including this README | CC BY-SA 4.0 |
+| Lockfiles and generated manifests | CC0-1.0 |
+
+The licence texts are in [`LICENSES/`](LICENSES). The example reads in `data/MiSeq_SOP` come from the [mothur MiSeq SOP](https://mothur.org/wiki/miseq_sop/) (accessed 2026-11-07; Kozich et al. 2013, [doi:10.1128/AEM.01043-13](https://doi.org/10.1128/AEM.01043-13)), used under CC BY 4.0.
