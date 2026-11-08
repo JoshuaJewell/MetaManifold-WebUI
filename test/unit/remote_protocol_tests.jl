@@ -90,7 +90,16 @@ end
 
 _journal(f, log="stage") = JSON3.read(read(joinpath(f.d, "$log.log.remote.json"), String), Dict{String,Any})
 _dir(f, log="stage") = _journal(f, log)["directory"]
-_task_error(t) = try fetch(t); nothing catch e; e end
+# `fetch` reports a task that threw as TaskFailedException; what these tests
+# assert on is the exception the detached stage itself raised.
+function _task_error(t)
+    try
+        fetch(t)
+        nothing
+    catch e
+        e isa TaskFailedException ? e.task.exception : e
+    end
+end
 
 @testset "Durable remote execution protocol" begin
     @testset "a transient status probe cannot lose a detached launch" begin
