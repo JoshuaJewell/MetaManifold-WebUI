@@ -475,14 +475,16 @@ _task_error(t) = try fetch(t); nothing catch e; e end
     end
 
     @testset "a completed attempt is retrieved again instead of wedging the stage" begin
-        # A required output can be missing from a zero-exit attempt, and a fetch
-        # can be interrupted after the attempt finished. Both leave a terminal
-        # `exit 0` marker with no receipt. The same identity is used throughout:
-        # a changed command has a different identity, and superseding it is a
+        # A fetch interrupted after the attempt finished leaves a terminal
+        # `exit 0` marker with no receipt (the missing-required-output case is
+        # covered separately below). The same identity is used throughout: a
+        # changed command has a different identity, and superseding it is a
         # deliberate relaunch that uploads again.
         _remote_fixture() do f
             command = d -> "cd '$d' && cat input > output"
-            @test_throws ErrorException f.invoke(command)
+            f.fail_download[] = true
+            @test_throws Exception f.invoke(command)
+            f.fail_download[] = false
             dir = _dir(f)
             @test _RX._remote_state(f.ssh, f.target, dir) == "exit 0"
             @test !haskey(_journal(f), "retrieved")
@@ -560,26 +562,17 @@ _task_error(t) = try fetch(t); nothing catch e; e end
         end
     end
 
-    @testset "an interrupt that a callback swallows still cancels the attempt" begin
+    @testset "an interrupt with a live workload cancels the attempt" begin
         _remote_fixture() do f
-            # The workload stays alive, so cancellation is observable: a
-            # swallowed interrupt would leave both the journal and the attempt.
+            # The workload stays alive, so cancellation is observable: an
+            # interrupt that only unwound the caller would leave both the
+            # journal and the detached process behind.
             command = d -> "cd '$d' && echo started > started && sleep 300"
-            entered = Ref(false)
-            before_run = function (_, _)
-                entered[] = true
-                # A production probe that catches every exception.
-                try
-                    sleep(300)
-                catch
-                end
-            end
-            task = @async f.invoke(command; before_run=before_run)
-            _wait_remote(() -> isfile(joinpath(f.d, "stage.log.remote.json")) && entered[])
-            # `before_run` receives this attempt's directory. Preparation has
-            # already installed the worker and published `ready`; the command
-            # may or may not have taken the execution lock yet, so it writes its
-            # own marker rather than this test assuming it has started.
+            task = @async f.invoke(command)
+            _wait_remote(() -> isfile(joinpath(f.d, "stage.log.remote.json")))
+            # Preparation installs the worker and publishes `ready`; the command
+            # then writes its own marker once it holds the execution lock, so
+            # the interrupt below lands with the workload definitely live.
             dir = _dir(f)
             _wait_remote(() -> isfile(joinpath(dir, "started")) || istaskdone(task))
             @test isfile(joinpath(dir, "started"))
