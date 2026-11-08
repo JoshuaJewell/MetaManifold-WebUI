@@ -34,7 +34,13 @@
         R"rm(list=ls())"
         _source_r_functions(ctx)
         log_path = joinpath(ctx.dirs["Logs"], "prefilter_qc.log")
-        open(log_path, "w") do io; println(io, "=== prefilter_qc ===\nconfig: $config_path") end
+        # A retained journal means a remote attempt may still be recovered, and the
+        # runner merges that attempt's diagnostics into this log. Truncating would
+        # keep only the header and lose the command and output of the run being
+        # recovered, so start over only when no journal is retained.
+        if !isfile(log_path * ".remote.json")
+            open(log_path, "w") do io; println(io, "=== prefilter_qc ===\nconfig: $config_path") end
+        end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
         try
             emit("Plotting unfiltered quality profiles")
@@ -93,7 +99,13 @@
         out_rev   = ctx.out_rev_arg
 
         log_path = joinpath(ctx.dirs["Logs"], "filter_trim.log")
-        open(log_path, "w") do io; println(io, "=== filter_trim ===\nconfig: $config_path") end
+        # A retained journal means a remote attempt may still be recovered, and the
+        # runner merges that attempt's diagnostics into this log. Truncating would
+        # keep only the header and lose the command and output of the run being
+        # recovered, so start over only when no journal is retained.
+        if !isfile(log_path * ".remote.json")
+            open(log_path, "w") do io; println(io, "=== filter_trim ===\nconfig: $config_path") end
+        end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
         try
             emit("Filtering and trimming reads")

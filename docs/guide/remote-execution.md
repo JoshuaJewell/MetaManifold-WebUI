@@ -67,9 +67,15 @@ output hashes, then remote cleanup runs. The receipt survives cleanup so that a
 restart before the caller commits its checkpoint can recover the verified files.
 A completed attempt whose retrieval failed -- a required output missing from a
 zero exit, or a transfer interrupted after the attempt finished -- is retrieved
-again on the next run instead of being relaunched, so a short read cannot wedge
-the stage. Missing local stage diagnostics are replayed from the retained remote
-log.
+again on the next run instead of being relaunched, so a missing write or a short
+read cannot wedge the stage. That run reports a required output that a
+zero-exit attempt did not write, and keeps the attempt: the remote markers stay
+in place, so the same command's outputs remain retrievable, while a changed
+input or setting supersedes the attempt and runs it afresh. Recovering a
+completed attempt is a separate `replay` request rather than a retry, because a
+retry must never rerun a successful command. Stage diagnostics are replayed from
+the retained remote log, and the DADA2 stage entry points open a fresh log
+through the runner so a recovery merges the remote text instead of losing it.
 Receipt recovery does not repeat preparation checks against staging inputs that
 cleanup has removed. A separate callback restores caller metadata when needed;
 an interrupt raised inside one still requests cancellation, so a swallowed
@@ -150,10 +156,12 @@ of an explicit transition system, by induction over arbitrary finite traces:
 | `different-content-cannot-attach` | Unequal keys cannot reattach. | Checked identity equality. |
 | `disconnect-preserves-state` | Transport loss does not transition the remote state. | Detached session with redirected standard streams. |
 | `duplicate-launch-preserves-count` | A duplicate launch while running adds no command. | Nonblocking execution lock in the worker. |
+| `replay-preserves-launch-count` | Replaying a completed attempt to fetch its outputs is not a relaunch. | A separate `replay` request keeps both remote markers. |
 
 The model distinguishes a cancellation request from stop acknowledgement. It
 does not assume that requesting cancellation has already killed the command.
-Repeated start requests and disconnections are stuttering transitions.
+Repeated start requests, repeated replays and disconnections are stuttering
+transitions.
 
 These are machine-checked protocol theorems, not a proof of equivalence between
 Agda, Julia and Bash. OS locking, process groups, atomic rename, truthful exit

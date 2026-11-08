@@ -134,6 +134,13 @@ export pipeline_log, log_written, reset_tool_logs, log_command
         r"^combined_pipeline\.log$",
         # A per-sample read-attrition table: an analysis output surfaced in the UI.
         r"^dada2/Tables/pipeline_stats\.csv$",
+        # The remote runner's durable journal, and the owner lock beside it,
+        # next to a stage log (src/pipeline/remote_session.jl). These carry
+        # recovery state for a remote attempt, not tool output, and the
+        # consolidated log already records the command and the diagnostics the
+        # attempt produced. They are excluded rather than registered so a run
+        # interrupted mid-attempt is not reported as drift.
+        r"\.remote\.json$",
     ]
 
     ## Drift guard support

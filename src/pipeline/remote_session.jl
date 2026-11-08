@@ -121,8 +121,9 @@ function _cancel_remote(ssh, target, dir)
         _control(ssh, target, dir, "cancel")
         _control(ssh, target, dir, "cleanup")
     else
-        # An interruption during upload precedes any launch. The directory is
-        # journal-owned; no wildcard or user-supplied path is removed here.
+        # No installed worker means preparation never reached its launch --
+        # typically an interruption part way through the uploads. The directory
+        # is journal-owned; no wildcard or user-supplied path is removed here.
         _capture(ssh(target.host, "rm -rf -- $(_sq(dir))"))
     end
 end
@@ -222,6 +223,21 @@ function _prepare(ssh, scp, target, dir, command, identity, inputs, outputs, opt
         "touch $(_sq("$dir/$_CONTROL/ready"))"))
 end
 
+# A zero-exit attempt can still have produced nothing: a stage that left a
+# required file unwritten must be diagnosable and retrievable, not a fetch that
+# fails again on every run. The check asks the same question as the fetch, so a
+# required output is reported before any transfer starts.
+function _missing_outputs(ssh, target, dir, outputs)
+    missing = String[]
+    for (rel, _) in outputs
+        remote_path = _sq("$dir/$rel")
+        present = strip(String(_capture(ssh(target.host,
+            "if test -f $remote_path; then echo present; else echo missing; fi"))))
+        present == "missing" && push!(missing, _relative(rel))
+    end
+    missing
+end
+
 function _fetch_outputs(ssh, scp, target, dir, outputs, optional_outputs)
     fetched = Pair{String,String}[]
     absent = String[]
@@ -293,14 +309,20 @@ function _sweep(ssh, target)
 end
 
 # Recovery paths reach the stage without relaunching it: a verified receipt, or
-# a completed attempt retrieved for the first time. The stage's four entry points
-# truncate their log before calling the runner, so without this the retry would
-# keep only the header and lose the command and diagnostics that the remote
-# attempt has already produced. Only a missing local log is replayed; anything
-# the local side already wrote is left untouched.
+# a completed attempt retrieved for the first time. Stage entry points open a
+# fresh log before calling the runner, so without this the retry would keep only
+# the header and lose the command and diagnostics that the remote attempt has
+# already produced. Anything the local side already wrote is left untouched, and
+# the remote text is merged only when it is not already there: a staged,
+# interrupted stage can be reached more than once with the same header.
 function _replay_remote_log(ssh, target, dir, log_path)
     _remote_state(ssh, target, dir) == "missing" && return
-    open(io -> write(io, _control(ssh, target, dir, "log 0")), log_path, "a")
+    emitted = _control(ssh, target, dir, "log 0")
+    isempty(emitted) && return
+    # A tool's output is not necessarily valid UTF-8, so this compares bytes.
+    existing = isfile(log_path) ? read(log_path) : UInt8[]
+    isnothing(findfirst(emitted, existing)) || return
+    open(io -> write(io, emitted), log_path, "a")
 end
 
 # `on_receipt` and `before_run` run inside the owner lock, and a stage callback
@@ -419,10 +441,12 @@ function run_remote(emit, target, command_for::Function;
                 # Receipt recovery can restore caller metadata, but must not
                 # repeat checks that require the old staging inputs.
                 isnothing(on_receipt) || _interruptible(on_receipt, ssh, dir)
+                # The stage's own log is replayed before cleanup, because the
+                # attempt's log lives in the directory cleanup removes.
+                _replay_remote_log(ssh, target, dir, log_path)
                 if _remote_state(ssh, target, dir) != "missing"
                     _control(ssh, target, dir, "cleanup")
                 end
-                isfile(log_path) || _replay_remote_log(ssh, target, dir, log_path)
                 emit("  Recovered verified outputs for $stage")
                 return nothing
             end
@@ -451,15 +475,16 @@ function run_remote(emit, target, command_for::Function;
                 _save_journal(journal_path, journal)
             elseif state == "exit 0"
                 # The workload finished and its exit marker is retained, but no
-                # receipt was stored: either an earlier fetch failed to find a
+                # receipt was stored: either an earlier fetch did not find a
                 # required output, or the local process died between the marker
-                # and the receipt. Leaving the marker makes `start` refuse (the
-                # attempt is terminal) and `retry` refuse (it succeeded), so the
-                # stage would be wedged until its state was deleted by hand.
-                # Retrieval is still the first thing tried, and every byte is
+                # and the receipt. `retry` refuses a successful attempt and
+                # `start` refuses a terminal one, so the stage would be wedged
+                # until its state was deleted by hand. `replay` prepares the
+                # retained attempt for retrieval alone, keeping the marker for
+                # the next run if this fetch fails too. Every byte is still
                 # checksum-verified against the remote copy.
                 emit("  Retrieving completed $stage outputs from $(target.host) without relaunching")
-                _control(ssh, target, dir, "retry")
+                _control(ssh, target, dir, "replay")
                 journal["failed"] = false
                 _save_journal(journal_path, journal)
             end
@@ -491,8 +516,17 @@ function run_remote(emit, target, command_for::Function;
             emit("  Retrieving $(length(outputs)) output file(s) from $(target.host)")
             # A failed fetch (a missing required output, a truncated transfer)
             # throws with the attempt's exit marker still in place. The next run
-            # takes the `exit 0` branch above and retries retrieval instead of
-            # relaunching, so a short read never wedges the stage.
+            # takes the `exit 0` barrier above, which replays the retained
+            # attempt instead of relaunching it, so a short read never wedges
+            # the stage and its outputs stay available to retrieve again.
+            missing = _missing_outputs(ssh, target, dir, outputs)
+            if !isempty(missing)
+                journal["failed"] = false
+                _save_journal(journal_path, journal)
+                error("Remote $stage finished with status 0 but did not write required output(s): " *
+                      join(missing, ", ") * ". The attempt is retained; run the stage again to " *
+                      "retrieve it, or change its settings to run it afresh.")
+            end
             _fetch_outputs(ssh, scp, target, dir, outputs, optional_outputs)
             journal["retrieved"] = Dict(abspath(path) => (isfile(path) ? _digest(path) : nothing)
                 for (_, path) in [outputs; optional_outputs])

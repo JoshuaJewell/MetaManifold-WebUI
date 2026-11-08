@@ -195,6 +195,21 @@
         rm(dir; recursive=true)
     end
 
+    @testset "a retained remote journal is not drift" begin
+        dir = mktempdir()
+        _populate_run_dir(dir)
+        # An interrupted remote attempt leaves its durable journal beside the
+        # stage log, where the drift scan sees it (src/core/log.jl).
+        journal = joinpath(dir, "dada2", "Logs", "denoise.log.remote.json")
+        write(journal, "{\"identity\":[]}\n")
+        write(journal * ".lock", "")
+
+        @test PipelineLog.log_excluded("dada2/Logs/denoise.log.remote.json")
+        @test "dada2/Logs/denoise.log.remote.json" in PipelineLog.scan_log_files(dir)
+        @test isempty(PipelineLog.unregistered_logs(dir))
+        rm(dir; recursive=true)
+    end
+
     @testset "drift guard fails on an unregistered log" begin
         dir = mktempdir()
         _populate_run_dir(dir)

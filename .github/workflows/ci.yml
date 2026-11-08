@@ -228,10 +228,21 @@ jobs:
       - name: Instantiate Julia project
         run: julia --project=. -e 'import Pkg; Pkg.instantiate()'
       - name: Test SSH interruption and recovery
+        # The job log lives on storage the PR tooling cannot always read, so a
+        # failure also posts the Julia output as an annotation. Annotations are
+        # capped at 4096 bytes, hence the tail.
+        shell: bash
         run: |
+          set +e
           sudo apt-get install -y openssh-server
           sudo mkdir -p /run/sshd
-          julia --project=. -t 2 test/remote_ssh.jl
+          julia --project=. -t 2 test/remote_ssh.jl 2>&1 | tee /tmp/ssh-recovery.log
+          status="${PIPESTATUS[0]}"
+          if [ "$status" -ne 0 ]; then
+            enc() { head -c 3500 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}'; }
+            echo "::error title=SSH recovery test failed::$(tail -c 3500 /tmp/ssh-recovery.log | enc)"
+          fi
+          exit "$status"
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0

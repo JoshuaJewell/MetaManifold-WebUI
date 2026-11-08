@@ -98,19 +98,37 @@ case "${1:-}" in
             echo 'Remote worker log is not writable; retry the stage' >&2
             exit 1
         }
-        nohup setsid bash "$control/worker.sh" run >> "$control/log" 2>&1 < /dev/null &
-        # Acknowledging only the shell fork lets an immediate status probe win
-        # run.lock before the worker. Wait for a durable launch marker before
-        # the caller polls. Startup failure is bounded and retryable, not an
-        # apparently successful start followed by an endless ready state. A
-        # child that has already exited without a marker (a missing log, an
-        # open failure) is a failed launch, not one still starting up.
-        for ((n=0; n<100; n++)); do
-            if [ -e "$control/pid" ] || [ -e "$control/exit" ] || [ -e "$control/cancel" ]; then
-                exit 0
-            fi
-            sleep 0.1
-        done
+        launch() { nohup setsid bash "$control/worker.sh" run >> "$control/log" 2>&1 < /dev/null & }
+        # A durable launch marker, an exit marker or a cancellation tombstone is
+        # the acknowledgement that startup reached the point where the caller
+        # can poll. Wait for one rather than for the shell fork, which says
+        # nothing about the worker.
+        wait_marker() {
+            local n
+            for ((n = 0; n < $1; n++)); do
+                if [ -e "$control/pid" ] || [ -e "$control/exit" ] || [ -e "$control/cancel" ]; then
+                    return 0
+                fi
+                sleep 0.1
+            done
+            return 1
+        }
+        launch
+        wait_marker 20 && exit 0
+        # `run` gives up when run.lock is held for more than a second, which a
+        # status probe that has just won the lock can cause. If the lock is held
+        # now, a worker is still starting: keep waiting for its marker. If it is
+        # free, the child gave up without recording anything, so one relaunch is
+        # safe -- a worker that did start would hold the lock, and a terminal
+        # attempt is never relaunched.
+        if ! idle; then
+            wait_marker 80 && exit 0
+        else
+            launch
+            wait_marker 80 && exit 0
+        fi
+        # Startup failure is bounded and retryable, not an apparently successful
+        # start followed by an endless ready state.
         echo 'Remote worker did not acknowledge startup; retry the stage' >&2
         exit 1
         ;;
@@ -140,7 +158,8 @@ case "${1:-}" in
         flock -x 8 || exit 1
         [ ! -e "$control/cancel" ] || exit 1
         # Only an explicitly retried failure loses its exit marker. Checkpoints
-        # and logs stay in place; a successful attempt is never rerun.
+        # and logs stay in place; a succeeded attempt is prepared by `replay`
+        # instead, which keeps its marker, so this also refuses a success.
         if [ -f "$control/exit" ]; then
             [ "$(cat "$control/exit")" != 0 ] || exit 1
             rm -- "$control/exit"
@@ -150,6 +169,29 @@ case "${1:-}" in
         # later status probe read a stale `interrupted` even though this attempt
         # is running. Clear it under the locks a probe needs.
         rm -f -- "$control/pid"
+        ;;
+    replay)
+        # A completed attempt whose outputs were never retrieved is fetched
+        # again, and a failed retrieval must be retried from the same marker.
+        # `start` refuses a terminal attempt and `retry` refuses a successful
+        # one, so without this the stage would be wedged until its state was
+        # deleted by hand. Both markers are deliberately kept: `status` still
+        # reports a terminal state while the caller downloads the outputs.
+        exit_marker=""
+        [ -f "$control/exit" ] && exit_marker=$(cat -- "$control/exit")
+        if [ -n "$exit_marker" ] && [ "$exit_marker" != 0 ]; then
+            # A failed attempt is retried by clearing its marker, and only then
+            # can it be started again; `replay` never performs that transition.
+            exit 1
+        fi
+        # A recorded launch marker with no exit marker means the wrapper died
+        # before it could publish a status. Re-running the command could
+        # duplicate work whose checkpoint is the only record of what ran, so
+        # this state stays with `retry`, which an explicit rerun asks for.
+        if [ ! -f "$control/exit" ] && [ -e "$control/pid" ]; then
+            exit 1
+        fi
+        [ -e "$control/ready" ] || exit 1
         ;;
     cancel)
         exec 8>"$control/control.lock"

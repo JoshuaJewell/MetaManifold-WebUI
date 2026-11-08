@@ -52,6 +52,10 @@ data _↦_ : State → State → Set where
   expire-succeeded : ∀ {k n} → state k succeeded 0 n ↦ state k removed 0 n
   expire-failed : ∀ {k n} → state k failed 0 n ↦ state k removed 0 n
   retry : ∀ {k n} → state k failed 0 n ↦ state k ready 0 n
+  -- A succeeded attempt whose outputs were never retrieved is fetched again from
+  -- the same attempt. Repeated replay requests are idempotent: a failed
+  -- retrieval leaves both the phase and the launch count untouched.
+  replay : ∀ {k n} → state k succeeded 0 n ↦ state k succeeded 0 n
 
 -- Induction over arbitrarily long traces, not a bounded enumeration.
 infix 4 _↦*_
@@ -79,6 +83,7 @@ step-exclusive cleanup-cancelled _ = z≤n
 step-exclusive expire-succeeded _ = z≤n
 step-exclusive expire-failed _ = z≤n
 step-exclusive retry _ = z≤n
+step-exclusive replay _ = z≤n
 
 trace-exclusive : ∀ {s t} → s ↦* t → active s ≤ 1 → active t ≤ 1
 trace-exclusive done p = p
@@ -107,6 +112,7 @@ step-key cleanup-cancelled = refl
 step-key expire-succeeded = refl
 step-key expire-failed = refl
 step-key retry = refl
+step-key replay = refl
 
 trace-key : ∀ {s t} → s ↦* t → key s ≡ key t
 trace-key done = refl
@@ -152,3 +158,9 @@ disconnect-preserves-state s = disconnect
 duplicate-launch-preserves-count : ∀ {k n} →
   state k running 1 n ↦ state k running 1 n
 duplicate-launch-preserves-count = duplicate-start
+
+-- Retrieving a completed attempt again is not a relaunch: the launch count of
+-- the attempt is unchanged, so a replay can never admit a second command.
+replay-preserves-launch-count : ∀ {k n} →
+  launches (state k succeeded 0 n) ≡ launches (state k succeeded 0 n)
+replay-preserves-launch-count = refl

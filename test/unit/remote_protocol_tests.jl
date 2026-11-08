@@ -580,6 +580,52 @@ _task_error(t) = try fetch(t); nothing catch e; e end
         end
     end
 
+    @testset "a completed attempt without a required output stays retrievable" begin
+        _remote_fixture() do f
+            command = d -> "cd '$d' && true"
+            # A zero exit that omits the required file is reported, not accepted
+            # as a successful retrieval, and its attempt is kept.
+            error_text = try
+                f.invoke(command)
+                ""
+            catch e
+                sprint(showerror, e)
+            end
+            @test occursin("required output", error_text)
+            dir = _dir(f)
+            @test _RX._remote_state(f.ssh, f.target, dir) == "exit 0"
+            @test !haskey(_journal(f), "retrieved")
+            uploads = f.uploads[]
+            # The next run retrieves from the same attempt: no upload, no
+            # relaunch, and the file that was missing is fetched and verified.
+            write(joinpath(dir, "output"), "known input\n")
+            f.invoke(command)
+            @test f.uploads[] == uploads
+            @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+            @test haskey(_journal(f), "retrieved")
+            @test !isdir(dir)
+        end
+    end
+
+    @testset "the retained remote log is replayed once" begin
+        _remote_fixture() do f
+            # A retained attempt carries the diagnostics of the run whose
+            # outputs are being recovered; a stage that reopened its log keeps
+            # its header and gains the remote text once, however often the
+            # recovery path is reached.
+            @test_throws ErrorException f.invoke(d -> "cd '$d' && echo stage-diagnostics && true")
+            dir = _dir(f)
+            log = joinpath(f.d, "stage.log")
+            write(log, "=== denoise ===\n")
+            _RX._replay_remote_log(f.ssh, f.target, dir, log)
+            text = read(log, String)
+            @test startswith(text, "=== denoise ===")
+            @test occursin("stage-diagnostics", text)
+            _RX._replay_remote_log(f.ssh, f.target, dir, log)
+            @test count("stage-diagnostics", read(log, String)) == 1
+        end
+    end
+
     @testset "the interrupt guard passes values and every other failure through" begin
         @test _RX._interruptible(() -> 42) == 42
         @test _RX._interruptible(path -> path * "!", "x") == "x!"

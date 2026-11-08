@@ -124,7 +124,13 @@
         has_data = rcopy(R"isTRUE(sum(seq_table_nochim, na.rm=TRUE) > 0)")
 
         log_path = joinpath(ctx.dirs["Logs"], "assign_taxonomy.log")
-        open(log_path, "w") do io; println(io, "=== assign_taxonomy ===\nconfig: $config_path") end
+        # A retained journal means a remote attempt may still be recovered, and the
+        # runner merges that attempt's diagnostics into this log. Truncating would
+        # keep only the header and lose the command and output of the run being
+        # recovered, so start over only when no journal is retained.
+        if !isfile(log_path * ".remote.json")
+            open(log_path, "w") do io; println(io, "=== assign_taxonomy ===\nconfig: $config_path") end
+        end
 
         if skip_classification
             @info "[$(lbl)] DADA2: Taxonomy classification skipped - writing count tables without assignments"
