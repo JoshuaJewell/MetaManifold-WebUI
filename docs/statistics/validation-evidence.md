@@ -76,7 +76,17 @@ names colliding with projected feature labels, and subgroup names such as
 `A` and `AB`. Reserved integer names such as `total` are explicitly rejected
 when their count/metadata role is ambiguous. Subgroups use the same underscore-delimited prefix contract as
 the existing analysis routes. Tests check the persisted results and selected
-sample columns as well as the response.
+sample columns as well as the response. Quoted column identifiers are exercised
+through executed text/include/exclude predicates and checked against the exact
+selected counts; numeric filters on count columns remain explicitly refused
+before the shared floating-point SQL predicate can be used. BIGNUM columns
+cannot be silently omitted, and grouped runs persist and retrieve the same
+resolved group in their provenance.
+
+CI retains raw Julia coverage even when a test assertion fails, and lists
+uncovered descriptive-statistics source lines in the job summary and check
+annotations. These reports are diagnostic, not a replacement for a passing
+suite; only a passing test run publishes its coverage to Codecov.
 
 `frontend/src/components/AnalysisWorkspace.test.ts` renders the workspace and
 descriptive panel, toggles aggregation, and checks the submitted scope,

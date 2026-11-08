@@ -25,6 +25,40 @@ using MetaManifold.NumericPolicy
     end
 end
 
+@testset "Derived-record I/O and storage limits fail explicitly" begin
+    DA = MetaManifold.DerivedAnalyses
+    mktempdir() do root
+        # Reading a directory raises an I/O error, independently of filesystem
+        # permissions (the test must also work when CI runs as root).
+        unreadable = joinpath(root, "not-a-file")
+        mkdir(unreadable)
+        error = try
+            DA._existing(unreadable, repeat("0", 64))
+            nothing
+        catch err
+            err
+        end
+        @test error isa DerivedAnalysisError
+        @test error.code == "conflict"
+        @test occursin("cannot read existing derived analysis", error.reason)
+
+        # The limit applies to the complete canonical record, not just payload.
+        # A payload at the limit necessarily makes the enclosing record exceed it.
+        directory = joinpath(root, "oversized")
+        error = try
+            persist_derived_analysis(directory;
+                source=Dict("run" => "r"), config=Dict("mode" => "exact_counts"),
+                result=Dict("payload" => repeat("x", MAX_DERIVED_BYTES)))
+            nothing
+        catch err
+            err
+        end
+        @test error isa DerivedAnalysisError
+        @test error.code == "resource_limit"
+        @test !isdir(directory) # refuse before allocating a publication directory
+    end
+end
+
 @testset "Immutable content-addressed derived analyses" begin
     mktempdir() do root
         directory = joinpath(root, "derived")

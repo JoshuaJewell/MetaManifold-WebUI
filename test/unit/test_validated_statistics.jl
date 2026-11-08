@@ -198,11 +198,11 @@ function _vs_make_run(root::String)
             DBInterface.execute(con, "CREATE TABLE \"$(saved_name)\" AS SELECT * FROM merged")
         end
         DBInterface.execute(con, """CREATE TABLE merged_aliases (
-            SeqName VARCHAR, Genus VARCHAR, feature BIGINT,
+            SeqName VARCHAR, Genus VARCHAR, Pident DOUBLE, feature BIGINT,
             __VALIDATED_FEATURE BIGINT, __validated_feature_ BIGINT, "odd""sample" HUGEINT)""")
         DBInterface.execute(con, """INSERT INTO merged_aliases VALUES
-            ('seq2', 'G', 2, 20, 200, 9007199254740993),
-            ('seq1', 'G', 1, 10, 100, 1), ('seq3', 'H', 4, 40, 400, 3)""")
+            ('seq2', 'G', 99.0, 2, 20, 200, 9007199254740993),
+            ('seq1', 'G', 98.0, 1, 10, 100, 1), ('seq3', 'H', 97.0, 4, 40, 400, 3)""")
         # An unbounded integer is an integer the detector cannot name, so it
         # must be refused rather than silently dropped.
         DBInterface.execute(con, "CREATE TABLE merged_bignum (SeqName VARCHAR, Genus VARCHAR, s1 BIGINT, counted BIGNUM)")
@@ -265,7 +265,12 @@ end
             invalid_response = _vs_post(path, merge(request, Dict("table" => invalid)))
             @test invalid_response.status == 400
         end
-        @test _vs_post(path, request).status == 200 # invalid names did not mutate the source
+        # A safe name can still name a table that does not exist. Preserve the
+        # shared opener's 404 rather than treating its response as an analysis.
+        missing = _vs_post(path, merge(request, Dict("table" => "absent")))
+        @test missing.status == 404
+        @test JSON3.read(String(missing.body)).error == "table_not_found"
+        @test _vs_post(path, request).status == 200 # invalid/missing names did not mutate the source
         sequence_request = filter(pair -> first(pair) != "taxonomic_level", request)
         sequence_response = _vs_post(path, merge(sequence_request, Dict("time_limit_seconds" => 30)))
         @test sequence_response.status == 200
@@ -469,14 +474,33 @@ end
             response = _vs_post(path, merge(request, filters))
             @test response.status == 200
         end
-        # The quoted identifier itself also builds valid SQL. `min` on a sample
-        # column is refused by the exact-integer count-filter guard, which runs
-        # after the predicate is built, so reaching that refusal -- and not a
-        # 500 from malformed SQL -- is the regression under test.
-        quoted = _vs_post(path, merge(request,
-            Dict("colFilters" => Dict("odd\"sample" => Dict("min" => 1)))))
-        @test quoted.status == 422
-        @test occursin("count-filter", String(quoted.body))
+        # Execute text, include and exclude predicates against the quoted
+        # identifier itself. Each selects only seq2, so a skipped or malformed
+        # predicate cannot pass by returning the wrong rows.
+        for criterion in (Dict("text" => "9007199254740993"),
+                          Dict("include" => ["9007199254740993"]),
+                          Dict("exclude" => ["1", "3"]))
+            response = _vs_post(path, merge(request,
+                Dict("colFilters" => Dict("odd\"sample" => criterion))))
+            @test response.status == 200
+            result = JSON3.read(String(response.body))
+            @test collect(result.samples[1].features) == ["G"]
+            @test collect(result.samples[1].counts) == [2, 20, 200, "9007199254740993"]
+            @test result.samples[1].total == "9007199254741215"
+            loaded_response = _vs_get("/api/v1/studies/studyV/runs/run1/statistics/derived/$(result.analysis_id)")
+            @test loaded_response.status == 200
+            loaded = JSON3.read(String(loaded_response.body))
+            @test loaded.source.table == "merged_aliases"
+            @test loaded.result.samples == result.samples
+        end
+        # Numeric count filters are deliberately refused before SQL construction:
+        # the shared min/max predicate would cast exact counts to Float64.
+        for criterion in (Dict("min" => 1), Dict("max" => 9007199254740993))
+            quoted = _vs_post(path, merge(request,
+                Dict("colFilters" => Dict("odd\"sample" => criterion))))
+            @test quoted.status == 422
+            @test occursin("count-filter", String(quoted.body))
+        end
     end
 end
 
