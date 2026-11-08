@@ -475,18 +475,20 @@ _task_error(t) = try fetch(t); nothing catch e; e end
     end
 
     @testset "a completed attempt is retrieved again instead of wedging the stage" begin
-        # A required output can be missing from a zero-exit attempt (the stage
-        # is then retried), and a fetch can be interrupted after the attempt
-        # finished. Both leave a terminal `exit 0` marker with no receipt.
+        # A required output can be missing from a zero-exit attempt, and a fetch
+        # can be interrupted after the attempt finished. Both leave a terminal
+        # `exit 0` marker with no receipt. The same identity is used throughout:
+        # a changed command has a different identity, and superseding it is a
+        # deliberate relaunch that uploads again.
         _remote_fixture() do f
             command = d -> "cd '$d' && cat input > output"
-            @test_throws ErrorException f.invoke(d -> "cd '$d' && true")
+            @test_throws ErrorException f.invoke(command)
             dir = _dir(f)
             @test _RX._remote_state(f.ssh, f.target, dir) == "exit 0"
             @test !haskey(_journal(f), "retrieved")
             uploads = f.uploads[]
-            # Running the same stage again retrieves without uploading or
-            # launching, and the checkpoint becomes verified.
+            # The next run retrieves without uploading or launching, and the
+            # checkpoint becomes verified.
             f.invoke(command)
             @test f.uploads[] == uploads
             @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
@@ -504,13 +506,16 @@ _task_error(t) = try fetch(t); nothing catch e; e end
             @test_throws ProcessFailedException f.invoke(d -> "cd '$d' && cat input > output")
             old = _dir(f)
             @test isfile(joinpath(old, "input"))
-            # A different identity supersedes it. Best-effort reclamation runs
-            # even though the first attempt never installed a worker.
+            # A changed context is a changed identity *in the same journal*,
+            # which is what supersedes the preparation. Reclamation therefore
+            # runs even though the first attempt never installed a worker.
             f.fail_control[] = :none
             command = d -> "cd '$d' && cat input > output"
-            f.invoke(command; log="second")
+            f.invoke(command; context=["changed"])
             @test !isdir(old)
-            @test read(joinpath(f.d, "second.out"), String) == "known input\n"
+            @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+            # The fresh attempt's own directory is reclaimed by its success, so
+            # nothing is left behind by either attempt.
             @test isempty(readdir(f.target.base))
         end
     end
@@ -539,12 +544,16 @@ _task_error(t) = try fetch(t); nothing catch e; e end
     @testset "a finished attempt keeps its remote diagnostics in the stage log" begin
         _remote_fixture() do f
             command = d -> "cd '$d' && echo stage-diagnostics && cat input > output"
-            @test_throws ErrorException f.invoke(d -> "cd '$d' && true")
-            # A missing local log is exactly what the stage entry points leave
-            # behind: they truncate it before calling the runner.
+            # The same identity must be recovered, so the first run is made to
+            # fail after the command succeeded: the download breaks, leaving a
+            # completed attempt with no receipt and its remote log intact.
+            f.fail_download[] = true
+            @test_throws Exception f.invoke(command)
+            # A missing local log is what a stage entry point leaves behind when
+            # it opens a fresh log before calling the runner.
             log = joinpath(f.d, "stage.log")
-            @test isfile(log)
             rm(log)
+            f.fail_download[] = false
             f.invoke(command)
             text = read(log, String)
             @test occursin("stage-diagnostics", text) || occursin("cmd:", text)
@@ -567,11 +576,14 @@ _task_error(t) = try fetch(t); nothing catch e; e end
             end
             task = @async f.invoke(command; before_run=before_run)
             _wait_remote(() -> isfile(joinpath(f.d, "stage.log.remote.json")) && entered[])
-            # `before_run` receives this attempt's directory; the command has
-            # already published its marker and is still running.
-            dir = only(readdir(f.target.base; join=true))
-            # The wrapper may not have taken the execution lock yet.
-            @test _RX._remote_state(f.ssh, f.target, dir) in ("running", "ready", "preparing")
+            # `before_run` receives this attempt's directory. Preparation has
+            # already installed the worker and published `ready`; the command
+            # may or may not have taken the execution lock yet, so it writes its
+            # own marker rather than this test assuming it has started.
+            dir = _dir(f)
+            _wait_remote(() -> isfile(joinpath(dir, "started")) || istaskdone(task))
+            @test isfile(joinpath(dir, "started"))
+            @test _RX._remote_state(f.ssh, f.target, dir) == "running"
             schedule(task, InterruptException(); error=true)
             _wait_remote(() -> istaskdone(task))
             @test _task_error(task) isa InterruptException

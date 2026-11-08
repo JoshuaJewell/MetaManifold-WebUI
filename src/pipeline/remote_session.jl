@@ -116,15 +116,19 @@ function _control(ssh, target, dir, action)
     _capture(ssh(target.host, "bash $(_sq("$dir/$_CONTROL/worker.sh")) $action"))
 end
 
-function _cancel_remote(ssh, target, dir)
-    if _remote_state(ssh, target, dir) != "missing"
+# `reclaim` distinguishes an abandoned attempt from a requested stop. A stop
+# goes through the worker, which fences a launch, kills the process group and
+# removes the directory only once the execution lock is free. An attempt whose
+# worker was never installed never launched, and one that already published a
+# terminal marker has no live command, so both are reclaimed directly: the
+# directory is journal-owned, and no wildcard or user-supplied path is removed.
+function _cancel_remote(ssh, target, dir; reclaim::Bool=false)
+    state = _remote_state(ssh, target, dir)
+    if state == "missing" || (reclaim && !(state in ("running", "stopping")))
+        _capture(ssh(target.host, "rm -rf -- $(_sq(dir))"))
+    else
         _control(ssh, target, dir, "cancel")
         _control(ssh, target, dir, "cleanup")
-    else
-        # No installed worker means preparation never reached its launch --
-        # typically an interruption part way through the uploads. The directory
-        # is journal-owned; no wildcard or user-supplied path is removed here.
-        _capture(ssh(target.host, "rm -rf -- $(_sq(dir))"))
     end
 end
 
@@ -404,7 +408,7 @@ function run_remote(emit, target, command_for::Function;
                 # on a best-effort basis -- a denial (an unreachable host, a
                 # newer worker that refuses) must not stop the fresh attempt.
                 try
-                    _cancel_remote(old_ssh, old_target, old_dir)
+                    _cancel_remote(old_ssh, old_target, old_dir; reclaim=true)
                 catch superseded_error
                     superseded_error isa InterruptException && rethrow()
                     @warn "Superseded remote attempt not reclaimed; it will be swept once its marker is old enough" host=old_target.host directory=old_dir exception=superseded_error

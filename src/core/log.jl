@@ -141,6 +141,7 @@ export pipeline_log, log_written, reset_tool_logs, log_command
         # attempt produced. They are excluded rather than registered so a run
         # interrupted mid-attempt is not reported as drift.
         r"\.remote\.json$",
+        r"\.remote\.json\.lock$",
     ]
 
     ## Drift guard support

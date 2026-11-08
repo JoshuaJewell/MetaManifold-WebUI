@@ -205,6 +205,7 @@
         write(journal * ".lock", "")
 
         @test PipelineLog.log_excluded("dada2/Logs/denoise.log.remote.json")
+        @test PipelineLog.log_excluded("dada2/Logs/denoise.log.remote.json.lock")
         @test "dada2/Logs/denoise.log.remote.json" in PipelineLog.scan_log_files(dir)
         @test isempty(PipelineLog.unregistered_logs(dir))
         rm(dir; recursive=true)
