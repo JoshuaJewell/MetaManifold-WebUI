@@ -518,18 +518,29 @@ function run_remote(emit, target, command_for::Function;
                 sleep(_poll_interval)
             end
             emit("  Retrieving $(length(outputs)) output file(s) from $(target.host)")
-            # A failed fetch (a missing required output, a truncated transfer)
-            # throws with the attempt's exit marker still in place. The next run
-            # takes the `exit 0` barrier above, which replays the retained
-            # attempt instead of relaunching it, so a short read never wedges
-            # the stage and its outputs stay available to retrieve again.
+            # A short read is different from a command that never wrote the
+            # file. `replay` retrieves the same attempt; it cannot make a
+            # missing required output appear, so replaying it on every rerun
+            # would report the same error forever. Retire the terminal attempt
+            # (cleanup is allowed because its exit marker is present) and its
+            # journal, so an explicit rerun launches a fresh attempt. If
+            # cleanup fails, keep the journal: the attempt must not be left
+            # without an owner, and the next run can retry the retirement.
             missing = _missing_outputs(ssh, target, dir, outputs)
             if !isempty(missing)
-                journal["failed"] = false
-                _save_journal(journal_path, journal)
+                retired = try
+                    _control(ssh, target, dir, "cleanup")
+                    true
+                catch e
+                    e isa InterruptException && rethrow()
+                    @warn "Could not retire a zero-exit attempt with missing outputs" host=target.host directory=dir exception=e
+                    false
+                end
+                retired && mv(journal_path, journal_path * ".missing-outputs-$(uuid4())")
                 error("Remote $stage finished with status 0 but did not write required output(s): " *
-                      join(missing, ", ") * ". The attempt is retained; run the stage again to " *
-                      "retrieve it, or change its settings to run it afresh.")
+                      join(missing, ", ") * ". " *
+                      (retired ? "The attempt was retired; run the stage again to launch it afresh."
+                               : "Retry to retire the attempt before the stage can run afresh."))
             end
             _fetch_outputs(ssh, scp, target, dir, outputs, optional_outputs)
             journal["retrieved"] = Dict(abspath(path) => (isfile(path) ? _digest(path) : nothing)

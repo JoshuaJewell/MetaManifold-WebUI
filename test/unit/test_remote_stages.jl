@@ -297,6 +297,27 @@ const _R = MetaManifold.DADA2
         @test isempty(errors)
     end
 
+    @testset "verify_remote_sizes quotes a remote path with an apostrophe" begin
+        # `_sq` escapes the single quote in the name, so `wc -c` sees one path
+        # and the byte count is compared against the right local file.
+        mktempdir() do d
+            staging = mkpath(joinpath(d, "staging"))
+            rel = "sample's reads.fastq.gz"
+            local_path = joinpath(d, rel)
+            write(local_path, "0123456789")
+            write(joinpath(staging, rel), "0123456789")
+            ssh = (_, cmd) -> `bash -c $cmd`
+            emitted = String[]
+            rx = MetaManifold.RemoteExec
+            rx.verify_remote_sizes(ssh, (; host="fixture"), staging,
+                [local_path => rel], msg -> push!(emitted, msg))
+            @test any(m -> occursin("1 uploaded file", m), emitted)
+            write(joinpath(staging, rel), "0123")
+            @test_throws ErrorException rx.verify_remote_sizes(ssh, (; host="fixture"),
+                staging, [local_path => rel], _ -> nothing)
+        end
+    end
+
     @testset "every offloadable stage has a remote script" begin
         # REMOTE_STAGES is what a config may name; a stage listed there with no
         # script behind it would fail only once someone offloaded it.

@@ -59,6 +59,56 @@ _ph_factory() = YAML.load_file(joinpath(@__DIR__, "..", "..", "config", "default
     @test !("-redo" in split(remote_command))
 end
 
+@testset "run_workflow keeps a retained remote log and clears only unverified outputs" begin
+    # Both halves of the new branch run before a step can fail, so a step whose
+    # command cannot run is enough to observe what each half did to the stage
+    # log, the outputs and the per-step key.
+    mktempdir() do root
+        dir = joinpath(root, "reference")
+        files = _PH.reference_files(dir)
+        cfg = _ph_factory()
+        align_dir = mkpath(dirname(files["reference.aln.fasta"]))
+        trim_dir = mkpath(dirname(files["reference.trim.fasta"]))
+        write(files["reference.aln.fasta"], ">a\nACGT\n")
+        write(files["references.fasta"], ">a\nACGT\n")
+
+        # Local: reset the log and clear the old outputs, then fail on a step
+        # with no tool behind it (nothing must be installed for this test).
+        local_step = _PH.Step("trim", ("reference", "trim"), nothing, String[],
+            ["reference.aln.fasta"],
+            ["reference.trim.fasta", "reference.columns"], String[])
+        local_log = joinpath(dir, "logs", "trim.log")
+        mkpath(dirname(local_log))
+        write(local_log, "sentinel that a local rerun must truncate")
+        write(files["reference.trim.fasta"], "stale")
+        write(files["reference.columns"], "stale")
+        write(_PH._key_path(files, local_step), "stale key")
+        @test_throws Exception _PH.run_workflow([local_step], dir, files, cfg)
+        @test !occursin("sentinel", read(local_log, String))
+        @test !isfile(files["reference.trim.fasta"])
+        @test !isfile(_PH._key_path(files, local_step))
+        @test _PH.read_status(dir)["state"] == "failed"
+
+        # Remote: a retained journal means the runner may replay the remote
+        # diagnostics, so the log must not be truncated; only the key is
+        # cleared before the runner checks the receipt under its owner lock.
+        remote_step = _PH.Step("align", ("reference", "align"), "phylogeny_align",
+            ["mafft"], ["references.fasta"], ["reference.aln.fasta"], String[])
+        remote_log = joinpath(dir, "logs", "align.log")
+        mkpath(dirname(remote_log))
+        write(remote_log, "sentinel that a retained journal must keep")
+        write(remote_log * ".remote.json", "{}")
+        write(_PH._key_path(files, remote_step), "stale key")
+        cfg["remote"] = Dict("host" => "127.0.0.1",
+            "staging_dir" => mkpath(joinpath(root, "remote")),
+            "stages" => ["phylogeny_align"])
+        @test_throws Exception _PH.run_workflow([remote_step], dir, files, cfg)
+        @test occursin("sentinel", read(remote_log, String))
+        @test !isfile(_PH._key_path(files, remote_step))
+        @test _PH.read_status(dir)["state"] == "failed"
+    end
+end
+
 @testset "Remote phylogeny clears outputs without a matching verified receipt" begin
     if Sys.islinux()
         for changed in (:settings, :input, :output)

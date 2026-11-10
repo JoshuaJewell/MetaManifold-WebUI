@@ -22,6 +22,8 @@ function _remote_fixture(f)
         drop_status = Ref(false)
         drop_start_reply = Ref(false)
         fail_cancel = Ref(false)
+        fail_sweep = Ref(false)
+        fail_cleanup = Ref(false)
         retries = Ref(0)
         ssh = function (_, command)
             if probe_launch[] && occursin("worker.sh' start", command)
@@ -32,6 +34,9 @@ function _remote_fixture(f)
                 return `bash -c '(exec 9>"$1"; flock -x 9; touch "$2"; sleep 0.5) & while ! test -f "$2"; do sleep 0.01; done; bash -c "$3"' _ $lockfile $held $command`
             end
             occursin("worker.sh' retry", command) && (retries[] += 1)
+            if fail_sweep[] && occursin("for d in ", command)
+                return `bash -c 'exit 255'`
+            end
             if drop_status[] && occursin("worker.sh' status", command)
                 return `bash -c 'exit 255'`
             end
@@ -40,6 +45,9 @@ function _remote_fixture(f)
                 return `bash -c $(command * "; exit 255")`
             end
             if fail_cancel[] && occursin("worker.sh' cancel", command)
+                return `bash -c 'exit 255'`
+            end
+            if fail_cleanup[] && occursin("worker.sh' cleanup", command)
                 return `bash -c 'exit 255'`
             end
             `bash -c $command`
@@ -73,7 +81,7 @@ function _remote_fixture(f)
         end
         try
             f((; d, target, input, uploads, downloads, fail_download, fail_control, probe_launch, drop_status,
-                drop_start_reply, fail_cancel, retries, invoke, ssh, scp))
+                drop_start_reply, fail_cancel, fail_sweep, fail_cleanup, retries, invoke, ssh, scp))
         finally
             # Never let a failed assertion strand a detached test process.
             for dir in readdir(target.base; join=true)
@@ -98,6 +106,63 @@ function _task_error(t)
         nothing
     catch e
         e isa TaskFailedException ? e.task.exception : e
+    end
+end
+
+# The branches that own and close their own SSH master are only reachable when
+# `_connection` is nothing. A transport that refuses every request is enough to
+# exercise that ownership and its teardown: no sshd, account or second
+# connection is needed, and the fake executables are visible only inside the
+# `withenv` block.
+function _refusing_transport(f)
+    mktempdir() do bin
+        for name in ("ssh", "scp")
+            path = joinpath(bin, name)
+            write(path, "#!/bin/sh\nexit 255\n")
+            chmod(path, 0o700)
+        end
+        withenv("PATH" => bin * ":" * get(ENV, "PATH", "")) do
+            f()
+        end
+    end
+end
+
+# Model ControlMaster=auto opening a master before a remote request fails.
+# Keep per-ControlPath state so an exit request must close an existing master.
+function _owned_transport(f, fixture)
+    mktempdir(fixture.d) do bin
+        events = joinpath(bin, "events")
+        masters = mkpath(joinpath(bin, "masters"))
+        script = raw"""#!/bin/sh
+ctl=
+action=request
+for arg in "$@"; do
+    case "$arg" in
+        ControlPath=*) ctl=${arg#ControlPath=} ;;
+        exit) action=exit ;;
+    esac
+done
+[ -n "$ctl" ] || exit 254
+master="$MM_TEST_MASTERS/${ctl##*/}"
+if [ "$action" = exit ]; then
+    [ -f "$master" ] || exit 254
+    rm -- "$master" || exit 254
+    printf 'closed\t%s\n' "$ctl" >> "$MM_TEST_EVENTS"
+    exit 0
+fi
+if [ ! -f "$master" ]; then
+    : > "$master"
+    printf 'opened\t%s\n' "$ctl" >> "$MM_TEST_EVENTS"
+fi
+printf 'request\t%s\t%s\n' "$ctl" "$*" >> "$MM_TEST_EVENTS"
+exit 255
+"""
+        write(joinpath(bin, "ssh"), script)
+        chmod(joinpath(bin, "ssh"), 0o700)
+        withenv("PATH" => bin * ":" * get(ENV, "PATH", ""),
+                "MM_TEST_MASTERS" => masters, "MM_TEST_EVENTS" => events) do
+            f((; events, masters))
+        end
     end
 end
 
@@ -594,11 +659,13 @@ end
         end
     end
 
-    @testset "a completed attempt without a required output stays retrievable" begin
+    @testset "a zero exit without a required output is retired for a fresh attempt" begin
         _remote_fixture() do f
-            command = d -> "cd '$d' && true"
-            # A zero exit that omits the required file is reported, not accepted
-            # as a successful retrieval, and its attempt is kept.
+            # `replay` cannot recover a file the command never wrote. The same
+            # command must be able to succeed on an explicit rerun, so the
+            # zero-exit attempt is cleaned up and its journal archived.
+            flag = joinpath(f.d, "write-output")
+            command = d -> "cd '$d' && if test -f '$flag'; then cat input > output; fi"
             error_text = try
                 f.invoke(command)
                 ""
@@ -606,18 +673,58 @@ end
                 sprint(showerror, e)
             end
             @test occursin("required output", error_text)
-            dir = _dir(f)
-            @test _RX._remote_state(f.ssh, f.target, dir) == "exit 0"
-            @test !haskey(_journal(f), "retrieved")
+            @test occursin("retired", error_text)
+            @test !isfile(joinpath(f.d, "stage.log.remote.json"))
+            @test any(n -> startswith(n, "stage.log.remote.json.missing-outputs-"),
+                      readdir(f.d))
+            @test isempty(readdir(f.target.base))
             uploads = f.uploads[]
-            # The next run retrieves from the same attempt: no upload, no
-            # relaunch, and the file that was missing is fetched and verified.
-            write(joinpath(dir, "output"), "known input\n")
+            touch(flag)
             f.invoke(command)
-            @test f.uploads[] == uploads
+            @test f.uploads[] > uploads
             @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
             @test haskey(_journal(f), "retrieved")
+        end
+    end
+
+    @testset "a refused retirement keeps the journal so the attempt keeps its owner" begin
+        _remote_fixture() do f
+            # If the host refuses the cleanup, the attempt still exists there.
+            # The journal is the only record that names it, so it must stay
+            # until a later run retires the attempt.
+            flag = joinpath(f.d, "write-output")
+            command = d -> "cd '$d' && if test -f '$flag'; then cat input > output; fi"
+            journal = joinpath(f.d, "stage.log.remote.json")
+            failure() = try
+                f.invoke(command)
+                ""
+            catch e
+                sprint(showerror, e)
+            end
+            f.fail_cleanup[] = true
+            error_text = failure()
+            @test occursin("required output", error_text)
+            @test occursin("Retry to retire the attempt", error_text)
+            @test !occursin("was retired", error_text)
+            @test isfile(journal)
+            @test !any(n -> occursin(".missing-outputs-", n), readdir(f.d))
+            dir = _dir(f)
+            @test isdir(dir)
+            # The host accepts the cleanup again: the next run retires the same
+            # attempt and does not launch the command a second time.
+            f.fail_cleanup[] = false
+            uploads = f.uploads[]
+            error_text = failure()
+            @test occursin("was retired", error_text)
+            @test f.uploads[] == uploads
             @test !isdir(dir)
+            @test !isfile(journal)
+            @test any(n -> startswith(n, "stage.log.remote.json.missing-outputs-"), readdir(f.d))
+            # Only then does a run launch afresh.
+            touch(flag)
+            f.invoke(command)
+            @test f.uploads[] > uploads
+            @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
         end
     end
 
@@ -626,8 +733,13 @@ end
             # A retained attempt carries the diagnostics of the run whose
             # outputs are being recovered; a stage that reopened its log keeps
             # its header and gains the remote text once, however often the
-            # recovery path is reached.
-            @test_throws ErrorException f.invoke(d -> "cd '$d' && echo stage-diagnostics && true")
+            # recovery path is reached. A broken download (not a missing
+            # output) is what keeps this attempt: a command that omits a
+            # required file is retired for a fresh launch instead.
+            command = d -> "cd '$d' && echo stage-diagnostics && cat input > output"
+            f.fail_download[] = true
+            @test_throws Exception f.invoke(command)
+            f.fail_download[] = false
             dir = _dir(f)
             log = joinpath(f.d, "stage.log")
             write(log, "=== denoise ===\n")
@@ -647,6 +759,175 @@ end
         @test_throws ErrorException _RX._interruptible(() -> error("probe failed"))
         @test_throws InterruptException _RX._interruptible() do
             throw(CompositeException([ErrorException("probe failed"), InterruptException()]))
+        end
+    end
+
+    @testset "the fetch reports a required output it cannot see" begin
+        _remote_fixture() do f
+            out = joinpath(f.d, "never.out")
+            caught = try
+                _RX._fetch_outputs(f.ssh, f.scp, f.target,
+                    joinpath(f.target.base, "absent"), ["output" => out],
+                    Pair{String,String}[])
+                nothing
+            catch e
+                e
+            end
+            @test caught isa ErrorException
+            @test occursin("finished without required output", sprint(showerror, caught))
+            @test !isfile(out)
+        end
+    end
+
+    @testset "a durable cancel request is honoured before a receipt is reused" begin
+        _remote_fixture() do f
+            command = d -> "cd '$d' && cat input > output"
+            f.invoke(command)
+            journal = _journal(f)
+            journal["cancel_requested"] = true
+            write(joinpath(f.d, "stage.log.remote.json"), JSON3.write(journal))
+            uploads = f.uploads[]
+            f.invoke(command)
+            @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+            @test f.uploads[] > uploads
+            @test _journal(f)["cancel_requested"] == false
+            @test haskey(_journal(f), "retrieved")
+            @test isempty(readdir(f.target.base))
+        end
+    end
+
+    @testset "a durable cancel request stops the old attempt of the same stage" begin
+        _remote_fixture() do f
+            # The host did not acknowledge the stop, so the attempt is still
+            # running there. The SAME stage runs again (no setting changed):
+            # the pending request must stop that attempt before a new one
+            # launches, or two commands of one stage would be live at once.
+            flag = joinpath(f.d, "finish-now")
+            command = d -> "cd '$d' && if test -f '$flag'; then cat input > output; " *
+                           "else echo started > started; sleep 300; fi"
+            t = @async f.invoke(command)
+            _wait_remote(() -> isfile(joinpath(f.d, "stage.log.remote.json")) &&
+                isfile(joinpath(_dir(f), "started")))
+            dir = _dir(f)
+            f.fail_cancel[] = true
+            schedule(t, InterruptException(); error=true)
+            @test !isnothing(_task_error(t))
+            @test _journal(f)["cancel_requested"]
+            @test isdir(dir)
+            f.fail_cancel[] = false
+            touch(flag)
+            uploads = f.uploads[]
+            f.invoke(command)
+            @test !isdir(dir)
+            @test _dir(f) != dir
+            @test f.uploads[] > uploads
+            @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+            @test !_journal(f)["cancel_requested"]
+            @test isempty(readdir(f.target.base))
+        end
+    end
+
+    @testset "receipt recovery cleans up a retained attempt" begin
+        _remote_fixture() do f
+            command = d -> "cd '$d' && echo stage-diagnostics && cat input > output"
+            f.fail_download[] = true
+            @test_throws Exception f.invoke(command)
+            dir = _dir(f)
+            @test _RX._remote_state(f.ssh, f.target, dir) == "exit 0"
+            out = joinpath(f.d, "stage.out")
+            write(out, "known input\n")
+            journal = _journal(f)
+            journal["retrieved"] = Dict(abspath(out) => _RX._digest(out))
+            write(joinpath(f.d, "stage.log.remote.json"), JSON3.write(journal))
+            # The local log is gone, as after a crash before it reached disk.
+            # Cleanup removes the remote copy, so recovery must replay it first.
+            log = joinpath(f.d, "stage.log")
+            rm(log; force=true)
+            f.fail_download[] = false
+            uploads = f.uploads[]
+            f.invoke(command)
+            @test f.uploads[] == uploads
+            @test read(out, String) == "known input\n"
+            @test occursin("stage-diagnostics", read(log, String))
+            @test !isdir(dir)
+            @test haskey(_journal(f), "retrieved")
+        end
+    end
+
+    @testset "a failed stale-attempt sweep cannot fail a finished stage" begin
+        _remote_fixture() do f
+            f.fail_sweep[] = true
+            f.invoke(d -> "cd '$d' && cat input > output")
+            @test read(joinpath(f.d, "stage.out"), String) == "known input\n"
+            @test isempty(readdir(f.target.base))
+        end
+    end
+
+    @testset "an owned transport is closed even when the connection refuses" begin
+        _remote_fixture() do f
+            log = joinpath(f.d, "own.log")
+            _refusing_transport() do
+                @test_throws Exception begin
+                    _RX.run_remote(_ -> nothing, f.target,
+                        d -> "cd '$d' && cat input > output";
+                        inputs=[f.input => "input"],
+                        outputs=["output" => joinpath(f.d, "own.out")],
+                        log_path=log, stage="denoise", _poll_interval=0.02)
+                end
+            end
+            @test isfile(log * ".remote.json")
+        end
+    end
+
+    @testset "a superseded journal closes the old master it opened" begin
+        _remote_fixture() do f
+            for cancel_requested in (false, true)
+                tag = string(cancel_requested)
+                log = joinpath(f.d, "superseded-" * tag * ".log")
+                journal_path = log * ".remote.json"
+                old_identity = _RX._identity(f.target, "denoise", d -> "cd '$d' && true",
+                    [f.input => "input"],
+                    ["output" => joinpath(f.d, "old-" * tag * ".out")],
+                    Pair{String,String}[], ["old"])
+                journal = Dict{String,Any}(
+                    "identity" => old_identity,
+                    "directory" => joinpath(f.target.base,
+                        "mm_" * "0"^64 * "_00000000-0000-4000-8000-000000000000"),
+                    "identity_file" => nothing,
+                    "failed" => false,
+                    "cancel_requested" => cancel_requested)
+                write(journal_path, JSON3.write(journal))
+                original_journal = read(journal_path)
+                _owned_transport(f) do transport
+                    @test_throws ProcessFailedException begin
+                        _RX.run_remote(_ -> nothing, f.target,
+                            d -> "cd '$d' && cat input > output";
+                            inputs=[f.input => "input"],
+                            outputs=["output" => joinpath(f.d, "superseded-" * tag * ".out")],
+                            log_path=log, stage="denoise", context=["new"],
+                            _poll_interval=0.02)
+                    end
+                    calls = split.(readlines(transport.events), '\t'; limit=3)
+                    # The first request uses the old journal's master. It opens
+                    # that master, fails its status probe, then must close it.
+                    @test calls[1][1] == "opened"
+                    old_ctl = calls[1][2]
+                    @test calls[2][1:2] == ["request", old_ctl]
+                    @test occursin("ControlMaster=auto", calls[2][3])
+                    @test occursin(journal["directory"], calls[2][3])
+                    @test occursin("worker.sh' status", calls[2][3])
+                    @test calls[3] == ["closed", old_ctl]
+                    @test isempty(readdir(transport.masters))
+                    if cancel_requested
+                        @test length(calls) == 3
+                        @test read(journal_path) == original_journal
+                    end
+                end
+                if !cancel_requested
+                    @test any(n -> startswith(n, basename(journal_path) * ".superseded-"),
+                              readdir(f.d))
+                end
+            end
         end
     end
 
