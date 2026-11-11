@@ -3,6 +3,7 @@
 
 using Test
 using JSON3
+using Sockets
 using MetaManifold.Canonical
 using MetaManifold.DerivedAnalyses
 using MetaManifold.ExactSummaries
@@ -28,15 +29,19 @@ end
 @testset "Derived-record I/O and storage limits fail explicitly" begin
     DA = MetaManifold.DerivedAnalyses
     mktempdir() do root
-        # Reading a directory raises an I/O error, independently of filesystem
-        # permissions (the test must also work when CI runs as root).
+        # `read` on a directory raises nothing in Julia: it returns no bytes. So
+        # a directory cannot stand in for an unreadable file. Opening a
+        # Unix-domain socket path fails for every user, root included, and so
+        # does not depend on filesystem permissions.
         unreadable = joinpath(root, "not-a-file")
-        mkdir(unreadable)
+        server = Sockets.listen(unreadable)
         error = try
             DA._existing(unreadable, repeat("0", 64))
             nothing
         catch err
             err
+        finally
+            close(server)
         end
         @test error isa DerivedAnalysisError
         @test error.code == "conflict"

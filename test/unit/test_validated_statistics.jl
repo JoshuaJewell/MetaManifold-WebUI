@@ -484,9 +484,16 @@ end
                 Dict("colFilters" => Dict("odd\"sample" => criterion))))
             @test response.status == 200
             result = JSON3.read(String(response.body))
-            @test collect(result.samples[1].features) == ["G"]
-            @test collect(result.samples[1].counts) == [2, 20, 200, "9007199254740993"]
-            @test result.samples[1].total == "9007199254741215"
+            # Only seq2 remains, so every sample has the one feature G with
+            # that row's own exact count. The count above 2^53 stays a string.
+            expected = Dict("feature" => 2, "__VALIDATED_FEATURE" => 20,
+                            "__validated_feature_" => 200, "odd\"sample" => "9007199254740993")
+            @test Set(s.label for s in result.samples) == Set(keys(expected))
+            for sample in result.samples
+                @test collect(sample.features) == ["G"]
+                @test collect(sample.counts) == [expected[sample.label]]
+                @test sample.total == expected[sample.label]
+            end
             loaded_response = _vs_get("/api/v1/studies/studyV/runs/run1/statistics/derived/$(result.analysis_id)")
             @test loaded_response.status == 200
             loaded = JSON3.read(String(loaded_response.body))
@@ -495,12 +502,18 @@ end
         end
         # Numeric count filters are deliberately refused before SQL construction:
         # the shared min/max predicate would cast exact counts to Float64.
-        for criterion in (Dict("min" => 1), Dict("max" => 9007199254740993))
+        for criterion in (Dict("min" => 1), Dict("max" => 5))
             quoted = _vs_post(path, merge(request,
                 Dict("colFilters" => Dict("odd\"sample" => criterion))))
             @test quoted.status == 422
             @test occursin("count-filter", String(quoted.body))
         end
+        # A bound above 2^53 never reaches that guard. The request parser
+        # refuses the token first, because such a JSON number is not exact.
+        unsafe = _vs_post(path, merge(request,
+            Dict("colFilters" => Dict("odd\"sample" => Dict("max" => 9007199254740993)))))
+        @test unsafe.status == 400
+        @test occursin("unsafe integer", String(unsafe.body))
     end
 end
 
