@@ -364,6 +364,11 @@ analysis:
     # after zCompositions::cmultRepl replaces their zeros; the effect is a
     # difference in CLR units, not a fold change.
     method: nb_glm
+    # Additional native methods: aldex2 (Dirichlet posterior comparisons) and
+    # ancombc (original two-group sampling-bias model). Both use raw counts.
+    # ALDEx2 only: posterior instances and reproducible RNG seed.
+    mc_samples: 128
+    seed: 1
     # How library size enters each model, as a log offset: tss (total reads per
     # sample) or rle (median-of-ratios over the taxa present in every sample).
     # rle is refused when no taxon is present in every sample.

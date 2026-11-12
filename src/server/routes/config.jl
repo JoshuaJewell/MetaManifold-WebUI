@@ -132,6 +132,12 @@ factory default; a key whose default is ~ accepts a string, number or boolean.
 """
 function _config_value_error(key::String, value)
     v = value isa JSON3.Array ? collect(value) : value
+    if key in ("analysis.differential.mc_samples", "analysis.differential.seed")
+        lo, hi = endswith(key, "mc_samples") ? (2, 4096) : (0, typemax(Int32))
+        (v isa Integer && !(v isa Bool) && lo <= v <= hi) ||
+            return "$key must be an integer from $lo to $hi"
+        return nothing
+    end
     if haskey(_ENUM_VALUES, key)
         allowed = _ENUM_VALUES[key]
         v in allowed || return "$key must be one of $(join(filter(!isnothing, collect(allowed)), ", "))"

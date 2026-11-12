@@ -7,12 +7,14 @@ const COLUMNS = [
   'taxon', 'status', 'log2_fold_change', 'estimate', 'standard_error', 'statistic',
   'pvalue', 'padj', 'dispersion_theta', 'prevalence', 'note',
 ] as const
+const ALDEX_COLUMNS = [...COLUMNS, 'aldex_effect', 'aldex_diff_within', 'aldex_abundance',
+  'wilcoxon_pvalue', 'wilcoxon_padj'] as const
 
-/** Quote one CSV field when it holds a comma, quote or line break (RFC 4180). */
+/** Quote CSV delimiters and the comment marker used by the documented R reader. */
 export function csvField(value: string | number | null): string {
   if (value === null) return ''
   const s = String(value)
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  return /["#,\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 /**
@@ -28,8 +30,9 @@ export function differentialCsv(result: DifferentialResult): string {
     `# ${result.method}`,
     `# ${configLine(result)}`,
   ].map(l => l.replace(/[\r\n]+/g, ' '))
-  const rows = result.rows.map(r => COLUMNS.map(c => csvField(r[c])).join(','))
-  return [...header, COLUMNS.join(','), ...rows].join('\r\n') + '\r\n'
+  const columns = result.config.method === 'aldex2' ? ALDEX_COLUMNS : COLUMNS
+  const rows = result.rows.map(r => columns.map(c => csvField(r[c] ?? null)).join(','))
+  return [...header, columns.join(','), ...rows].join('\r\n') + '\r\n'
 }
 
 /** Format a statistic for display: three significant figures, or a dash when absent. */
@@ -47,6 +50,12 @@ export function formatStat(value: number | null): string {
  */
 export function configLine(result: DifferentialResult): string {
   const c = result.config
+  if (c.method === 'aldex2') {
+    return `method aldex2, mc_samples ${c.mc_samples}, seed ${c.seed}, min_prevalence ${c.min_prevalence}; estimate is a log2 CLR difference; padj is expected BH across posterior instances`
+  }
+  if (c.method === 'ancombc') {
+    return `method ancombc, min_prevalence ${c.min_prevalence}; estimate is a natural-log abundance difference; structural zeros are separate decisions`
+  }
   return c.method === 'clr_welch'
     ? `method clr_welch, replacement_delta ${c.replacement_delta}, min_prevalence ${c.min_prevalence}; estimate is a CLR difference, not a fold change`
     : `method nb_glm, offset ${c.offset}, min_prevalence ${c.min_prevalence}`
