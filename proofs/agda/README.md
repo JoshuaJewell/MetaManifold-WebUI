@@ -2,7 +2,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk> -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 
-# Machine-checked proofs: Benjamini–Hochberg, size-factor scaling and PERMANOVA permutations
+# Machine-checked proofs: statistics and remote execution
 
 `proofs/agda/` holds Agda proofs of the exact-arithmetic properties of three
 functions in `src/analysis/differential.jl`: `bh_adjust`, `tss_factors` and
@@ -18,6 +18,15 @@ no holes and no termination or positivity pragmas.
 `proofs/tests/axiom-audit.sh` enforces this. It also fails if any module is
 not imported by `MetaManifold/All.agda`, because a module that nothing imports
 is never type-checked.
+
+`MetaManifold.RemoteExecution` also proves safety properties of the shared SSH
+runner's protocol: one live command per attempt, preserved attempt identity,
+separation of distinct attempts, successful exit before retrieval, and no cleanup
+while a command is live. Its trace proofs are inductive, not bounded checks.
+See [remote execution](../../docs/guide/remote-execution.md) for the theorem map,
+regression tests and trusted OS/filesystem/hash assumptions. These properties do
+not establish a formal refinement from the Julia/Bash implementation to Agda or
+unconditional liveness during network or host failure.
 
 ## Toolchain
 

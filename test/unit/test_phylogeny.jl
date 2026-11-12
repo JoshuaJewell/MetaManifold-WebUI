@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Phylogenetic placement: FASTA intake, settings, the command lines each step
@@ -9,11 +10,163 @@ using JSON3, YAML, DuckDB, DBInterface, Random
 const _PH = MetaManifold.Phylogeny
 const _PSV = MetaManifold.Server
 
+@testset "Interrupted phylogeny status is recoverable" begin
+    for key in ("ref:interrupted", "pl:study/interrupted")
+        mktempdir() do dir
+            _PH._update_status!(dir, st -> begin
+                st["state"] = "running"
+                st["steps"] = Dict("align" => Dict("state" => "done"),
+                                   "tree" => Dict("state" => "running"))
+            end)
+            @test _PSV._state(dir, key) == "failed"
+            status = _PH.read_status(dir)
+            @test status["steps"]["align"]["state"] == "done"
+            @test status["steps"]["tree"]["state"] == "failed"
+            @test occursin("interrupted", status["error"])
+            @test _PSV._state(dir, key) == "failed" # reconciliation is idempotent
+        end
+    end
+    mktempdir() do dir
+        gate = Channel{Nothing}(1)
+        job = _PSV._submit_phylo("ref:live-recovery-test") do
+            take!(gate)
+        end
+        try
+            _PH._update_status!(dir, st -> (st["state"] = "running"))
+            @test _PSV._state(dir, "ref:live-recovery-test") == "running"
+            @test _PH.read_status(dir)["state"] == "running"
+        finally
+            put!(gate, nothing)
+            task = job.task
+            isnothing(task) || wait(task)
+        end
+    end
+end
+
 _ph_request(method, path, body="", headers=["Content-Type" => "application/json"]) =
     _PSV.Oxygen.internalrequest(_PSV.HTTP.Request(method, path, headers, body))
 _ph_json(r) = JSON3.read(String(r.body))
 
 _ph_factory() = YAML.load_file(joinpath(@__DIR__, "..", "..", "config", "defaults", "pipeline.yml"))
+
+@testset "Remote IQ-TREE accepts its checkpoint" begin
+    settings = _PH.placement_settings(_ph_factory())
+    step = only(s for s in _PH.REFERENCE_STEPS if s.name == "tree")
+    bins = Dict("iqtree" => "iqtree")
+    local_command = only(_PH.step_commands(step, settings, bins, 2, 123; path=identity))
+    remote_command = only(_PH.step_commands(step, settings, bins, 2, 123; path=identity, resume=true))
+    @test "-redo" in split(local_command)
+    @test !("-redo" in split(remote_command))
+end
+
+@testset "run_workflow keeps a retained remote log and clears only unverified outputs" begin
+    # Both halves of the new branch run before a step can fail, so a step whose
+    # command cannot run is enough to observe what each half did to the stage
+    # log, the outputs and the per-step key.
+    mktempdir() do root
+        dir = joinpath(root, "reference")
+        files = _PH.reference_files(dir)
+        cfg = _ph_factory()
+        align_dir = mkpath(dirname(files["reference.aln.fasta"]))
+        trim_dir = mkpath(dirname(files["reference.trim.fasta"]))
+        write(files["reference.aln.fasta"], ">a\nACGT\n")
+        write(files["references.fasta"], ">a\nACGT\n")
+
+        # Local: reset the log and clear the old outputs, then fail on a step
+        # with no tool behind it (nothing must be installed for this test).
+        local_step = _PH.Step("trim", ("reference", "trim"), nothing, String[],
+            ["reference.aln.fasta"],
+            ["reference.trim.fasta", "reference.columns"], String[])
+        local_log = joinpath(dir, "logs", "trim.log")
+        mkpath(dirname(local_log))
+        write(local_log, "sentinel that a local rerun must truncate")
+        write(files["reference.trim.fasta"], "stale")
+        write(files["reference.columns"], "stale")
+        write(_PH._key_path(files, local_step), "stale key")
+        @test_throws Exception _PH.run_workflow([local_step], dir, files, cfg)
+        @test !occursin("sentinel", read(local_log, String))
+        @test !isfile(files["reference.trim.fasta"])
+        @test !isfile(_PH._key_path(files, local_step))
+        @test _PH.read_status(dir)["state"] == "failed"
+
+        # Remote: a retained journal means the runner may replay the remote
+        # diagnostics, so the log must not be truncated; only the key is
+        # cleared before the runner checks the receipt under its owner lock.
+        remote_step = _PH.Step("align", ("reference", "align"), "phylogeny_align",
+            ["mafft"], ["references.fasta"], ["reference.aln.fasta"], String[])
+        remote_log = joinpath(dir, "logs", "align.log")
+        mkpath(dirname(remote_log))
+        write(remote_log, "sentinel that a retained journal must keep")
+        write(remote_log * ".remote.json", "{}")
+        write(_PH._key_path(files, remote_step), "stale key")
+        cfg["remote"] = Dict("host" => "127.0.0.1",
+            "staging_dir" => mkpath(joinpath(root, "remote")),
+            "stages" => ["phylogeny_align"])
+        @test_throws Exception _PH.run_workflow([remote_step], dir, files, cfg)
+        @test occursin("sentinel", read(remote_log, String))
+        @test !isfile(_PH._key_path(files, remote_step))
+        @test _PH.read_status(dir)["state"] == "failed"
+    end
+end
+
+@testset "Remote phylogeny clears outputs without a matching verified receipt" begin
+    if Sys.islinux()
+        for changed in (:settings, :input, :output)
+            mktempdir() do root
+                rdir = joinpath(root, "reference")
+                files = _PH.reference_files(rdir)
+                input = files["reference.trim.fasta"]
+                mkpath(dirname(input))
+                write(input, ">a\nACGT\n>b\nACGA\n>c\nACGG\n>d\nACGC\n")
+                tool = joinpath(root, "iqtree-fixture")
+                write(tool, """
+                #!/bin/sh
+                if [ "\$1" = --version ]; then echo 'IQ-TREE version 3.1.4'; exit 0; fi
+                printf '(a:1,b:1,c:1,d:1);\\n' > reference.treefile
+                cp reference.treefile reference.contree
+                """)
+                chmod(tool, 0o700)
+                target = (; host="fixture", base=mkpath(joinpath(root, "remote")),
+                    identity_file=nothing, threads=2, tools=Dict("iqtree" => tool))
+                offline = Ref(false)
+                uploads = Ref(0)
+                ssh = (_, cmd) -> offline[] ? `bash -c 'exit 255'` : `bash -c $cmd`
+                scp = function (src, dst)
+                    if startswith(src, "fixture:")
+                        `cp -- $(src[9:end]) $dst`
+                    else
+                        uploads[] += 1
+                        `cp -- $src $(dst[9:end])`
+                    end
+                end
+                step = only(s for s in _PH.REFERENCE_STEPS if s.name == "tree")
+                settings = _PH.placement_settings(_ph_factory())
+                log = joinpath(rdir, "logs", "tree.log")
+                records = Dict{String,MetaManifold.Provenance.ToolRecord}()
+                invoke() = _PH._run_remote_step(files, step, settings, 123, target, log,
+                    _ -> nothing, records; _connection=(ssh, scp))
+                invoke()
+                tree = read(files["reference.treefile"], String)
+                count = uploads[]
+                invoke() # Valid receipt survives remote cleanup and a caller restart.
+                @test read(files["reference.treefile"], String) == tree
+                @test uploads[] == count
+                if changed == :settings
+                    settings["reference"]["tree"]["model"] = "GTR+G"
+                elseif changed == :input
+                    write(input, replace(read(input, String), "ACGT" => "TCGT"))
+                else
+                    write(files["reference.treefile"], "stale or damaged output")
+                end
+                offline[] = true
+                @test_throws ProcessFailedException invoke()
+                @test !isfile(files["reference.treefile"])
+                @test !isfile(files["reference.contree"])
+                @test_throws ErrorException _PH.check_placement(_PH.placement_files(joinpath(root, "placement"), rdir))
+            end
+        end
+    end
+end
 
 # Sequences related by a simple tree: two clades of four, and query fragments from each.
 function _ph_sequences(rng)

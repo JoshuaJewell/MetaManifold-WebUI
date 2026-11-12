@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Routes: /api/v1/reference-trees and /api/v1/studies/{study}/placements
@@ -56,14 +57,33 @@ function _active_job(key::String)
         jid = get(_phylo_jobs, key, nothing)
         isnothing(jid) && return nothing
         job = get_job(jid)
-        (isnothing(job) || JobQueue.is_terminal(job.status)) ? nothing : job
+        (isnothing(job) || JobQueue._is_settled(job)) ? nothing : job
     end
 end
 
 function _state(dir, key)
-    job = _active_job(key)
-    st  = Phylo.read_status(dir)
-    !isnothing(job) ? "running" : isnothing(st) ? "new" : string(get(st, "state", "new"))
+    # Serialize reconciliation with submission: a GET must not mark a newly
+    # submitted job interrupted between its registration and its status write.
+    lock(_phylo_lock) do
+        !isnothing(_active_job(key)) && return "running"
+        st = Phylo.read_status(dir)
+        isnothing(st) && return "new"
+        if get(st, "state", "new") == "running"
+            Phylo._update_status!(dir, status -> begin
+                status["state"] = "failed"
+                status["error"] = "The run was interrupted when the server stopped. Run it again to reconnect to retained remote work."
+                status["finished"] = _stamp()
+                for step in values(get(status, "steps", Dict()))
+                    get(step, "state", "") == "running" || continue
+                    step["state"] = "failed"
+                    step["error"] = status["error"]
+                    step["finished"] = status["finished"]
+                end
+            end)
+            return "failed"
+        end
+        string(get(st, "state", "new"))
+    end
 end
 
 # Submit `f` as the one job of `key`, or return the job already running for it.
@@ -72,7 +92,7 @@ function _submit_phylo(f::Function, key::String; study=nothing)
         existing = let jid = get(_phylo_jobs, key, nothing)
             isnothing(jid) ? nothing : get_job(jid)
         end
-        !isnothing(existing) && !JobQueue.is_terminal(existing.status) && return existing
+        !isnothing(existing) && !JobQueue._is_settled(existing) && return existing
         j = submit_job!(f, "phylogeny"; study)
         _phylo_jobs[key] = j.id
         j
@@ -96,7 +116,8 @@ function _workflow_detail(steps, dir, files, cfg, overrides, key)
     remote = Dict(s.name => (t = try Phylo.remote_step_target(cfg, s.remote; threads) catch; nothing end;
                              isnothing(t) ? nothing : t.host) for s in steps)
     qc = [s.name for s in steps if s.name in Phylo.QC_STEPS && isfile(joinpath(dir, "qc", "$(s.name).json"))]
-    (; status = Phylo.read_status(dir), state = _state(dir, key), settings, inherited, remote, qc)
+    state = _state(dir, key)
+    (; status = Phylo.read_status(dir), state, settings, inherited, remote, qc)
 end
 
 _step_named(steps, name) = let i = findfirst(s -> s.name == name, steps)

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 # SPDX-License-Identifier: MPL-2.0
 
 module Phylogeny
@@ -306,7 +307,8 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
     absolute directory RAxML writes into, which it requires.
     """
     function step_commands(step::Step, s::AbstractDict, bins::AbstractDict,
-                           threads::Integer, seed::Integer; path::Function, workdir::AbstractString="")
+                           threads::Integer, seed::Integer; path::Function, workdir::AbstractString="",
+                           resume::Bool=false)
         c = _section(s, step)
         w = step.section[1]
         if w == "reference" && step.name == "align"
@@ -322,7 +324,7 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
             flag = string(get(c, "bootstrap", "standard")) == "ultrafast" ? "-bb" : "-b"
             return [_words(bins["iqtree"], "-s", path("reference.trim.fasta"),
                            "-m $(get(c, "model", "MFP"))", "$flag $(_num(c, "replicates", 100))",
-                           "-nt $threads", "-seed $seed", "-pre", path("reference"), "-redo",
+                           "-nt $threads", "-seed $seed", "-pre", path("reference"), resume ? "" : "-redo",
                            _safe_optional_args(c))]
         elseif step.name == "align"
             return [_words(bins["mafft"], "--thread $threads", _mafft_mode(c), _safe_optional_args(c),
@@ -471,7 +473,8 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
 
     # Files go up and come back under their file-map names, flat in the staging
     # directory, so the commands can use the bare names.
-    function _run_remote_step(files, step::Step, s, seed, target, log_path, emit, records)
+    function _run_remote_step(files, step::Step, s, seed, target, log_path, emit, records;
+                              _connection=nothing)
         cmds = Ref(String[])
         inputs  = [files[n] => n for n in step.inputs]
         outputs = [(n == "placement.jplace" ? "RAxML_portableTree.epa.jplace" : n) => files[n]
@@ -484,11 +487,13 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
         end
         command_for = function (staging_dir)
             cmds[] = step_commands(step, s, target.tools, target.threads, seed;
-                                   path = identity, workdir = "$staging_dir/")
+                                   path = identity, workdir = "$staging_dir/", resume=true)
             "cd $staging_dir && " * join(cmds[], " && ")
         end
         run_remote(emit, target, command_for; inputs, outputs, optional_outputs=extras,
-                   before_run, log_path, stage=something(step.remote, step.name))
+                   before_run, on_receipt=before_run,
+                   prepare_local=verified -> (verified || _clear_step!(files, step)),
+                   log_path, stage=something(step.remote, step.name), _connection)
         cmds[]
     end
 
@@ -574,8 +579,15 @@ export REFERENCE_STEPS, PLACEMENT_STEPS, Step, placement_settings, run_workflow,
                 _set_step!(dir, step.name; state="running", where, started=_now())
                 started  = Provenance.timestamp()
                 log_path = joinpath(log_dir, "$(step.name).log")
-                reset_tool_logs(log_path)
-                _clear_step!(files, step)
+                if isnothing(target)
+                    reset_tool_logs(log_path)
+                    _clear_step!(files, step)
+                else
+                    isfile(log_path * ".remote.json") || reset_tool_logs(log_path)
+                    # The runner checks identity and output receipts under its
+                    # owner lock, then clears unverified outputs before SSH.
+                    rm(_key_path(files, step); force=true)
+                end
                 rm(joinpath(dir, "qc", "$(step.name).json"); force=true)
                 env = Provenance.CapturedEnvironment()
                 try

@@ -322,6 +322,7 @@ archive/
 .*
 
 ### Exceptions
+!.gitattributes
 !.github
 !.github/**
 !.Rprofile

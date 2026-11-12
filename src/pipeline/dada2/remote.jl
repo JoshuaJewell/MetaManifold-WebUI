@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Joshua Benjamin Jewell
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
 # SPDX-License-Identifier: MPL-2.0
 
 ## Remote stage execution (bioserver offload)
@@ -153,9 +154,9 @@
     `inputs` are `local_path => remote_relative_path` pairs uploaded before the
     script runs; `outputs` are `remote_relative_path => local_path` pairs
     retrieved after it. `params` become `key=value` arguments to the script.
-    Every remote path is formed under a staging directory created for this call
-    alone and removed again afterwards, so two stages - or two runs of the same
-    stage - never share state on the server.
+    Every remote path belongs to one journalled workflow attempt. The same
+    attempt reconnects after interruption; distinct workflows never share it.
+    Successful retrieval or acknowledged cancellation removes its directory.
 
     `optional_outputs` take the same form but are retrieved only if the script
     produced them. The diagnostic plots are conditional on there being data left
@@ -210,5 +211,6 @@
         end
 
         run_remote(emit, target, command_for;
-                   inputs=uploads, outputs, optional_outputs, before_run, log_path, stage)
+                   inputs=uploads, outputs, optional_outputs, before_run, log_path, stage,
+                   context=sort!(collect(verify_remote_sha256); by=first))
     end

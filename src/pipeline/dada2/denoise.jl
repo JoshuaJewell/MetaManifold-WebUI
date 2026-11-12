@@ -173,7 +173,13 @@
         snap = _begin_section(config_path, stage_sections(:dada2_learn_errors), hash_file)
 
         log_path = joinpath(ctx.dirs["Logs"], "learn_errors.log")
-        open(log_path, "w") do io; println(io, "=== learn_errors ===\nconfig: $config_path") end
+        # A retained journal means a remote attempt may still be recovered, and the
+        # runner merges that attempt's diagnostics into this log. Truncating would
+        # keep only the header and lose the command and output of the run being
+        # recovered, so start over only when no journal is retained.
+        if !isfile(log_path * ".remote.json")
+            open(log_path, "w") do io; println(io, "=== learn_errors ===\nconfig: $config_path") end
+        end
 
         target = _remote_target(ctx.full_cfg, "learn_errors")
         if isnothing(target)
@@ -341,7 +347,13 @@
         snap = _begin_section(config_path, stage_sections(:dada2_denoise), hash_file)
 
         log_path = joinpath(ctx.dirs["Logs"], "denoise.log")
-        open(log_path, "w") do io; println(io, "=== denoise ===\nconfig: $config_path") end
+        # A retained journal means a remote attempt may still be recovered, and the
+        # runner merges that attempt's diagnostics into this log. Truncating would
+        # keep only the header and lose the command and output of the run being
+        # recovered, so start over only when no journal is retained.
+        if !isfile(log_path * ".remote.json")
+            open(log_path, "w") do io; println(io, "=== denoise ===\nconfig: $config_path") end
+        end
 
         target = _remote_target(ctx.full_cfg, "denoise")
         if isnothing(target)
@@ -394,7 +406,13 @@
         R"rm(list=ls())"
         _source_r_functions(ctx)
         log_path = joinpath(ctx.dirs["Logs"], "filter_length.log")
-        open(log_path, "w") do io; println(io, "=== filter_length ===\nconfig: $config_path") end
+        # A retained journal means a remote attempt may still be recovered, and the
+        # runner merges that attempt's diagnostics into this log. Truncating would
+        # keep only the header and lose the command and output of the run being
+        # recovered, so start over only when no journal is retained.
+        if !isfile(log_path * ".remote.json")
+            open(log_path, "w") do io; println(io, "=== filter_length ===\nconfig: $config_path") end
+        end
         R"con <- file($log_path, open='at'); sink(con); sink(con, type='message')"
         try
             R"load($denoise_ckpt)"

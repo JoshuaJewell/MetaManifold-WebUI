@@ -138,9 +138,13 @@ study's cascade.
 `filter_trim` runs on this machine with DADA2's own threading, so `r_threads`
 does not apply to it.
 
-Each stage invocation stages its files in its own directory on the server and
-removes it when the stage ends. Directories left by an interrupted stage are
-removed on a later connection once they are a week old.
+Each workflow's stage has its own directory on the server. A local restart or
+dropped SSH connection leaves the command running; run the workflow again to
+reconnect or retrieve its finished outputs without uploading again. Successful
+retrieval and acknowledged cancellation remove staging. Failed commands retain
+their files for retry; later activity sweeps terminal attempts older than seven
+days without touching live commands. See [Recovering remote stages](remote-execution.md)
+for prerequisites, cancellation, checkpoint behavior and the verification boundary.
 
 **Migrating from `dada2.taxonomy.multithread` and `dada2.taxonomy.remote`:** both
 still work for `assign_taxonomy` and are deprecated. After moving them to the
