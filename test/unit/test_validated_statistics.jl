@@ -69,6 +69,30 @@ const _VS_EXACT_BODY = Dict(
     end
 end
 
+@testset "High-precision JSON response and zero-total state" begin
+    _vs_with_root() do _
+        body = Dict(
+            "numeric_policy" => Dict("mode" => "high_precision", "precision_bits" => 512),
+            "sample_labels" => ["uniform", "empty"],
+            "feature_labels" => ["x", "y"],
+            "counts" => [[1, 0], [1, 0]],
+        )
+        response = _vs_post("/api/v1/statistics/summaries", body)
+        @test response.status == 200
+        result = JSON3.read(String(response.body))
+        @test result.status == "partial"
+        @test result.achieved_precision_bits == 512
+        @test result.samples[1].richness == 2
+        @test result.samples[1].shannon.kind == "approximate"
+        @test result.samples[1].shannon.precision_bits == 512
+        @test result.samples[1].shannon.value isa AbstractString
+        @test result.samples[2].shannon === nothing
+        @test result.samples[2].status == "undefined_zero_total"
+        grouped = merge(body, Dict("groups" => ["a", "b"]))
+        @test _vs_post("/api/v1/statistics/summaries", grouped).status == 400
+    end
+end
+
 @testset "Numeric JSON representations fail closed" begin
     _vs_with_root() do _
         for bad in (1.5, -1)
@@ -99,7 +123,7 @@ end
         # Strict I-JSON is checked on the raw body, before JSON3 can collapse
         # duplicate keys or normalise an oversized integer token. Unlike a
         # negative count, an oversized JSON number is invalid at parse time.
-        for raw in ("""{"numeric_policy":{"mode":"exact_counts","mode":"exact_counts"},"sample_labels":["A"],"feature_labels":["f"],"counts":[[1]]}""",
+        for raw in ("""{"numeric_policy":{"mode":"exact_counts","mode":"high_precision"},"sample_labels":["A"],"feature_labels":["f"],"counts":[[1]]}""",
                     """{"numeric_policy":{"mode":"exact_counts"},"sample_labels":["A"],"feature_labels":["f"],"counts":[[9007199254740992]]}""")
             @test _vs_post("/api/v1/statistics/summaries", raw; raw=true).status == 400
         end
@@ -333,8 +357,8 @@ end
             @test loaded.result.samples == result.samples
         end
 
-        for prefix in ("A", "AB", nothing)
-            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => "exact_counts"),
+        for mode in ("exact_counts", "high_precision"), prefix in ("A", "AB", nothing)
+            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => mode),
                 "table" => "merged_subgroups", "prefix" => prefix))
             @test response.status == 200
             response.status == 200 || continue
@@ -355,8 +379,8 @@ end
     _vs_with_root() do root
         _vs_make_run(root)
         path = "/api/v1/studies/studyV/runs/run1/statistics/summaries"
-        for index in 1:8
-            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => "exact_counts"),
+        for index in 1:8, mode in ("exact_counts", "high_precision")
+            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => mode),
                 "table" => "ambiguous_$index"))
             @test response.status == 422
             @test occursin("excluded by the sample detector", String(response.body))
@@ -503,15 +527,18 @@ end
         # reports success while omitting it is not. Assert the invariant rather
         # than one mechanism, so a later decision to support BIGNUM does not
         # turn this into a test of the wrong thing.
-        response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => "exact_counts"),
-            "table" => "merged_bignum"))
-        body = String(response.body)
-        complete = response.status == 200
-        if complete
-            @test occursin("counted", body) # the column is summarised
-        else
-            @test response.status == 422
-            @test occursin("counted", body) || occursin("BIGNUM", body)
+        complete = false
+        for mode in ("exact_counts", "high_precision")
+            response = _vs_post(path, Dict("numeric_policy" => Dict("mode" => mode),
+                "table" => "merged_bignum"))
+            body = String(response.body)
+            if response.status == 200
+                @test occursin("counted", body) # the column is summarised
+                complete = true
+            else
+                @test response.status == 422
+                @test occursin("counted", body) || occursin("BIGNUM", body)
+            end
         end
         if !complete
             directory = joinpath(root, "projects", "studyV", "run1", "derived", "validated-statistics")

@@ -10,6 +10,7 @@ using MetaManifold
 using MetaManifold.Canonical
 using MetaManifold.NumericPolicy
 using MetaManifold.ExactSummaries
+using MetaManifold.HighPrecision
 
 const _ADV_SV = MetaManifold.Server
 
@@ -132,6 +133,12 @@ end
     cancel!(pre)
     @test_throws OperationCancelledError exact_summary(counts;
         sample_labels=labels, feature_labels=features, policy, cancellation=pre)
+    pre_high = CancellationToken()
+    cancel!(pre_high)
+    @test_throws OperationCancelledError high_precision_summary(counts;
+        sample_labels=labels, feature_labels=features,
+        policy=numeric_policy(; mode=:high_precision, precision_bits=256),
+        cancellation=pre_high)
 
     # The route guard turns the same exception into a documented 408, not a 500.
     response = _ADV_SV._statistics_guard() do
@@ -153,6 +160,10 @@ end
 @testset "Numeric policy limits are enforced before work starts" begin
     _adv_with_root() do _
         cases = [
+            (Dict{String,Any}("mode" => "high_precision", "precision_bits" => 1), 400),
+            (Dict{String,Any}("mode" => "high_precision",
+                              "precision_bits" => MAX_PRECISION_BITS + 1), 400),
+            (Dict{String,Any}("mode" => "high_precision", "precision_bits" => 53), 400),
             (Dict{String,Any}("mode" => "exact_counts", "precision_bits" => 256), 400),
             (Dict{String,Any}("mode" => "exact_counts", "max_denominator_bits" => 31), 400),
             (Dict{String,Any}("mode" => "exact_counts",

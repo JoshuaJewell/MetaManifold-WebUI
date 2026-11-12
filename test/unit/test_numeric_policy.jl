@@ -14,28 +14,65 @@ using MetaManifold.Canonical
     end
     @test encode_json_number(42) == 42
     @test encode_json_number(big(2)^53) == "9007199254740992"
-    for value in (Inf, NaN, true, "1", nothing)
+    @test encode_json_number(BigFloat(0.5)) == "0.5"
+    for value in (BigFloat(Inf), BigFloat(NaN), true, "1", nothing)
         @test_throws UnsupportedRepresentationError encode_json_number(value)
     end
     @test_throws UnsupportedRepresentationError require_count(1//2)
     @test occursin("count overflow", sprint(showerror, CountOverflowError(big(1), big(2))))
 end
 
+@testset "High-precision display retains stored bits at lower ambient precision" begin
+    value = first(with_precision(; bits=512) do
+        BigFloat(1) + BigFloat(2)^(-300)
+    end)
+    # 2^-300 = 4.909093465...e-91, rounded here to 100 places after the point.
+    expected = "1." * repeat("0",90) * "4909093465"
+    for bits in (64,128,256)
+        with_precision(; bits) do
+            @test startswith(to_display(approximate_value(value); digits=100), expected)
+            @test precision(BigFloat) == bits
+        end
+    end
+end
+
+@testset "Policy validation and ambient rounding cannot change the claim" begin
+    invalid = NumericPolicySpec(:high_precision, MAX_PRECISION_BITS + 1, 4096, 6)
+    @test_throws ArgumentError assert_mode(invalid, :high_precision)
+    before_bits = precision(BigFloat)
+    before_rounding = rounding(BigFloat)
+    setrounding(BigFloat, RoundDown) do
+        value, bits = with_precision(; bits=256) do
+            @test rounding(BigFloat) == RoundNearest
+            BigFloat(1) / BigFloat(3)
+        end
+        @test bits == 256
+        @test precision(value) == 256
+        @test rounding(BigFloat) == RoundDown
+        @test_throws ErrorException with_precision(() -> error("test interruption"); bits=512)
+        @test rounding(BigFloat) == RoundDown
+    end
+    @test precision(BigFloat) == before_bits
+    @test rounding(BigFloat) == before_rounding
+end
+
 @testset "Numeric policy and claim separation" begin
     @test numeric_policy().mode == :ordinary
     @test numeric_policy(:exact_counts).precision_bits == 53
+    @test numeric_policy(:high_precision).precision_bits == 256
+    @test numeric_policy(mode=:high_precision, precision_bits=512).precision_bits == 512
     @test_throws ArgumentError numeric_policy(mode=:exact_counts, precision_bits=128)
+    @test_throws ArgumentError numeric_policy(mode=:high_precision, precision_bits=53)
     @test_throws ArgumentError numeric_policy(mode=:ordinary, precision_bits=128)
     @test_throws ArgumentError numeric_policy(mode=:unknown)
+    @test_throws ArgumentError numeric_policy(mode=:high_precision, precision_bits=1)
     @test_throws ArgumentError numeric_policy(max_denominator_bits=31)
     @test_throws ArgumentError numeric_policy(round_digits=-1)
     @test_throws ArgumentError numeric_policy(precision_bits=big(typemax(UInt128)))
     @test length(policy_fingerprint(numeric_policy(:exact_counts))) == 64
     @test policy_fingerprint(numeric_policy(:exact_counts)) !=
-          policy_fingerprint(numeric_policy(:ordinary))
-    @test policy_to_storage(numeric_policy(:exact_counts))["precision_bits"] == 53
-    invalid = NumericPolicySpec(:exact_counts, 128, 4096, 6)
-    @test_throws ArgumentError assert_mode(invalid, :exact_counts)
+          policy_fingerprint(numeric_policy(:high_precision))
+    @test policy_to_storage(numeric_policy(:high_precision))["precision_bits"] == 256
 end
 
 @testset "Exact counts, overflow and rational budgets" begin
@@ -49,8 +86,6 @@ end
     @test_throws UnsupportedRepresentationError require_count(NaN)
     @test_throws UnsupportedRepresentationError require_count(true)
     @test_throws UnsupportedRepresentationError require_count(2.0^54)
-    @test_throws UnsupportedRepresentationError require_count(2.0^53 + 2.0)
-    @test require_count(2.0^53) == Int64(2)^53
     @test_throws UnsupportedRepresentationError require_count("7")
 
     @test checked_count_sum([1, 2, 3]) == 6
@@ -78,6 +113,34 @@ end
     # cannot. The limit must therefore apply to the accumulated value as well.
     @test_throws ResourceLimitError exact_rational_sum(
         [big(1)//big(2)^31, big(1)//(big(2)^31 - 1)]; policy=tight)
+end
+
+@testset "Precision scopes and restoration" begin
+    old = precision(BigFloat)
+    try
+        setprecision(BigFloat, 128)
+        value, achieved = with_precision(; bits=512) do
+            @test precision(BigFloat) == 512
+            BigFloat(1) / 3
+        end
+        @test achieved == 512
+        @test precision(value) == 512
+        @test precision(BigFloat) == 128
+        nested, bits = with_precision(; bits=256) do
+            inner, inner_bits = with_precision(() -> BigFloat(2); bits=384)
+            @test precision(BigFloat) == 256
+            @test precision(BigFloat(inner)) == 256
+            inner, inner_bits
+        end
+        @test bits == 256
+        @test precision(BigFloat) == 128
+        @test_throws ArgumentError with_precision(() -> 1; bits=1)
+        setprecision(BigFloat, 16)
+        @test_throws UnsupportedRepresentationError require_count(2.0^53 + 2.0)
+        @test require_count(2.0^53) == Int64(2)^53
+    finally
+        setprecision(BigFloat, old)
+    end
 end
 
 @testset "Storage and display are distinct claims" begin
@@ -117,6 +180,13 @@ end
     @test_throws UnsupportedRepresentationError to_storage(approximate_value(NaN))
     @test_throws UnsupportedRepresentationError encode_json_number(Inf)
 
+    huge, bits = with_precision(() -> BigFloat("1e400"); bits=256)
+    @test bits == 256
+    @test !occursin("Inf", to_display(approximate_value(huge); digits=3))
+    @test to_storage(approximate_value(huge)) == string(huge)
+    parsed = parse_approximate_decimal(to_storage(approximate_value(huge)); bits=256)
+    @test parsed.value == huge
+    @test parsed.precision_bits == 256
     # Every JCS record below contains only JSON-safe values.
     @test length(jcs_sha256(Dict("big" => to_storage(v),
                                 "rational" => to_storage(exact_value(big(1)//3))))) == 64
@@ -138,4 +208,10 @@ end
     for bad in ("", "1/0", "0.5", "1e-3", "1/2/3", "NaN")
         @test_throws UnsupportedRepresentationError parse_exact_rational(bad)
     end
+    @test_throws UnsupportedRepresentationError parse_approximate_decimal("NaN")
+    @test_throws UnsupportedRepresentationError parse_approximate_decimal("1/3")
+    direct = parse_approximate_decimal("0.1"; bits=512)
+    via_float = with_precision(() -> BigFloat(0.1); bits=512)[1]
+    @test direct.value != via_float
+    @test parse_approximate_decimal(string(direct.value); bits=512).value == direct.value
 end

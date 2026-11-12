@@ -193,6 +193,7 @@ end
     for file in ("diversity.jl", "analysis.jl", "differential.jl")
         source = lowercase(read(joinpath(@__DIR__, "..", "..", "src", "analysis", file), String))
         @test !occursin("exactsummaries", source)
+        @test !occursin("highprecision", source)
         @test !occursin("numericpolicy", source)
     end
 end

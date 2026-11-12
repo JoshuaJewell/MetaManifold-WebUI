@@ -13,7 +13,7 @@ module MethodCatalogue
 
 using SHA, YAML
 using ..Canonical: jcs_sha256
-using ..NumericPolicy: MAX_CELLS, MAX_DENOMINATOR_BITS,
+using ..NumericPolicy: MAX_CELLS, MAX_PRECISION_BITS, MAX_DENOMINATOR_BITS,
     MAX_COUNT_BITS, MAX_ROUND_DIGITS, MAX_REQUEST_BYTES
 
 export CATALOGUE_SCHEMA, CATALOGUE_STATUSES, catalogue_path,
@@ -26,9 +26,10 @@ const CATALOGUE_SCHEMA = "metamanifold.statistics-method-catalogue.v1"
 const CATALOGUE_STATUSES = ("supported",)
 
 # The limits the catalogue must state exactly. The catalogue is not allowed to
-# advertise a larger matrix or rational budget than the code enforces.
+# advertise a larger matrix, precision or rational budget than the code enforces.
 const _REQUIRED_LIMITS = Dict(
     "max_cells" => MAX_CELLS,
+    "max_precision_bits" => MAX_PRECISION_BITS,
     "max_denominator_bits" => MAX_DENOMINATOR_BITS,
     "max_count_bits" => MAX_COUNT_BITS,
     "max_round_digits" => MAX_ROUND_DIGITS,

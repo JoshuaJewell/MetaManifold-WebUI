@@ -5,8 +5,7 @@
 
 Tracks upstream issue #65. The implementation catalogue says `pending_review`.
 No fork approval, test pass, proof check or agent-authored document is an
-independent statistical review or upstream release approval. High-precision
-Shannon and Gini–Simpson diversity is proposed in a separate pull request.
+independent statistical review or upstream release approval.
 
 ## Reproduce
 
@@ -28,9 +27,13 @@ program at run time. MetaManifold has no Python, so there is no Python oracle:
 - Exact totals and reduced proportions: `test/unit/test_exact_summaries.jl`
   compares two tables with the fractions worked by hand in its comments,
   including a count of 2^80 + 17, at zero tolerance.
-- The producer itself: `test/unit/test_statistics_evidence.jl` runs it on an
-  R-style CSV with counts 1 and 2 and checks the hand-worked total 3 and
-  proportions 1/3 and 2/3, and that an all-zero sample is reported undefined.
+- Shannon and Gini–Simpson: `test/unit/test_statistics_evidence.jl` checks
+  counts 1 and 2 against Gini–Simpson 4/9 exactly and Shannon
+  ln 3 − (2/3) ln 2, whose 100 digits come from `bc -l`, with a fixed
+  `1e-65` absolute tolerance against 256-bit MPFR. That tolerance is a test
+  threshold, not a proved universal error bound.
+- High-precision constants: `test/unit/test_high_precision.jl` documents
+  where each constant comes from and the `bc` command that reproduces it.
 
 None of these is a run-time check of a real pipeline matrix. To review a real
 run, `scripts/statistics/collect_pipeline_evidence.jl` records the producer's
@@ -97,6 +100,13 @@ descriptive panel, toggles aggregation, and checks the submitted scope,
 displayed total, downloaded JSON and rejection of a stale response. Its pinned
 React 18 test renderer is a development dependency; the package and lockfile
 change supports this interaction test without adding production code.
+
+The simulation now measures absolute and relative errors inside the same
+4096-bit precision scope as its reference computation. A regression checks
+differences with significant terms more than 256 bits apart under several
+ambient precisions, and verifies restoration of MPFR state. New reports record
+`comparison_bits`; earlier reports lacking it did not measure the error at the
+declared reference precision and must not substitute for the corrected run.
 
 ## Required decisions that remain separate
 

@@ -31,7 +31,7 @@ end
     supported = supported_method_ids(document)
     @test method_by_id(document, "exact-descriptive-summaries")["status"] == "supported"
     @test method_by_id(document, "not-a-method") === nothing
-    @test supported == ["exact-descriptive-summaries"]
+    @test supported == ["exact-descriptive-summaries", "high-precision-descriptive-diversity"]
     # Only implemented methods are catalogued.
     @test [m["id"] for m in document["methods"]] == supported
     @test CATALOGUE_STATUSES == ("supported",)
@@ -51,6 +51,7 @@ end
     storage = catalogue_to_storage(document)
     @test storage["catalogue_sha256"] == loaded.fingerprint
     @test storage["limits"]["max_cells"] == MAX_CELLS
+    @test storage["limits"]["max_precision_bits"] == MAX_PRECISION_BITS
     @test storage["limits"]["max_denominator_bits"] == MAX_DENOMINATOR_BITS
     @test storage["limits"]["max_count_bits"] == MAX_COUNT_BITS
     @test storage["limits"]["max_round_digits"] == MAX_ROUND_DIGITS
@@ -88,10 +89,12 @@ end
     @test rejected(doc -> doc["methods"][1]["evidence"] = Any[])
     # Every entry is implemented, so one without an implementation or without
     # evidence is refused, as is any status other than supported.
-    @test rejected(doc -> delete!(doc["methods"][1], "implementation"))
-    @test rejected(doc -> doc["methods"][1]["status"] = "deferred")
-    @test rejected(doc -> push!(doc["methods"], _deep_copy(doc["methods"][1])))
+    @test rejected(doc -> delete!(doc["methods"][2], "implementation"))
+    @test rejected(doc -> doc["methods"][2]["evidence"] = Any[])
+    @test rejected(doc -> doc["methods"][2]["status"] = "deferred")
+    @test rejected(doc -> doc["methods"][1]["id"] = doc["methods"][2]["id"])
     @test rejected(doc -> doc["limits"]["max_cells"] = MAX_CELLS + 1)
+    @test rejected(doc -> doc["limits"]["max_precision_bits"] = MAX_PRECISION_BITS + 1)
     @test rejected(doc -> doc["limits"]["max_request_bytes"] = 1)
     @test rejected(doc -> doc["methods"][1]["effect_sizes"] = "")
     @test rejected(doc -> doc["methods"][1]["references"] = Any[""])

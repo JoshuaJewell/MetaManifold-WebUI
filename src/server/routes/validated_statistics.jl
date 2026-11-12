@@ -6,6 +6,7 @@
 using JSON3, DataFrames, DuckDB, DBInterface
 using ..NumericPolicy
 using ..ExactSummaries
+using ..HighPrecision
 using ..DerivedAnalyses
 using ..MethodCatalogue
 using ..Canonical: jcs_bytes, ijson_read
@@ -139,13 +140,15 @@ function _statistics_policy(body)
         "numeric_policy must be an object"))
     mode_value = get(raw, :mode, nothing)
     mode_value isa AbstractString || throw(ArgumentError("numeric_policy.mode must be a string"))
-    mode_value == "exact_counts" || throw(ArgumentError(
-        "validated statistics supports only exact_counts; use the existing ordinary endpoints otherwise"))
-    allowed = Set(["mode", "max_denominator_bits", "round_digits"])
+    mode_value in ("exact_counts", "high_precision") || throw(ArgumentError(
+        "validated statistics supports only exact_counts or high_precision; use the existing ordinary endpoints otherwise"))
+    allowed = Set(["mode", "precision_bits", "max_denominator_bits", "round_digits"])
     for key in keys(raw)
         string(key) in allowed || throw(ArgumentError("unknown numeric_policy field '$key'"))
     end
-    numeric_policy(; mode=Symbol(mode_value),
+    precision = haskey(raw, :precision_bits) ?
+                _policy_integer(raw, :precision_bits, 0) : nothing
+    numeric_policy(; mode=Symbol(mode_value), precision_bits=precision,
         max_denominator_bits=_policy_integer(raw, :max_denominator_bits, DEFAULT_MAX_DENOMINATOR_BITS),
         round_digits=_policy_integer(raw, :round_digits, 6))
 end
@@ -266,9 +269,16 @@ function _direct_count_input(body; cancellation=nothing)
 end
 
 function _run_statistics(counts, labels, features, groups, policy; cancellation=nothing)
-    summary = exact_summary(counts; sample_labels=labels, feature_labels=features,
-        groups, policy, allow_approximate=false, cancellation)
-    summary_to_storage(summary)
+    if policy.mode === :exact_counts
+        summary = exact_summary(counts; sample_labels=labels, feature_labels=features,
+            groups, policy, allow_approximate=false, cancellation)
+        return summary_to_storage(summary)
+    end
+    isnothing(groups) || throw(ArgumentError(
+        "groups are supported for exact_counts only; high_precision is per-sample"))
+    summary = high_precision_summary(counts; sample_labels=labels,
+        feature_labels=features, policy, cancellation)
+    high_precision_to_storage(summary)
 end
 
 """Optional cooperative deadline for one request.

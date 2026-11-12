@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
 export type ExactInteger = number | string
+export interface PrecisionMetric {
+  kind: 'approximate'
+  value: string
+  precision_bits: number
+  display: string
+  display_kind: 'rounded'
+}
 export interface DescriptiveSample {
   label: string
   status: string
@@ -10,10 +17,12 @@ export interface DescriptiveSample {
   features?: string[]
   proportions?: (string | null)[]
   richness?: number
+  shannon?: PrecisionMetric | null
+  gini_simpson?: PrecisionMetric | null
   warnings: string[]
 }
 export interface DescriptiveResult {
-  mode: 'exact_counts'
+  mode: 'exact_counts' | 'high_precision'
   status: string
   claim: string
   samples: DescriptiveSample[]
