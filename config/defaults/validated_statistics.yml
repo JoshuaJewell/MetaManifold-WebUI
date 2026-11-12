@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: 2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>
+# SPDX-License-Identifier: MPL-2.0
+
+---
+{
+  schema: "metamanifold.statistics-method-catalogue.v1",
+  catalogue: {
+    id: "metamanifold.statistics-method-catalogue.v1",
+    status: "pending_review",
+    review_status: "independent scientific review and upstream release approval pending",
+    review_reference: "https://github.com/JoshuaJewell/MetaManifold-WebUI/issues/65",
+    scope: "v1 lists only implemented methods: exact descriptive summaries; a method is added when it is implemented",
+    claim_language: "descriptive only; no hypothesis test, confidence interval, significance claim or estimator coverage guarantee is made by a supported method in this release",
+  },
+  methods: [
+    {
+      id: "exact-descriptive-summaries",
+      status: "supported",
+      summary: "Per-sample and per-group integer totals, observed richness, and exact rational proportions.",
+      implementation: "src/analysis/exact_summaries.jl",
+      response_types: [
+        "non-negative integer counts",
+        "unit-denominator rational counts",
+      ],
+      designs: [
+        "per-sample summaries; independence is not required for this arithmetic",
+        "optional alignment-preserving sample groups",
+      ],
+      supported_conditions: [
+        "counts are exact non-negative integers or rationals with denominator one",
+        "sample and feature labels are non-blank and unique",
+        "the validated matrix is at most the published cell limit",
+        "a zero-total sample or group is reported as undefined, not as zero",
+      ],
+      unsupported_conditions: [
+        "negative, fractional, missing, NaN or infinite counts",
+        "floating-point counts through the HTTP boundary",
+        "labels outside the I-JSON string contract",
+        "any hypothesis test, confidence interval or significance claim",
+      ],
+      uncertainty: "not estimated; this is a descriptive transformation, not an estimator with a sampling distribution claim",
+      effect_sizes: "not applicable; totals and proportions are the reported quantities",
+      multiple_testing: "not applicable; no hypothesis test is performed",
+      diagnostics: [
+        "counts",
+        "total",
+        "proportions",
+        "proportions_defined",
+        "status",
+        "warnings",
+      ],
+      warnings: [
+        "a zero-total sample has undefined proportions",
+        "floating-point input is refused rather than upgraded",
+        "proportions describe the supplied counts; they do not remove sampling or measurement error",
+      ],
+      references: [
+        "Aitchison, J. (1986). The Statistical Analysis of Compositional Data. Chapman and Hall.",
+      ],
+      evidence: [
+        "test/unit/test_exact_summaries.jl",
+        "test/unit/test_statistics_boundaries.jl",
+        "test/unit/test_statistics_adversarial.jl",
+        "test/unit/test_statistics_properties.jl",
+        "docs/statistics/numeric-contracts.md",
+      ],
+    },
+  ],
+  limits: {
+    max_request_bytes: 16777216,
+    max_cells: 100000,
+    max_denominator_bits: 65536,
+    max_count_bits: 4096,
+    max_round_digits: 100,
+  },
+}

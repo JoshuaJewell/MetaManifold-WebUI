@@ -7,6 +7,7 @@ import type { AnnotationSource, ComparisonRunSpec } from '../api/types'
 import { AnalysisSourceContext } from './analysisSource'
 import { useSharedResultsTablesState } from './annotationShared'
 import { DiversityPanel } from './DiversityPanel'
+import { ValidatedStatisticsPanel } from './ValidatedStatisticsPanel'
 import { TaxaCompositionChart } from './TaxaCompositionChart'
 import { VennPanel } from './VennPanel'
 import { DifferentialPanel } from './DifferentialPanel'
@@ -168,6 +169,9 @@ export function AnalysisWorkspace({ study, runs: baseRuns, source, perRun }: {
 
         {visited.has('diversity') && (
           <div hidden={tab !== 'diversity'}>
+            <section className={styles.section}>
+              <ValidatedStatisticsPanel study={study} runs={effectiveRuns} option={selected} />
+            </section>
             {perRun?.diversity && (
               <section className={styles.section}>
                 <h3 className={styles.sectionTitle}>Per sample</h3>

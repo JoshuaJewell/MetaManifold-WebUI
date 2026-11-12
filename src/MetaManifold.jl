@@ -33,6 +33,11 @@ include("pipeline/swarm.jl")
 include("pipeline/phylogeny.jl")
 
 # Analysis
+include("canonical.jl")
+include("analysis/numeric_policy.jl")
+include("analysis/exact_summaries.jl")
+include("analysis/derived_analyses.jl")
+include("analysis/method_catalogue.jl")
 include("analysis/diversity.jl")
 include("analysis/analysis.jl")
 include("analysis/differential.jl")
