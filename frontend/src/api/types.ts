@@ -394,10 +394,11 @@ export interface DifferentialRequest {
   table: string
   rank: string
   aggregate?: boolean
+  method?: DifferentialMethod
 }
 
 /** `ok` and `boundary` rows carry statistics; `failed` and `filtered` rows say why not. */
-export type DifferentialStatus = 'ok' | 'boundary' | 'failed' | 'filtered'
+export type DifferentialStatus = 'ok' | 'boundary' | 'failed' | 'filtered' | 'structural_zero'
 
 export interface DifferentialRow {
   taxon: string
@@ -408,20 +409,26 @@ export interface DifferentialRow {
    * CLR of contrast minus mean CLR of reference, which is not a fold change.
    */
   estimate: number | null
-  /** nb_glm only; null for clr_welch. */
+  /** nb_glm or ancombc; null for CLR-based methods. */
   log2_fold_change: number | null
   standard_error: number | null
-  /** z (nb_glm) or Welch's t (clr_welch). */
+  /** Wald z (nb_glm/ancombc), Welch's t (clr_welch), or null (aldex2). */
   statistic: number | null
   pvalue: number | null
-  /** Benjamini-Hochberg adjusted; null outside the tested family. */
+  /** BH adjusted; ALDEx2 uses expected within-instance BH. Null outside the tested family. */
   padj: number | null
   /** nb_glm only. */
   dispersion_theta: number | null
   prevalence: number
+    /** ALDEx2's dimensionless standardized effect and log2 descriptive statistics. */
+    aldex_effect?: number
+    aldex_diff_within?: number
+    aldex_abundance?: number
+    wilcoxon_pvalue?: number
+    wilcoxon_padj?: number
 }
 
-export type DifferentialMethod = 'nb_glm' | 'clr_welch'
+export type DifferentialMethod = 'nb_glm' | 'clr_welch' | 'aldex2' | 'ancombc'
 
 /** Which row field holds the effect size, and what to call it. */
 export interface DifferentialEffect {
@@ -437,7 +444,7 @@ export interface DifferentialResult {
   groups: { reference: string; contrast: string }
   n_samples: Record<string, number>
   effect: DifferentialEffect
-  /** Empty for clr_welch, which takes no library-size offset. */
+  /** Empty except for nb_glm, which uses a library-size offset. */
   size_factors: { sample: string; group: string; factor: number }[]
   config: {
     method: DifferentialMethod
@@ -448,11 +455,14 @@ export interface DifferentialResult {
     dispersion?: 'glm_nb' | 'glmGamPoi'
     /** clr_welch only. */
     replacement_delta?: number
+    mc_samples?: number
+    seed?: number
   }
   diagnostics: {
     n_taxa: number; n_tested: number; n_failed: number; n_boundary: number; n_filtered: number
     /** Samples left out because they have no reads. */
     samples_without_reads?: string[]
+    n_structural_zero?: number
     /** clr_welch only. */
     zero_replacement?: {
       method: string; delta: number; zeros_replaced: number; n_taxa_in_composition: number

@@ -42,6 +42,13 @@ HAVE_GLMGAMPOI || @info (_GLMGAMPOI_IN_CI ?
     "glmGamPoi unavailable IN CI - the shrunken-dispersion tests FAIL" :
     "R, MASS or glmGamPoi unavailable - the shrunken-dispersion fit tests are SKIPPED")
 
+# CompositionalDA, the package behind the native aldex2/ancombc methods, is not
+# in the General registry yet, so it is not a declared dependency and CI cannot
+# install it. Unlike glmGamPoi this is not a failure: the methods refuse by
+# name, and the route test below checks that refusal instead of a result table.
+const HAVE_NATIVE_DA = compositional_da_available()
+HAVE_NATIVE_DA || @info "CompositionalDA unavailable - the native method route test SKIPS"
+
 # Rows per run: Up is split over two ASVs so the route must pool them by genus.
 const _DA_ROWS = Dict(
     "runA" => [("s1", "Up", [3, 5, 4, 4]), ("s2", "Up", [2, 3, 2, 3]),
@@ -179,7 +186,8 @@ end
         @test DifferentialConfig().method == "nb_glm"
         @test DifferentialConfig().replacement_delta == 0.65
         @test DifferentialConfig(; method="clr_welch", replacement_delta=0.3).replacement_delta == 0.3
-        @test_throws ArgumentError DifferentialConfig(; method="ancombc")
+        @test DifferentialConfig(; method="ancombc").method == "ancombc"
+        @test DifferentialConfig(; method="aldex2").method == "aldex2"
         # The pre-review name, never released, is not accepted.
         @test_throws ArgumentError DifferentialConfig(; method="clr_lm")
         # The dispersion option: glm_nb is the default and keeps nb_glm's
@@ -590,7 +598,19 @@ end
         @test !isnothing(SV._config_value_error("analysis.differential.offset", "css"))
         @test isnothing(SV._config_value_error("analysis.differential.min_prevalence", 0.1))
         @test isnothing(SV._config_value_error("analysis.differential.method", "clr_welch"))
-        @test !isnothing(SV._config_value_error("analysis.differential.method", "ancombc"))
+        for method in ("aldex2", "ancombc")
+            @test isnothing(SV._config_value_error("analysis.differential.method", method))
+        end
+        @test !isnothing(SV._config_value_error("analysis.differential.method", "unknown"))
+        for (key, valid, invalid) in (("analysis.differential.mc_samples", (2, 128, 4096), (0, 1, 4097, 2.5, true, "128")),
+                                      ("analysis.differential.seed", (0, 17, typemax(Int32)), (-1, 1.5, true, "17", Int64(typemax(Int32))+1)))
+            for v in valid
+                @test isnothing(SV._config_value_error(key, v))
+            end
+            for v in invalid
+                @test !isnothing(SV._config_value_error(key, v))
+            end
+        end
         # Like every other enum key, the config route takes exact spellings.
         for dispersion in ("glm_nb", "glmGamPoi")
             @test isnothing(SV._config_value_error("analysis.differential.dispersion", dispersion))
@@ -887,6 +907,51 @@ end
 
             r = _da_post("noSuchStudy", Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")]))
             @test r.status == 404
+        end
+    end
+
+    @testset "Route: native method override and input refusal" begin
+        _da_fixture() do
+            request = Dict("runs" => [Dict("run" => "runA"), Dict("run" => "runB")],
+                           "table" => "merged", "rank" => "Genus", "method" => "aldex2")
+            # Naming a method is accepted whatever is installed: the mode is
+            # spelled and case-folded the same way. Only running it needs the
+            # package.
+            for method in ("unknown", 42, true, false, [], Dict())
+                r = _da_post("studyD", merge(request, Dict("method" => method)))
+                @test r.status == 400
+                @test JSON3.read(String(r.body)).error == "invalid_config"
+            end
+            if !HAVE_NATIVE_DA
+                # Without the package the route refuses by name - 400, not a
+                # 500 and not a table of numbers no model produced.
+                r = _da_post("studyD", request)
+                @test r.status == 400
+                refusal = JSON3.read(String(r.body))
+                @test refusal.error == "invalid_input"
+                @test occursin("CompositionalDA", string(refusal.message))
+                @test occursin("aldex2", string(refusal.message))
+                @test_skip false
+            else
+                r = _da_post("studyD", request)
+                @test r.status == 200
+                body = JSON3.read(String(r.body))
+                @test body.config.method == "aldex2"
+                @test body.effect.key == "estimate"
+                @test isempty(body.size_factors)
+                @test body.diagnostics.n_tested == 3
+                @test all(row -> row.log2_fold_change === nothing, body.rows)
+                for method in ("ALDEX2", " aldex2 ")
+                    r = _da_post("studyD", merge(request, Dict("method" => method)))
+                    @test r.status == 200
+                    @test JSON3.read(String(r.body)).config.method == "aldex2"
+                end
+                # This fixture has only three taxa; ANCOM-BC must refuse its
+                # bias fit rather than return plausible-looking test statistics.
+                r = _da_post("studyD", merge(request, Dict("method" => "ancombc")))
+                @test r.status == 422
+                @test JSON3.read(String(r.body)).error == "no_taxon_fitted"
+            end
         end
     end
 

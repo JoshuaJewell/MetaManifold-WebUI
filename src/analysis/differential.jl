@@ -4,7 +4,7 @@
 
 ## Differential abundance
 # Per-taxon models comparing two groups of samples, with Benjamini-Hochberg
-# correction across the taxa that produced a p-value. Two methods:
+# correction across the taxa that produced a p-value. Methods:
 #
 # - nb_glm: a negative-binomial GLM per taxon (MASS::glm.nb) on the observed
 #   integer read counts, with a library-size offset. There are no pseudocounts.
@@ -12,6 +12,10 @@
 #   log-ratios, over the taxa that pass `min_prevalence`, after their zeros are
 #   replaced by zCompositions::cmultRepl (Bayesian-multiplicative, for counts).
 #   The estimate is a difference in CLR units, not a fold change.
+# - aldex2: Dirichlet posterior log2 CLR tests from CompositionalDA, retaining
+#   its expected within-instance BH values.
+# - ancombc: the original two-group bias-corrected log-abundance model from
+#   CompositionalDA, with structural-zero decisions reported separately.
 #
 # Count matrices here are samples x taxa, as everywhere else in `Analysis`.
 # Anything that is not a non-negative integer count is refused rather than
@@ -20,15 +24,76 @@
 module Differential
 
 using DataFrames, RCall
+# The native compositional estimators live in a package that is not in the
+# General registry yet, so it is deliberately not declared in `Project.toml`: a
+# declaration `Pkg.instantiate()` cannot resolve fails for every checkout, CI
+# included (the reason, and the steps to re-enable it, are recorded there).
+# Only the two methods below need the package, so a checkout without it must
+# still load this module, and those methods must say so by name instead of
+# failing at load time with a bare `UndefVarError`.
+const _COMPOSITIONAL_DA_AVAILABLE = try
+    @eval import CompositionalDA
+    true
+catch err
+    err isa ArgumentError || err isa LoadError || rethrow()
+    false
+end
+
+"""
+    compositional_da_available() -> Bool
+
+Whether `CompositionalDA`, the package behind the native `aldex2` and `ancombc`
+differential methods, is loadable in this environment.
+
+The package is not in the General registry, so a plain `Pkg.instantiate()` of
+this project leaves it out and this returns `false`; `aldex2` and `ancombc` then
+refuse with an `ArgumentError` that names the package. To activate them, develop
+it into the environment by path or URL (`Pkg.develop(path="…/CompositionalDA.jl")`)
+and start a fresh session.
+"""
+compositional_da_available() = _COMPOSITIONAL_DA_AVAILABLE
+
+# The module the native methods call when the caller names none: the package
+# where the import above succeeded, `nothing` where it did not.
+const _DEFAULT_NATIVE_BACKEND = _COMPOSITIONAL_DA_AVAILABLE ? CompositionalDA : nothing
+
+"""
+    _native_backend(override)
+
+The module the native methods call: `override` when one is given, otherwise the
+`CompositionalDA` this session loaded, or `nothing` when it loaded none.
+
+This is the seam that keeps the adapter testable. `CompositionalDA` is not in
+the General registry, so CI never has it, and without a seam the adapter is
+unreachable there. The tests pass a stand-in module with the same two entry
+points and the same error type, so the adapter code they run is the code that
+runs in production; only the estimator behind the boundary differs.
+"""
+_native_backend(override) = override === nothing ? _DEFAULT_NATIVE_BACKEND : override
+
+"Whether `backend` defines the package's `CompositionError` and `err` is one."
+_is_composition_error(backend::Module, err) =
+    isdefined(backend, :CompositionError) && err isa backend.CompositionError
+
+function _native_methods_available(method::AbstractString, backend)
+    backend === nothing || return nothing
+    throw(ArgumentError(
+        "'$method' needs the CompositionalDA package, which is not installed in this " *
+        "environment: it is not in the General registry yet, so it is not a declared " *
+        "dependency and `Pkg.instantiate()` does not install it. Use 'nb_glm' or " *
+        "'clr_welch' in the meantime."))
+end
+
 using ..RRuntime: with_r_lock
 using ..Analysis: _palette_hex, R_WAIT_SECONDS
 export DifferentialConfig, ScalingRefusal, MASSUnavailable, ZCompositionsUnavailable,
        GlmGamPoiUnavailable, OFFSET_METHODS, METHODS, DISPERSIONS, tss_factors,
        rle_factors, size_factors, bh_adjust, validate_counts, replace_zeros,
-       clr_transform, fit_nb, fit_welch, differential_abundance, volcano_chart
+       clr_transform, fit_nb, fit_welch, differential_abundance, volcano_chart,
+       compositional_da_available
 
 # Methods accepted under `analysis.differential.method`.
-const METHODS = ("nb_glm", "clr_welch")
+const METHODS = ("nb_glm", "clr_welch", "aldex2", "ancombc")
 
 # What `nb_glm` does and how it tests, accepted under
 # `analysis.differential.dispersion`: `"glm_nb"` fits each taxon with
@@ -57,8 +122,9 @@ const DEFAULT_DELTA = 0.65
                        replacement_delta=0.65, dispersion="glm_nb")
 
 Settings for one differential abundance analysis, read from
-`analysis.differential` in the pipeline config. `method` is `"nb_glm"` or
-`"clr_welch"`. `offset` names the size factor method (`"tss"` or `"rle"`) and is
+`analysis.differential` in the pipeline config. `method` is one of `METHODS`.
+`mc_samples` and `seed` control ALDEx2's posterior draws.
+`offset` names the size factor method (`"tss"` or `"rle"`) and is
 used by `nb_glm` only: a library-size offset has no meaning for a test on
 log-ratios, which are already free of library size.
 `min_prevalence` is the fraction of samples, in [0, 1], in which a taxon must
@@ -85,10 +151,13 @@ struct DifferentialConfig
     min_prevalence    :: Float64
     replacement_delta :: Float64
     dispersion        :: String
+    mc_samples        :: Int
+    seed              :: Int
     function DifferentialConfig(offset::AbstractString="tss", min_prevalence::Real=0.0;
                                 method::AbstractString="nb_glm",
                                 replacement_delta::Real=DEFAULT_DELTA,
-                                dispersion::AbstractString="glm_nb")
+                                dispersion::AbstractString="glm_nb",
+                                mc_samples::Integer=128, seed::Integer=1)
         m = lowercase(strip(String(method)))
         m in METHODS || throw(ArgumentError(
             "analysis.differential.method must be one of $(join(METHODS, ", ")), not '$method'"))
@@ -107,7 +176,11 @@ struct DifferentialConfig
             "analysis.differential.min_prevalence must be a fraction in [0, 1], not $min_prevalence"))
         (isfinite(replacement_delta) && 0 < replacement_delta < 1) || throw(ArgumentError(
             "analysis.differential.replacement_delta must be in (0, 1), not $replacement_delta"))
-        new(m, o, Float64(min_prevalence), Float64(replacement_delta), d)
+        (2 <= mc_samples <= 4096 && !(mc_samples isa Bool)) || throw(ArgumentError(
+            "analysis.differential.mc_samples must be an integer from 2 to 4096"))
+        (0 <= seed <= typemax(Int32) && !(seed isa Bool)) || throw(ArgumentError(
+            "analysis.differential.seed must be an integer from 0 to $(typemax(Int32))"))
+        new(m, o, Float64(min_prevalence), Float64(replacement_delta), d, Int(mc_samples), Int(seed))
     end
 end
 
@@ -751,7 +824,8 @@ _row(taxon, prevalence, note) = Dict{String,Any}(
 
 """
     differential_abundance(counts, samples, taxa, groups; reference, contrast,
-                           config=DifferentialConfig()) -> Dict{String,Any}
+                           config=DifferentialConfig(), native_backend=nothing)
+        -> Dict{String,Any}
 
 Test every taxon (column) of the samples x taxa read-count matrix for a
 difference in abundance between the samples labelled `contrast` and those
@@ -787,6 +861,17 @@ family is the fitted taxa that produced a p-value; failed and filtered taxa
 carry `padj = nothing`. The result's `effect` names the row key that holds the
 effect size and its label.
 
+`aldex2` and `ancombc` are the native methods. They need the `CompositionalDA`
+package, which is not in the General registry yet, so `Pkg.instantiate()` does
+not install it and they refuse by name on such a checkout;
+`compositional_da_available()` answers the same question without raising.
+`native_backend` is the module those two methods call, and defaults to the
+`CompositionalDA` this session loaded. Passing a module with the same entry
+points (`aldex2`, `ancombc`, `CompositionError`) is how the adapter is tested
+where the package cannot be installed; nothing else about the call changes, and
+the result records the module that produced it under
+`diagnostics.native_method.package`.
+
 Throws `ArgumentError` for unusable input (including a zero replacement that
 cannot be made), `ScalingRefusal` when the offset cannot be computed,
 `MASSUnavailable`, `GlmGamPoiUnavailable` or `ZCompositionsUnavailable` when a
@@ -800,7 +885,8 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
                                 taxa::AbstractVector{<:AbstractString},
                                 groups::AbstractVector{<:AbstractString};
                                 reference::AbstractString, contrast::AbstractString,
-                                config::DifferentialConfig=DifferentialConfig())
+                                config::DifferentialConfig=DifferentialConfig(),
+                                native_backend=nothing)
     reference == contrast && throw(ArgumentError(
         "the two groups must differ, but both are '$reference'"))
     length(groups) == length(samples) || throw(ArgumentError(
@@ -814,7 +900,7 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
     # library size and no composition, so neither method can use it. It is left
     # out, and named in `diagnostics.samples_without_reads`, rather than letting
     # one empty sample refuse the whole analysis.
-    has_reads = [sum(view(counts, i, :)) > 0 for i in axes(counts, 1)]
+    has_reads = [any(>(0), view(counts, i, :)) for i in axes(counts, 1)]
     without_reads = String.(samples[.!has_reads])
     if !isempty(without_reads)
         counts, samples, groups = counts[has_reads, :], samples[has_reads], groups[has_reads]
@@ -838,7 +924,84 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
     levels = (String(reference), String(contrast))
     diagnostics = Dict{String,Any}("samples_without_reads" => without_reads)
 
-    if config.method == "nb_glm"
+    native_adjustment = config.method in ("aldex2", "ancombc")
+    if native_adjustment
+        # The input checks come before the dependency check: a malformed matrix
+        # is refused for that reason whether or not CompositionalDA is present,
+        # so the refusal is the same on every machine.
+        tested = findall(j -> present[j] > 0 && prevalence[j] >= config.min_prevalence, axes(counts, 2))
+        length(tested) >= 2 || throw(ArgumentError("native compositional methods need at least two retained taxa"))
+        all(x -> x <= typemax(Int), @view counts[:, tested]) ||
+            throw(ArgumentError("native compositional counts must fit the platform's Int range"))
+        backend = _native_backend(native_backend)
+        _native_methods_available(config.method, backend)
+        # Stable labels make the package's sorted contrast agree with the
+        # user's requested direction, irrespective of run-name sorting.
+        native_groups = [g == reference ? "0" : "1" for g in groups]
+        native = try
+            if config.method == "aldex2"
+                backend.aldex2(Int.(counts[:, tested]), taxa[tested], native_groups;
+                    mc_samples=config.mc_samples, seed=config.seed)
+            else
+                backend.ancombc(Int.(counts[:, tested]), taxa[tested], native_groups;
+                    prevalence=0.0, structural_zeros=true, conserve=true)
+            end
+        catch e
+            _is_composition_error(backend, e) && error(sprint(showerror, e))
+            rethrow()
+        end
+        by_taxon = Dict(String(r.feature) => r for r in eachrow(native.table))
+        for j in tested
+            haskey(by_taxon, taxa[j]) || continue
+            f = by_taxon[taxa[j]]
+            if config.method == "ancombc" && f.status != "tested"
+                rows[j]["status"] = "structural_zero"
+                rows[j]["note"] = f.status == "structural_zero_both" ?
+                    "structural absence in both conditions; no numerical test" :
+                    "structural absence in one condition; presence/absence decision, no numerical p-value"
+                continue
+            end
+            isfinite(f.effect) && isfinite(f.pvalue) && isfinite(f.qvalue) ||
+                error("$(config.method) returned non-finite statistics for $(taxa[j]); no result produced")
+            aldex = config.method == "aldex2"
+            merge!(rows[j], Dict{String,Any}(
+                "status" => "ok", "note" => "",
+                "estimate" => aldex ? f.diff_btw : f.effect,
+                "log2_fold_change" => aldex ? nothing : f.effect / log(2),
+                "standard_error" => aldex ? nothing : f.se,
+                "statistic" => aldex ? nothing : f.statistic,
+                "pvalue" => f.pvalue, "padj" => f.qvalue))
+            if aldex
+                merge!(rows[j], Dict("aldex_effect" => f.effect,
+                    "aldex_diff_within" => f.diff_win, "aldex_abundance" => f.rab_all,
+                    "wilcoxon_pvalue" => f.wi_pvalue, "wilcoxon_padj" => f.wi_qvalue))
+            end
+        end
+        # ALDEx2 averages BH within each posterior instance. Applying BH again
+        # to its expected p-values would silently implement a different method.
+        method_text = config.method == "aldex2" ?
+            "Native ALDEx2 with $(config.mc_samples) Dirichlet instances (prior 0.5); " *
+            "consistent-sign expected Welch p-values and expected within-instance BH; " *
+            "effect shown as a log2 CLR difference, not a fold change" :
+            "Native ANCOM-BC original two-group model; sampling-bias correction, " *
+            "conservative Wald standard errors and BH over tested taxa; " *
+            "structural-zero decisions are reported separately"
+        effect = config.method == "aldex2" ?
+            Dict("key" => "estimate", "label" => "CLR difference (log2)") :
+            Dict("key" => "log2_fold_change", "label" => "Bias-corrected log2 fold change")
+        size_factor_rows = Dict{String,Any}[]
+        config_echo = Dict{String,Any}("method" => config.method,
+            "min_prevalence" => config.min_prevalence)
+        if config.method == "aldex2"
+            merge!(config_echo, Dict("mc_samples" => config.mc_samples, "seed" => config.seed))
+        end
+        # The module that actually produced the numbers, so a record made with a
+        # stand-in cannot read as one made with the package.
+        diagnostics["native_method"] = Dict("package" => string(nameof(backend)),
+            "version" => string(native.provenance.package_version),
+            "parameters" => Dict(string(k) => v for (k, v) in native.provenance.parameters))
+        diagnostics["n_structural_zero"] = count(r -> r["status"] == "structural_zero", rows)
+    elseif config.method == "nb_glm"
         factors = size_factors(counts, samples, config.offset)
         tested = findall(>=(config.min_prevalence), prevalence)
         if config.dispersion == "glmGamPoi"
@@ -931,9 +1094,11 @@ function differential_abundance(counts::AbstractMatrix{<:Real},
         notes = unique(r["note"] for r in rows)
         error("no taxon could be fitted: " * join(first(notes, 5), " | "))
     end
-    padj = bh_adjust([rows[j]["pvalue"] for j in family])
-    for (k, j) in enumerate(family)
-        rows[j]["padj"] = padj[k]
+    if !native_adjustment
+        padj = bh_adjust([rows[j]["pvalue"] for j in family])
+        for (k, j) in enumerate(family)
+            rows[j]["padj"] = padj[k]
+        end
     end
 
     sort!(rows; by = r -> (isnothing(r["padj"]) ? 2.0 : r["padj"],

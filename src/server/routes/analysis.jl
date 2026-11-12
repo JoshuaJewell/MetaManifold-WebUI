@@ -1206,14 +1206,27 @@ including `dispersion="glm_nb"`. Invalid settings propagate the constructor's
 `ArgumentError`; values that cannot be converted to strings or numbers also
 raise their conversion errors.
 """
-function _differential_config(study::String)
+function _differential_config(study::String; method_override=nothing)
     resolved = _resolved_run_config(study, nothing, nothing, nothing)
     val(k, d) = something(get(get(resolved, k, (; value=d)), :value, d), d)
+    (isnothing(method_override) || method_override isa AbstractString) ||
+        throw(ArgumentError("differential method must be a string"))
+    method = lowercase(strip(isnothing(method_override) ?
+        String(val("analysis.differential.method", "nb_glm")) : String(method_override)))
+    mc_samples = val("analysis.differential.mc_samples", 128)
+    seed = val("analysis.differential.seed", 1)
+    for (key, value) in (("analysis.differential.mc_samples", mc_samples),
+                         ("analysis.differential.seed", seed))
+        problem = _config_value_error(key, value)
+        isnothing(problem) || throw(ArgumentError(problem))
+    end
     DifferentialConfig(String(val("analysis.differential.offset", "tss")),
                        Float64(val("analysis.differential.min_prevalence", 0.0));
-                       method=String(val("analysis.differential.method", "nb_glm")),
+                       method,
                        replacement_delta=Float64(val("analysis.differential.replacement_delta", 0.65)),
-                       dispersion=String(val("analysis.differential.dispersion", "glm_nb")))
+                       dispersion=!isnothing(method_override) && method != "nb_glm" ?
+                           "glm_nb" : String(val("analysis.differential.dispersion", "glm_nb")),
+                       mc_samples=Int(mc_samples), seed=Int(seed))
 end
 
 """
@@ -1238,7 +1251,7 @@ function _differential(study::String, body)
         "Differential abundance compares exactly 2 conditions; the selection gives $(length(specs))")
 
     config = try
-        _differential_config(study)
+        _differential_config(study; method_override=get(body, :method, nothing))
     catch e
         e isa ArgumentError || rethrow()
         return json_error(400, "invalid_config", sprint(showerror, e))
