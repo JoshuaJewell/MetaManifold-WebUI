@@ -42,11 +42,15 @@ export function formatStat(value: number | null): string {
 
 /**
  * The settings line of the CSV: the method and the parameters it used. The
- * offset belongs to nb_glm and the replacement delta to clr_welch, so each line
- * names only its own method's parameters.
+ * offset belongs to nb_glm, the replacement delta to clr_welch and the reference
+ * taxon to the compositional models, so each line names only its own method's
+ * parameters.
  */
 export function configLine(result: DifferentialResult): string {
   const c = result.config
+  if (c.method === 'multinomial' || c.method === 'dirichlet_multinomial') {
+    return `method ${c.method}, reference taxon ${result.diagnostics.reference_taxon}, min_prevalence ${c.min_prevalence}; estimate is the fold change of each taxon's ratio to the reference taxon`
+  }
   return c.method === 'clr_welch'
     ? `method clr_welch, replacement_delta ${c.replacement_delta}, min_prevalence ${c.min_prevalence}; estimate is a CLR difference, not a fold change`
     : `method nb_glm, offset ${c.offset}, min_prevalence ${c.min_prevalence}`

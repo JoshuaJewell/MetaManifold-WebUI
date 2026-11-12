@@ -396,8 +396,12 @@ export interface DifferentialRequest {
   aggregate?: boolean
 }
 
-/** `ok` and `boundary` rows carry statistics; `failed` and `filtered` rows say why not. */
-export type DifferentialStatus = 'ok' | 'boundary' | 'failed' | 'filtered'
+/**
+ * `ok` and `boundary` rows carry statistics; `failed` and `filtered` rows say why
+ * not. `reference` is the compositional models' reference taxon, which every
+ * other estimate is a log ratio against, so it has no test of its own.
+ */
+export type DifferentialStatus = 'ok' | 'boundary' | 'failed' | 'filtered' | 'reference'
 
 export interface DifferentialRow {
   taxon: string
@@ -406,12 +410,14 @@ export interface DifferentialRow {
   /**
    * nb_glm: natural-log fold change, contrast over reference. clr_welch: mean
    * CLR of contrast minus mean CLR of reference, which is not a fold change.
+   * multinomial and dirichlet_multinomial: natural-log fold change of the
+   * taxon's ratio to the reference taxon, contrast over reference.
    */
   estimate: number | null
-  /** nb_glm only; null for clr_welch. */
+  /** nb_glm and the compositional models; null for clr_welch. */
   log2_fold_change: number | null
   standard_error: number | null
-  /** z (nb_glm) or Welch's t (clr_welch). */
+  /** z (nb_glm and the compositional models) or Welch's t (clr_welch). */
   statistic: number | null
   pvalue: number | null
   /** Benjamini-Hochberg adjusted; null outside the tested family. */
@@ -421,7 +427,7 @@ export interface DifferentialRow {
   prevalence: number
 }
 
-export type DifferentialMethod = 'nb_glm' | 'clr_welch'
+export type DifferentialMethod = 'nb_glm' | 'clr_welch' | 'multinomial' | 'dirichlet_multinomial'
 
 /** Which row field holds the effect size, and what to call it. */
 export interface DifferentialEffect {
@@ -448,6 +454,8 @@ export interface DifferentialResult {
     dispersion?: 'glm_nb' | 'glmGamPoi'
     /** clr_welch only. */
     replacement_delta?: number
+    /** The compositional models only: the requested reference taxon, null for the most abundant. */
+    mn_reference_taxon?: string | null
   }
   diagnostics: {
     n_taxa: number; n_tested: number; n_failed: number; n_boundary: number; n_filtered: number
@@ -459,6 +467,15 @@ export interface DifferentialResult {
       n_taxa_unobserved: number; median_imputed_fraction: number; max_imputed_fraction: number
       warnings: string[]
     }
+    /** The compositional models only: the taxon every estimate is relative to. */
+    reference_taxon?: string
+    n_taxa_in_composition?: number
+    mglm?: {
+      distribution: 'MN' | 'DM'; iterations: number | null; log_likelihood: number | null
+      warnings: string[]
+    }
+    /** dirichlet_multinomial only: each group's total concentration and theta = 1 / (1 + alpha0). */
+    overdispersion?: Record<string, { alpha0: number | null; theta: number | null }>
   }
   rows: DifferentialRow[]
   figure: unknown

@@ -141,6 +141,10 @@ export function DifferentialPanel({ study, runs, option, aggregate }: {
                 `replaced values hold ${(100 * z.median_imputed_fraction).toPrecision(2)}% of the median sample ` +
                 `and at most ${(100 * z.max_imputed_fraction).toPrecision(2)}% of any, and are not measurements.`
             })()}
+            {result.diagnostics.reference_taxon &&
+              ` Every effect is relative to the reference taxon ${result.diagnostics.reference_taxon}, over ${result.diagnostics.n_taxa_in_composition} taxa.`}
+            {result.diagnostics.overdispersion &&
+              ` Overdispersion theta: ${Object.entries(result.diagnostics.overdispersion).map(([g, o]) => `${g} ${formatStat(o.theta)}`).join(', ')}.`}
           </p>
 
           <AnalysisChart study={study} figure={result.figure} />

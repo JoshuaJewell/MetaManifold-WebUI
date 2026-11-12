@@ -142,6 +142,11 @@ function _config_value_error(key::String, value)
             return "$key may contain only letters, digits, spaces and - _ . = , / : +"
         return nothing
     end
+    # A taxon name, or ~ for the most abundant fitted taxon.
+    if key == "analysis.differential.mn_reference_taxon"
+        (isnothing(v) || v isa AbstractString) || return "$key must be a taxon name or empty"
+        return nothing
+    end
     if key in _NULLABLE_NUMBERS
         (isnothing(v) || (v isa Real && !(v isa Bool))) || return "$key must be a number or empty"
         return nothing

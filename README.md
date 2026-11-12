@@ -23,7 +23,7 @@ MetaManifold is a self-hosted web application for amplicon metabarcoding, built 
 - **Compare denoising and clustering directly.** DADA2 ASVs and swarm OTUs come from the same trimmed reads, with vsearch and DADA2 taxonomy in one table.
 - **Change a setting without repeating the run.** Configuration cascades from instance to study, group and run. Stages affected by a change are flagged stale, and only those stages rerun.
 - **Place sequences on a tree and work with the result.** Build a reference tree once, place ASVs from any study on it, and inspect or export the placement in an interactive viewer.
-- **Test differences between communities.** Alpha diversity with significance testing, NMDS, PERMANOVA with PERMDISP, and negative-binomial or CLR differential abundance between two conditions. A test that could not run is reported as such, never as a null result.
+- **Test differences between communities.** Alpha diversity with significance testing, NMDS, PERMANOVA with PERMDISP, and negative-binomial, CLR, multinomial or Dirichlet-multinomial differential abundance between two conditions. A test that could not run is reported as such, never as a null result.
 - **Finish in the same place.** Lay out multi-panel figures at journal column widths, build publication tables, and download charts, tables and trees as one report.
 - **Show how a result was made.** Each run records the configuration, tool versions and database hashes behind every stage in `attestation.yml`. Julia, R and tool versions are pinned.
 
@@ -41,7 +41,7 @@ MetaManifold is a self-hosted web application for amplicon metabarcoding, built 
 | --- | --- |
 | **Reads** | Illumina-style paired-end amplicons. PacBio and Oxford Nanopore reads are not supported, and neither is shotgun metagenomics. |
 | **Markers and references** | Designed for 18S with PR2, and configurable for other databases. Bacterial 16S will run, but the eukaryote-specific categories and filters will do little for it. |
-| **Differential abundance** | Two conditions at a time, using a negative-binomial GLM or Welch's t-test on centred log-ratios. There are no multi-factor model formulas, and ANCOM-BC is not included. |
+| **Differential abundance** | Two conditions at a time, using a negative-binomial GLM, Welch's t-test on centred log-ratios, or a multinomial or Dirichlet-multinomial regression (MGLM) against a reference taxon. There are no multi-factor model formulas, and ANCOM-BC is not included. |
 | **Where it runs** | Linux, and Windows through WSL. macOS is supported by the installer but not routinely tested. DADA2 and phylogeny stages can be sent to one server over SSH. There is no Slurm or other scheduler integration, and no official container image. |
 | **Who can use an instance** | Designed for one user or a trusted group. The server binds to `127.0.0.1` by default and has no login or user accounts, so do not expose it directly to the internet. |
 
