@@ -102,6 +102,7 @@ module Server
     include(joinpath(@__DIR__, "routes", "databases.jl"))
     include(joinpath(@__DIR__, "routes", "events.jl"))
     include(joinpath(@__DIR__, "routes", "analysis.jl"))
+    include(joinpath(@__DIR__, "routes", "validated_statistics.jl"))
     include(joinpath(@__DIR__, "routes", "read_funnel.jl"))
     include(joinpath(@__DIR__, "routes", "composition.jl"))
     include(joinpath(@__DIR__, "routes", "publication_tables.jl"))

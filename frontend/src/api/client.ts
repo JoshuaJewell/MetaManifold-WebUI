@@ -29,6 +29,7 @@ import type {
 
 import type { FigureDoc } from '../figure/types'
 import { saveBlob } from '../utils/download'
+import type { DescriptiveResult } from '../components/validatedStatistics'
 
 // Base URL for the backend API. Empty string means same-origin.
 // Set "apiBase" in config.json (e.g. "https://bioserver:8080") for split deployments.
@@ -110,6 +111,10 @@ const gq = (group?: string | null) =>
   group ? `?group=${encodeURIComponent(group)}` : ''
 
 export const api = {
+  statistics: {
+    run: (study: string, run: string, body: unknown, group?: string | null) =>
+      post<DescriptiveResult>(`/api/v1/studies/${encodeURIComponent(study)}/runs/${encodeURIComponent(run)}/statistics/summaries${gq(group)}`, body),
+  },
   studies: {
     list:   ()               => get<StudySummary[]>('/api/v1/studies'),
     get:    (study: string)  => get<Study>(`/api/v1/studies/${study}`),

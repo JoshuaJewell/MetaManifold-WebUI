@@ -9,6 +9,19 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Joshua Benjamin Jewell"
 SPDX-License-Identifier = "MPL-2.0"
 
+# Contribution credit for the React interaction-test dependency metadata.
+[[annotations]]
+path = "frontend/package.json"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>"
+SPDX-License-Identifier = "MPL-2.0"
+
+[[annotations]]
+path = "frontend/bun.lock"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>"
+SPDX-License-Identifier = "CC0-1.0"
+
 [[annotations]]
 path = ["Manifest.toml", "frontend/bun.lock", "renv.lock", "renv/settings.json", "test/fixtures/provenance/**"]
 precedence = "aggregate"
@@ -34,3 +47,9 @@ path = "data/MiSeq_SOP/**/*.fastq.gz"
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2019 Patrick D. Schloss"
 SPDX-License-Identifier = "CC-BY-4.0"
+
+[[annotations]]
+path = "test/fixtures/jcs_oracle.jsonl"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Jonathan D.A. Jewell (hyperpolymath) <j.d.a.jewell@open.ac.uk>"
+SPDX-License-Identifier = "MPL-2.0"

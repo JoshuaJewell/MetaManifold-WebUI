@@ -263,6 +263,7 @@ jobs:
           '
 
       - name: Run tests
+        id: julia_tests
         env:
           CI_TAXONOMY_DB: databases/pr2_ci_subset_dada2.fasta
           R_LIBS_SITE: /usr/local/lib/R/site-library:/usr/lib/R/site-library:/usr/lib/R/library
@@ -299,10 +300,54 @@ jobs:
           fi
           exit "$status"
 
+      # A failing assertion must not discard the coverage earned by every test
+      # that did run. Keep the report available for diagnosis, but only publish
+      # a complete passing run to Codecov. The test step's exit status still
+      # controls the job; these informational reports cannot make it green.
       - name: Process coverage
+        if: ${{ !cancelled() && hashFiles('**/*.cov') != '' }}
         uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38  # v1.2.2
 
+      - name: Report descriptive-statistics coverage gaps
+        if: ${{ !cancelled() && hashFiles('lcov.info') != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## Descriptive-statistics coverage gaps'
+            echo
+            echo 'Informational only; the Julia test result remains the gate.'
+            echo
+            echo '| Source | Uncovered line |'
+            echo '| --- | ---: |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          awk -F'[:,]' '
+            /^SF:src\/(canonical|server\/routes\/validated_statistics|analysis\/(derived_analyses|exact_summaries|high_precision|numeric_policy|method_catalogue))\.jl$/ {
+              source = substr($0, 4); next
+            }
+            source != "" && $1 == "DA" && $3 == 0 {
+              printf "::notice file=%s,line=%s::Julia coverage gap on this descriptive-statistics source line\n", source, $2
+              printf "| `%s` | %s |\n", source, $2 >> summary
+              gaps++
+            }
+            /^end_of_record$/ { source = "" }
+            END {
+              if (!gaps) print "| No uncovered lines in the descriptive-statistics sources | — |" >> summary
+              printf "Descriptive-statistics source lines without coverage: %d\n", gaps
+            }
+          ' summary="$GITHUB_STEP_SUMMARY" lcov.info
+
+      - name: Retain raw Julia coverage
+        if: ${{ !cancelled() && hashFiles('lcov.info') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: julia-coverage
+          path: lcov.info
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload coverage to Codecov
+        if: ${{ steps.julia_tests.outcome == 'success' }}
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v6.0.2
         with:
           files: lcov.info
