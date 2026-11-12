@@ -8,7 +8,6 @@ using JSON3
 using MetaManifold
 using MetaManifold.NumericPolicy
 using MetaManifold.ExactSummaries
-using MetaManifold.HighPrecision
 
 function counts_fixture(n_features::Int, n_samples::Int)
     labels = ["sample_$j" for j in 1:n_samples]
@@ -45,48 +44,15 @@ function benchmark()
                 feature_labels=feature_labels, groups, policy)
         end
         result["operation"] = "exact_summary"
-        result["precision_bits"] = nothing
         result["features"] = features
         result["samples"] = samples
         push!(measurements, result)
     end
 
-    counts, labels, feature_labels = counts_fixture(100, 8)
-    for bits in (64, 256, 1024)
-        policy = numeric_policy(mode=:high_precision, precision_bits=bits)
-        result = measure() do
-            high_precision_summary(counts; sample_labels=labels,
-                feature_labels=feature_labels, policy)
-        end
-        result["operation"] = "high_precision_summary"
-        result["precision_bits"] = bits
-        result["features"] = 100
-        result["samples"] = 8
-        push!(measurements, result)
-    end
-
-    # Concurrency evidence on the same input and precision, not a claim that a
-    # single MPFR operation is parallel. Run the benchmark with -t2 or more.
-    policy = numeric_policy(mode=:high_precision, precision_bits=256)
-    work = () -> high_precision_summary(counts; sample_labels=labels,
-        feature_labels=feature_labels, policy)
-    sequential = measure(; repetitions=3) do
-        foreach(_ -> work(), 1:4)
-    end
-    sequential["operation"] = "four_high_precision_summaries_sequential"
-    concurrent = measure(; repetitions=3) do
-        @sync for _ in 1:4
-            Threads.@spawn work()
-        end
-    end
-    concurrent["operation"] = "four_high_precision_summaries_concurrent"
-    push!(measurements, sequential, concurrent)
-
     Dict{String,Any}(
         "schema" => "metamanifold.validated-statistics-benchmark.v1",
         "commit" => get(ENV, "GITHUB_SHA", "unknown"),
-        "software" => Dict{String,Any}(
-            "julia" => string(VERSION), "mpfr" => string(Base.MPFR.version())),
+        "software" => Dict{String,Any}("julia" => string(VERSION)),
         "platform" => Dict{String,Any}(
             "os" => string(Sys.KERNEL), "arch" => string(Sys.ARCH),
             "cpu" => string(Sys.CPU_NAME), "julia_threads" => Threads.nthreads()),
@@ -100,7 +66,7 @@ if !isempty(ARGS)
     if length(ARGS) == 2 && ARGS[1] == "--output"
         output = ARGS[2]
     else
-        error("usage: julia --project=. -t2 bench/validated_statistics.jl [--output PATH]")
+        error("usage: julia --project=. bench/validated_statistics.jl [--output PATH]")
     end
 end
 result = benchmark()

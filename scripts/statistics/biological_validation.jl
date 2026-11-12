@@ -7,7 +7,6 @@
 using CSV, JSON3, SHA
 using MetaManifold.NumericPolicy
 using MetaManifold.ExactSummaries
-using MetaManifold.HighPrecision
 using MetaManifold.Canonical
 
 function biological_results(input::String, provenance::String, output::String)
@@ -37,16 +36,13 @@ function biological_results(input::String, provenance::String, output::String)
     end
     exact = exact_summary(counts; sample_labels=labels, feature_labels=features,
                           allow_approximate=false)
-    high = high_precision_summary(counts; sample_labels=labels, feature_labels=features,
-        policy=numeric_policy(; mode=:high_precision, precision_bits=256))
     report = Dict{String,Any}(
         "schema" => "metamanifold.descriptive-validation-input.v1",
         "csv_sha256" => bytes2hex(sha256(read(input))),
         "provenance_sha256" => bytes2hex(sha256(read(provenance))),
         "provenance" => ijson_read(read(provenance)),
         "exact" => summary_to_storage(exact),
-        "high_precision" => high_precision_to_storage(high),
-        "independent_check" => "not performed by this producer; the arithmetic is checked against hand-worked and bc-derived known answers in test/unit",
+        "independent_check" => "not performed by this producer; the arithmetic is checked against hand-worked known answers in test/unit",
         "limitations" => ["descriptive counts only", "no taxonomy validation", "no population representativeness claim",
                            "scientific review, data-use approval and release approval are separate gates"],
     )

@@ -16,26 +16,11 @@ For `T[j] = 0`, proportions are undefined (`null`), including when every count
 is zero. Observed richness counts strictly positive entries. Groups pool
 counts before division; they do not average sample proportions.
 
-High-precision mode computes Shannon entropy `-sum(p * log(p))` with natural
-logarithms and Gini–Simpson diversity `1 - sum(p^2)`. The latter uses an exact
-rational intermediate before its final MPFR conversion. Both returned
-diversity values are labelled approximations. Arithmetic precision is not a
-confidence level. Zero-total diversity values are undefined.
-
-The implementation scopes both MPFR precision and RoundNearest, restoring
-the caller's settings even on an exception. A lock serialises this layer's
-precision changes. It cannot stop unrelated code outside the lock from changing
-process MPFR defaults. The compiler, GMP, MPFR, Julia's rational implementation,
-and hardware remain part of the trusted execution base.
+This layer computes no Shannon or Gini–Simpson index; high-precision diversity
+is proposed in a separate pull request. The compiler, GMP, Julia's rational
+implementation and hardware remain part of the trusted execution base.
 
 ## Boundaries
-
-Decimal display preserves the precision stored in a BigFloat while converting
-its binary value to a rational. Julia 1.12's conversion uses an intermediate
-operation at ambient precision; leaving that precision lower could discard
-significant bits before the requested decimal rounding. Regression tests retain
-the 100-place display of `1 + 2^-300` under lower ambient precisions. This does
-not make the original floating-point metric exact.
 
 Validated run statistics use `merged` when no table is named and accept the same
 safe table names as saved composition tables. Column filters must match the
@@ -75,11 +60,11 @@ reported as a successful exact summary.
   publication. Existing conflicting or corrupt records are refused. Source
   result databases are opened read-only.
 * Cancellation is sticky. Time limits are cooperative checks between work
-  units, not hard interrupts inside GMP, MPFR, DuckDB or a filesystem call.
+  units, not hard interrupts inside GMP, DuckDB or a filesystem call.
 
 The executable limits are in `NumericPolicy` and the method catalogue tests
 require matching advertised limits: 100,000 cells, 16 MiB request bodies,
-4,096-bit input counts and MPFR precision, 65,536-bit rational intermediates,
+4,096-bit input counts, 65,536-bit rational intermediates,
 100 display decimal places, and 64 MiB persisted records. A limit failure
 returns an explicit error; it never substitutes a floating method.
 
@@ -94,10 +79,6 @@ the validated nonnegative integer inputs and a positive total `T`:
   `sum_i C[i] = sum_(j in G) T[j]`, by exchanging finite integer sums.
   Dividing these pooled counts gives the pooled proportions; averaging the
   original proportions is generally a different operation.
-* The exact Gini–Simpson intermediate is
-  `(T^2 - sum_i c[i]^2)/T^2 = 2*sum_(i<k) c[i]*c[k]/T^2`.
-  Its numerator is nonnegative and at most `T^2`, so this rational lies in
-  `[0,1]`. Its final MPFR conversion is still labelled approximate.
 * For display at `k` decimal places, set `n = abs(numerator)*10^k` and let
   `d` be the positive denominator. Divide exactly: `n = q*d + r`, with
   `0 <= r < d`. Choosing `q` when `2*r < d` and `q+1` otherwise gives a
@@ -120,7 +101,7 @@ dependency or vendor that package. Source revisions and observed checker
 results belong in the accompanying validation receipt.
 
 Those model theorems are not an end-to-end verification of this application.
-Julia property tests, hand-worked and `bc`-derived known answers,
+Julia property tests, hand-worked known answers,
 browser boundary tests and DuckDB integration tests test the implementation
 connection. They do not prove an absence of all software defects, statistical
 calibration, biological representativeness, or permission to redistribute data.

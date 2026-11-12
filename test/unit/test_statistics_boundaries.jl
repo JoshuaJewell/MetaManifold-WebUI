@@ -52,14 +52,6 @@ end
     for text in ("1/0", "0/0", "1.0", "1e-3", "1/2/3", "NaN")
         @test_throws UnsupportedRepresentationError parse_exact_rational(text)
     end
-
-    value, bits = with_precision(() -> BigFloat("0.5"); bits=512)
-    @test bits == 512
-    encoded = to_storage(approximate_value(value))
-    parsed = parse_approximate_decimal(encoded; bits=512)
-    @test parsed.value == value
-    @test parsed.precision_bits == 512
-    @test encoded == "0.5"
 end
 
 @testset "Direct JSON number tokens are exact or refused" begin

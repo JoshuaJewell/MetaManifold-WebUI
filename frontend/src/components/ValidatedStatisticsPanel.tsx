@@ -12,8 +12,6 @@ export function ValidatedStatisticsPanel({ study, runs, option }: {
   study: string; runs: ComparisonRunSpec[]; option: AnalysisOption | null
 }) {
   const [runIndex, setRunIndex] = useState(0)
-  const [mode, setMode] = useState<'exact_counts' | 'high_precision'>('exact_counts')
-  const [bits, setBits] = useState(256)
   const [result, setResult] = useState<DescriptiveResult | null>(null)
   const [sampleIndex, setSampleIndex] = useState(0)
   const [page, setPage] = useState(0)
@@ -21,7 +19,7 @@ export function ValidatedStatisticsPanel({ study, runs, option }: {
   const [busy, setBusy] = useState(false)
   const sequence = useRef(0)
   const run = runs[runIndex]
-  const scope = JSON.stringify([study, run, option?.table, mode, bits])
+  const scope = JSON.stringify([study, run, option?.table])
   useEffect(() => {
     sequence.current++
     setResult(null); setError(null); setBusy(false); setSampleIndex(0); setPage(0)
@@ -36,7 +34,7 @@ export function ValidatedStatisticsPanel({ study, runs, option }: {
     try {
       const response = await api.statistics.run(study, run.run, {
         table: option.table, prefix: run.prefix ?? null,
-        numeric_policy: { mode, ...(mode === 'high_precision' ? { precision_bits: bits } : {}) },
+        numeric_policy: { mode: 'exact_counts' },
         time_limit_seconds: 60,
       }, run.group)
       // Refuse a malformed count before it can appear as a rounded integer.
@@ -55,20 +53,13 @@ export function ValidatedStatisticsPanel({ study, runs, option }: {
   const sample = result?.samples[sampleIndex]
   const features = sample?.features ?? []
   return <details>
-    <summary>Exact counts and high-precision descriptive summaries</summary>
+    <summary>Exact descriptive summaries</summary>
     <p>Summarise one run or sub-group from its stored integer counts. These summaries use all rows in the selected table; ordinary diversity normalisation and category exclusions do not apply. They do not test differences between samples.</p>
     <p>Independent scientific review and release approval are pending.</p>
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
       <label>Run <select value={runIndex} onChange={e => setRunIndex(Number(e.target.value))}>
         {runs.map((r, i) => <option key={JSON.stringify([r.group, r.run, r.prefix])} value={i}>{r.group ? `${r.group} / ` : ''}{r.run}{r.prefix ? ` / ${r.prefix}` : ''}</option>)}
       </select></label>
-      <label>Summary <select value={mode} onChange={e => setMode(e.target.value as typeof mode)}>
-        <option value="exact_counts">Exact totals and proportions</option>
-        <option value="high_precision">High-precision diversity</option>
-      </select></label>
-      {mode === 'high_precision' && <label>Precision <select value={bits} onChange={e => setBits(Number(e.target.value))}>
-        {[256, 512, 1024].map(n => <option key={n} value={n}>{n} bits</option>)}
-      </select></label>}
       <button type="button" disabled={busy || !option || !run} onClick={calculate}>{busy ? 'Computing…' : 'Compute summary'}</button>
     </div>
     {error && <p role="alert" className="error-msg">{error}</p>}
@@ -81,18 +72,13 @@ export function ValidatedStatisticsPanel({ study, runs, option }: {
       {sample && <>
         <p>Total reads: <strong>{exactIntegerText(sample.total)}</strong>{sample.richness !== undefined && <> · Observed richness: {sample.richness}</>}</p>
         {sample.warnings.map(w => <p key={w}>{w}</p>)}
-        {result.mode === 'high_precision' ? <dl>
-          <dt>Shannon entropy</dt><dd title={sample.shannon?.value}>{sample.shannon?.display ?? 'Undefined (zero total)'}</dd>
-          <dt>Gini–Simpson diversity</dt><dd title={sample.gini_simpson?.value}>{sample.gini_simpson?.display ?? 'Undefined (zero total)'}</dd>
-        </dl> : <>
-          <table><thead><tr><th>Feature</th><th>Exact count</th><th>Exact proportion</th></tr></thead>
-            <tbody>{features.slice(page * 25, (page + 1) * 25).map((feature, offset) => {
-              const i = page * 25 + offset
-              return <tr key={feature}><td style={{ overflowWrap: 'anywhere' }}>{feature}</td><td>{exactIntegerText(sample.counts![i])}</td><td>{proportionText(sample.proportions![i])}</td></tr>
-            })}</tbody>
-          </table>
-          {features.length > 25 && <p><button disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button> Page {page + 1} of {Math.ceil(features.length / 25)} <button disabled={(page + 1) * 25 >= features.length} onClick={() => setPage(page + 1)}>Next</button></p>}
-        </>}
+        <table><thead><tr><th>Feature</th><th>Exact count</th><th>Exact proportion</th></tr></thead>
+          <tbody>{features.slice(page * 25, (page + 1) * 25).map((feature, offset) => {
+            const i = page * 25 + offset
+            return <tr key={feature}><td style={{ overflowWrap: 'anywhere' }}>{feature}</td><td>{exactIntegerText(sample.counts![i])}</td><td>{proportionText(sample.proportions![i])}</td></tr>
+          })}</tbody>
+        </table>
+        {features.length > 25 && <p><button disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button> Page {page + 1} of {Math.ceil(features.length / 25)} <button disabled={(page + 1) * 25 >= features.length} onClick={() => setPage(page + 1)}>Next</button></p>}
       </>}
     </>}
   </details>

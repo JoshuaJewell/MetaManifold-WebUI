@@ -8,8 +8,8 @@ module NumericPolicy
 
 using SHA
 
-export NUMERIC_MODES, ORDINARY_PRECISION_BITS, DEFAULT_HIGH_PRECISION_BITS,
-       DEFAULT_MAX_DENOMINATOR_BITS, MAX_PRECISION_BITS, MAX_DENOMINATOR_BITS,
+export NUMERIC_MODES, ORDINARY_PRECISION_BITS,
+       DEFAULT_MAX_DENOMINATOR_BITS, MAX_DENOMINATOR_BITS,
        MAX_COUNT_BITS, MAX_CELLS, MAX_EXACT_FLOAT, MAX_REQUEST_BYTES,
        MAX_ROUND_DIGITS,
        NumericPolicySpec, numeric_policy, validate_policy, policy_fingerprint,
@@ -18,18 +18,16 @@ export NUMERIC_MODES, ORDINARY_PRECISION_BITS, DEFAULT_HIGH_PRECISION_BITS,
        OperationCancelledError, CancellationToken, cancel!, check_cancelled!,
        check_cancelled_periodically!,
        require_count, checked_count_sum, exact_fraction, exact_relative_abundance,
-       exact_rational_sum, with_precision,
+       exact_rational_sum,
        EXACT, APPROXIMATE, ROUNDED, NumericValue, exact_value, approximate_value,
        rounded_value, is_exact, to_storage, to_display, encode_json_number,
-       parse_exact_count, parse_exact_rational, parse_approximate_decimal
+       parse_exact_count, parse_exact_rational
 
-const NUMERIC_MODES = (:ordinary, :exact_counts, :high_precision)
+const NUMERIC_MODES = (:ordinary, :exact_counts)
 const ORDINARY_PRECISION_BITS = 53
-const DEFAULT_HIGH_PRECISION_BITS = 256
 const DEFAULT_MAX_DENOMINATOR_BITS = 4096
 # Configuration limits are deliberately finite. They can be changed in source
 # after review, not raised per request until an unauthenticated request can OOM us.
-const MAX_PRECISION_BITS = 4096
 const MAX_DENOMINATOR_BITS = 65536
 const MAX_COUNT_BITS = 4096
 const MAX_CELLS = 100_000
@@ -76,10 +74,10 @@ Base.showerror(io::IO, e::OperationCancelledError) = print(io,
 """Cooperative cancellation for a bounded validated-statistics request.
 
 Cancellation is checked between cells, samples and DuckDB rows, not inside a
-single MPFR operation. A deadline is therefore an upper bound on when the next
-check can observe it, not a hard real-time interrupt. The token is deliberately
-small and explicit: it is never ambient process state, so concurrent analyses
-cannot cancel one another.
+single arithmetic operation. A deadline is therefore an upper bound on when the
+next check can observe it, not a hard real-time interrupt. The token is
+deliberately small and explicit: it is never ambient process state, so
+concurrent analyses cannot cancel one another.
 """
 mutable struct CancellationToken
     cancelled::Threads.Atomic{Bool}
@@ -146,8 +144,10 @@ function numeric_policy(; mode::Symbol=:ordinary,
                         precision_bits::Union{Integer,Nothing}=nothing,
                         max_denominator_bits::Integer=DEFAULT_MAX_DENOMINATOR_BITS,
                         round_digits::Integer=6)
-    bits = isnothing(precision_bits) ?
-           (mode === :high_precision ? DEFAULT_HIGH_PRECISION_BITS : ORDINARY_PRECISION_BITS) :
+    # Both modes record 53 bits (binary64); there is no precision setting. The
+    # field stays in the policy and its fingerprint, so stored policies keep
+    # their identity.
+    bits = isnothing(precision_bits) ? ORDINARY_PRECISION_BITS :
            _configuration_int(precision_bits, "precision_bits")
     spec = NumericPolicySpec(mode, Int(bits),
         _configuration_int(max_denominator_bits, "max_denominator_bits"),
@@ -159,16 +159,10 @@ numeric_policy(mode::Symbol) = numeric_policy(; mode)
 function validate_policy(spec::NumericPolicySpec)
     spec.mode in NUMERIC_MODES || throw(ArgumentError(
         "mode must be one of $(join(NUMERIC_MODES, ", ")); got '$(spec.mode)'"))
-    spec.precision_bits >= 2 || throw(ArgumentError(
-        "precision_bits must be at least 2, got $(spec.precision_bits)"))
-    spec.precision_bits <= MAX_PRECISION_BITS || throw(ArgumentError(
-        "precision_bits exceeds the reviewed limit of $MAX_PRECISION_BITS"))
     spec.mode === :ordinary && spec.precision_bits != ORDINARY_PRECISION_BITS &&
-        throw(ArgumentError("ordinary mode is fixed at 53 bits; request high_precision explicitly"))
+        throw(ArgumentError("ordinary mode is fixed at 53 bits"))
     spec.mode === :exact_counts && spec.precision_bits != ORDINARY_PRECISION_BITS &&
         throw(ArgumentError("exact_counts uses integers/rationals, not a floating precision setting"))
-    spec.mode === :high_precision && spec.precision_bits <= ORDINARY_PRECISION_BITS &&
-        throw(ArgumentError("high_precision requires more than 53 bits; ordinary mode is unchanged"))
     32 <= spec.max_denominator_bits <= MAX_DENOMINATOR_BITS || throw(ArgumentError(
         "max_denominator_bits must be in 32:$MAX_DENOMINATOR_BITS"))
     0 <= spec.round_digits <= MAX_ROUND_DIGITS || throw(ArgumentError(
@@ -201,7 +195,7 @@ policy_to_storage(spec::NumericPolicySpec) = Dict{String,Any}(
     "precision_bits" => spec.precision_bits,
     "max_denominator_bits" => spec.max_denominator_bits,
     "round_digits" => spec.round_digits,
-    "rounding" => spec.mode === :high_precision ? "MPFR RoundNearest" : "none for exact arithmetic",
+    "rounding" => "none for exact arithmetic",
     "fingerprint" => policy_fingerprint(spec),
 )
 
@@ -216,19 +210,15 @@ function require_count(x)
         throw(UnsupportedRepresentationError(
             "a count", string(x), "counts; the value is not an integer"))
     end
-    if x isa AbstractFloat
+    if x isa Base.IEEEFloat
         isfinite(x) || throw(UnsupportedRepresentationError(
             "a count", string(x), "counts; NaN and infinity are not counts"))
         isinteger(x) || throw(UnsupportedRepresentationError(
             "a count", string(x), "counts; the value is not an integer"))
-        # Do not let a low ambient BigFloat precision round an out-of-range
-        # input down to the limit during validation. 2^53 is exact in Float64
-        # and in every supported MPFR precision.
-        limit = x isa BigFloat ? BigFloat(2)^53 : 2.0^53
-        abs(x) <= limit || throw(UnsupportedRepresentationError(
+        abs(x) <= 2.0^53 || throw(UnsupportedRepresentationError(
             "an exactly-known count", string(x),
             "a floating-point input; above 2^53 its integer history cannot be proven"))
-        return x isa BigFloat ? BigInt(x) : Int64(x)
+        return Int64(x)
     end
     throw(UnsupportedRepresentationError(
         "a count", string(x), "counts; unsupported type $(typeof(x))"))
@@ -303,34 +293,6 @@ function exact_relative_abundance(count::Integer, total::Integer;
     exact_fraction(count, total; policy)
 end
 
-# Conservative serialisation remains appropriate on Julia 1.12: setprecision is
-# scoped, but third-party code may still read/write the process default. The lock
-# also makes the restoration property easy to audit under concurrent callers.
-const _PRECISION_LOCK = ReentrantLock()
-
-function _validate_precision(bits::Integer)
-    2 <= bits <= MAX_PRECISION_BITS || throw(ArgumentError(
-        "precision must be in 2:$MAX_PRECISION_BITS bits, got $bits"))
-    Int(bits)
-end
-
-function with_precision(f::Function; bits::Integer)
-    requested = _validate_precision(bits)
-    lock(_PRECISION_LOCK) do
-        previous = precision(BigFloat)
-        try
-            setprecision(BigFloat, requested) do
-                setrounding(BigFloat, RoundNearest) do
-                    value = f()
-                    (value, precision(BigFloat))
-                end
-            end
-        finally
-            setprecision(BigFloat, previous)
-        end
-    end
-end
-
 const EXACT = :exact
 const APPROXIMATE = :approximate
 const ROUNDED = :rounded
@@ -353,20 +315,19 @@ function exact_value(x)
     NumericValue(x, EXACT, nothing, nothing)
 end
 
-_float_bits(x) = x isa BigFloat ? precision(x) :
-                 x isa Float64 ? 53 : x isa Float32 ? 24 : x isa Float16 ? 11 : nothing
-
-function approximate_value(x; bits::Union{Integer,Nothing}=nothing)
-    x isa AbstractFloat || throw(UnsupportedRepresentationError(
+# Approximate values are IEEE binary floats; the type fixes their precision.
+# Any other float type is refused, not stored or displayed as if it were one.
+function approximate_value(x)
+    x isa Base.IEEEFloat || throw(UnsupportedRepresentationError(
         "a floating-point approximation", string(x), "approximate_value"))
-    NumericValue(x, APPROXIMATE, isnothing(bits) ? _float_bits(x) : Int(bits), nothing)
+    NumericValue(x, APPROXIMATE, precision(x), nothing)
 end
 
 function rounded_value(x; digits::Integer)
-    x isa AbstractFloat || throw(UnsupportedRepresentationError(
+    x isa Base.IEEEFloat || throw(UnsupportedRepresentationError(
         "a floating-point approximation", string(x), "rounded_value"))
     0 <= digits <= MAX_ROUND_DIGITS || throw(ArgumentError("digits out of range"))
-    NumericValue(x, ROUNDED, _float_bits(x), Int(digits))
+    NumericValue(x, ROUNDED, precision(x), Int(digits))
 end
 
 is_exact(v::NumericValue) = v.kind === EXACT
@@ -381,14 +342,13 @@ function to_storage(v::NumericValue)
     end
     isfinite(x) || throw(UnsupportedRepresentationError(
         "a stored finite number", string(x), "JSON/storage; NaN and infinity are refused"))
-    x isa BigFloat && return string(x) # MPFR's round-trip decimal representation
     x isa Float64 && return x
     Float64(x)
 end
 
-# Decimal rendering is integer arithmetic, including for a BigFloat. Converting a
-# finite float to Rational{BigInt} is exact (its binary significand/exponent), so
-# this does not introduce another floating rounding step or depend on Printf.
+# Decimal rendering is integer arithmetic. Converting a finite float to
+# Rational{BigInt} is exact (its binary significand/exponent), so this does
+# not introduce another floating rounding step or depend on Printf.
 function _rounded_scaled(num::Integer, den::Integer, scale::Integer)
     n = big(num) * scale
     q, r = divrem(n, den)
@@ -421,21 +381,10 @@ function to_display(v::NumericValue; digits::Integer=6)
     isfinite(v.value) || throw(UnsupportedRepresentationError(
         "a finite display number", string(v.value), "to_display"))
     kept = v.kind === ROUNDED && !isnothing(v.digits) ? v.digits : Int(digits)
-    # Julia 1.12's BigFloat -> Rational conversion uses ldexp at ambient
-    # precision. Preserve the stored operand's bits before integer rendering.
-    exact_binary = if v.value isa BigFloat
-        lock(_PRECISION_LOCK) do
-            setprecision(BigFloat, precision(v.value)) do
-                Rational{BigInt}(v.value)
-            end
-        end
-    else
-        Rational{BigInt}(v.value)
-    end
-    rendered = _rendered_decimal(exact_binary, kept)
+    rendered = _rendered_decimal(Rational{BigInt}(v.value), kept)
     bits = isnothing(v.precision_bits) ? "unknown precision" : "$(v.precision_bits)-bit"
     # The display is always a rounding, whatever the value's kind: an
-    # approximate MPFR value shown at 6dp has still been rounded, and a reader
+    # approximate value shown at 6dp has still been rounded, and a reader
     # must not mistake the short string for the stored value.
     "$rendered ($(v.kind), $bits, rounded to $(kept)dp)"
 end
@@ -445,12 +394,7 @@ function encode_json_number(x)
         return abs(big(x)) <= MAX_EXACT_FLOAT - 1 ? x : string(x)
     end
     x isa Rational && return to_storage(exact_value(x))
-    if x isa BigFloat
-        isfinite(x) || throw(UnsupportedRepresentationError(
-            "a finite JSON number", string(x), "JSON"))
-        return string(x)
-    end
-    if x isa AbstractFloat && !(x isa BigFloat)
+    if x isa Base.IEEEFloat
         isfinite(x) || throw(UnsupportedRepresentationError(
             "a finite JSON number", string(x), "JSON"))
         return x isa Float64 ? x : encode_json_number(Float64(x))
@@ -496,33 +440,6 @@ function parse_exact_rational(s::AbstractString;
     iszero(den) && throw(UnsupportedRepresentationError(
         "a finite rational", s, "parse_exact_rational; zero denominator"))
     exact_fraction(parse(BigInt, parts[1]), den; policy)
-end
-
-"""Parse a decimal directly into a BigFloat at `bits`, never via Float64.
-The returned NumericValue is approximate and records the achieved precision."""
-function parse_approximate_decimal(s::AbstractString; bits::Integer=DEFAULT_HIGH_PRECISION_BITS)
-    requested = _validate_precision(bits)
-    text = strip(s)
-    isempty(text) && throw(UnsupportedRepresentationError(
-        "a decimal", s, "parse_approximate_decimal; empty input"))
-    occursin(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", text) ||
-        throw(UnsupportedRepresentationError("a finite decimal literal", s,
-            "parse_approximate_decimal; NaN, infinity, hex and rationals are refused"))
-    length(text) <= MAX_COUNT_BITS + 16 || throw(ResourceLimitError(
-        "decimal characters", MAX_COUNT_BITS + 16, length(text)))
-    exponent = match(r"[eE]([+-]?[0-9]+)$", text)
-    if !isnothing(exponent)
-        exponent_text = replace(exponent.captures[1], "+" => "", "-" => "")
-        length(exponent_text) <= 9 || throw(ResourceLimitError(
-            "decimal exponent digits", 9, length(exponent_text)))
-        exponent_value = parse(Int, exponent_text)
-        exponent_value <= MAX_COUNT_BITS || throw(ResourceLimitError(
-            "absolute decimal exponent", MAX_COUNT_BITS, exponent_value))
-    end
-    value, achieved = with_precision(() -> BigFloat(text); bits=requested)
-    isfinite(value) || throw(UnsupportedRepresentationError(
-        "a finite decimal", s, "parse_approximate_decimal"))
-    approximate_value(value; bits=achieved)
 end
 
 end # module NumericPolicy

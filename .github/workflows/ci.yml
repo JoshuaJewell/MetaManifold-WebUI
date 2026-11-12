@@ -322,7 +322,7 @@ jobs:
             echo '| --- | ---: |'
           } >> "$GITHUB_STEP_SUMMARY"
           awk -F'[:,]' '
-            /^SF:src\/(canonical|server\/routes\/validated_statistics|analysis\/(derived_analyses|exact_summaries|high_precision|numeric_policy|method_catalogue))\.jl$/ {
+            /^SF:src\/(canonical|server\/routes\/validated_statistics|analysis\/(derived_analyses|exact_summaries|numeric_policy|method_catalogue))\.jl$/ {
               source = substr($0, 4); next
             }
             source != "" && $1 == "DA" && $3 == 0 {

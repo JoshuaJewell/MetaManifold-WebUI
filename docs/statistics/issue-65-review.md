@@ -29,7 +29,6 @@ involvement and conflicts so independence can be assessed.
 | Topic | Source and reviewer task |
 | --- | --- |
 | Exact summaries | `src/analysis/numeric_policy.jl`, `exact_summaries.jl`, `derived_analyses.jl`: integer/rational preservation, pooling and undefined zero totals. |
-| Approximate metrics | `src/analysis/high_precision.jl`: MPFR rounding/precision scope, input checks, cancellation and approximate labelling. |
 | Boundaries | `src/canonical.jl`, `src/server/routes/validated_statistics.jl`: JSON integer syntax, DuckDB streaming, finite limits and immutable persistence. |
 | User interpretation | `frontend/src/components/ValidatedStatisticsPanel.tsx`: exact displays, review-pending notice and absence of inference claims. |
 | Real-data evidence | Run_A/run_B counts, sample mapping, input/configuration/software hashes and producer results; use pre-taxonomy `seqtab_nochim.csv`. |
@@ -42,6 +41,8 @@ tests/build, Agda and REUSE. Independent checks passed all 402 real-data
 proportions exactly and compared the approximate metrics against Decimal
 references. Local and CI matrices have identical hashes. Preserve the CI
 evidence before its 7 December 2026 expiry, and recheck CI on the approved head.
+That run and the mutation campaign below included a high-precision diversity
+layer that is now proposed in a separate pull request.
 
 The six-mutant campaign passed at `419f2fb` after a 499-assertion pristine
 baseline. The later minimum-integer rounding correction has eleven new
@@ -66,7 +67,6 @@ Exact commit(s) reviewed:
 Evidence archive identifier and SHA-256:
 
 Exact counts / pooling / rational proportions / zero totals: [findings]
-MPFR approximations and independent-reference method: [findings]
 JSON / storage / display boundaries and resource limits: [findings]
 Sample identity, provenance and biological scope: [findings]
 Trusted arithmetic/runtime assumptions and failure modes: [findings]
@@ -80,10 +80,9 @@ Reviewer-authored decision URL or signed record:
 ```
 
 The proposed claim is exact descriptive totals, richness and rational
-proportions, with labelled approximate Shannon and Gini–Simpson values on
-the selected inputs. It excludes hypothesis testing, confidence intervals,
-coverage guarantees, taxonomy validation, independent replication of the
-three time points, and representative biological performance.
+proportions on the selected inputs. It excludes hypothesis testing, confidence
+intervals, coverage guarantees, taxonomy validation, independent replication
+of the three time points, and representative biological performance.
 
 ## Joshua's decision — fill only after assessment
 

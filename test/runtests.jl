@@ -22,7 +22,6 @@ const UNIT_FILES = [
     "test_canonical.jl",
     "test_numeric_policy.jl",
     "test_exact_summaries.jl",
-    "test_high_precision.jl",
     "test_derived_analyses.jl",
     "test_method_catalogue.jl",
     "test_validated_statistics.jl",

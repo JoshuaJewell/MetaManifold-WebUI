@@ -68,16 +68,6 @@ const MUTANTS = Mutant[
         "proportions[i] = exact_relative_abundance(BigInt(round(Int, 1_000_000 * count / total)), 1_000_000; policy)",
         ["exact_summaries"],
         "Replacing an exact proportion with a float-derived one must be caught."),
-    Mutant("zero-total-treated-as-one",
-        "src/analysis/high_precision.jl",
-        "    if iszero(total)\n" *
-        "        return (total=total, richness=richness, shannon=nothing, gini_simpson=nothing)\n" *
-        "    end",
-        "    if iszero(total)\n" *
-        "        return (total=total, richness=richness, shannon=zero(BigFloat), gini_simpson=zero(BigFloat))\n" *
-        "    end",
-        ["high_precision"],
-        "A zero-total sample must stay undefined, not become zero diversity."),
 ]
 
 _git_status_command(paths::Vector{String}) = `git -C $ROOT status --porcelain -- $paths`
