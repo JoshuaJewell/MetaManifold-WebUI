@@ -1202,18 +1202,23 @@ end
 
 The study's `analysis.differential` settings, resolved through the config
 cascade. Missing or `nothing` values use the defaults in `DifferentialConfig`,
-including `dispersion="glm_nb"`. Invalid settings propagate the constructor's
-`ArgumentError`; values that cannot be converted to strings or numbers also
+including `dispersion="glm_nb"` and no `mn_reference_taxon`. Invalid settings
+propagate the constructor's `ArgumentError`, as does an `mn_reference_taxon`
+that is not text; other values that cannot be converted to strings or numbers
 raise their conversion errors.
 """
 function _differential_config(study::String)
     resolved = _resolved_run_config(study, nothing, nothing, nothing)
     val(k, d) = something(get(get(resolved, k, (; value=d)), :value, d), d)
+    ref = get(get(resolved, "analysis.differential.mn_reference_taxon", (; value=nothing)), :value, nothing)
+    (isnothing(ref) || ref isa AbstractString) || throw(ArgumentError(
+        "analysis.differential.mn_reference_taxon must be a taxon name or empty, not $ref"))
     DifferentialConfig(String(val("analysis.differential.offset", "tss")),
                        Float64(val("analysis.differential.min_prevalence", 0.0));
                        method=String(val("analysis.differential.method", "nb_glm")),
                        replacement_delta=Float64(val("analysis.differential.replacement_delta", 0.65)),
-                       dispersion=String(val("analysis.differential.dispersion", "glm_nb")))
+                       dispersion=String(val("analysis.differential.dispersion", "glm_nb")),
+                       mn_reference_taxon=ref)
 end
 
 """
@@ -1293,6 +1298,7 @@ function _differential(study::String, body)
         e isa MASSUnavailable  && return json_error(503, "r_unavailable", sprint(showerror, e))
         e isa ZCompositionsUnavailable && return json_error(503, "r_unavailable", sprint(showerror, e))
         e isa GlmGamPoiUnavailable && return json_error(503, "r_unavailable", sprint(showerror, e))
+        e isa MGLMUnavailable  && return json_error(503, "r_unavailable", sprint(showerror, e))
         e isa ErrorException   && return json_error(422, "no_taxon_fitted", e.msg)
         rethrow()
     end

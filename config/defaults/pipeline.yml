@@ -354,21 +354,30 @@ analysis:
     normalisation: hellinger
     # Reads per sample for rarefy or srs; 0 uses the smallest non-empty sample.
     depth: 0
-  # Differential abundance: a negative-binomial model per taxon (MASS::glm.nb)
-  # comparing two conditions on the raw read counts, with Benjamini-Hochberg
-  # adjusted p-values.
+  # Differential abundance: per-taxon or compositional models comparing two
+  # conditions on the raw read counts, with Benjamini-Hochberg adjusted p-values.
   differential:
     # The model fitted to each taxon. nb_glm: a negative-binomial GLM on the read
     # counts with a library-size offset; the effect is a log2 fold change. clr_welch:
     # Welch's t-test on centred log-ratios over the taxa passing min_prevalence,
     # after zCompositions::cmultRepl replaces their zeros; the effect is a
-    # difference in CLR units, not a fold change.
+    # difference in CLR units, not a fold change. multinomial and
+    # dirichlet_multinomial: one joint model of each sample's composition
+    # (MGLM::MGLMreg.fit) conditioned on its read total; the effect is the log2
+    # fold change of each taxon's ratio to the reference taxon below. The
+    # Dirichlet-multinomial also estimates each group's overdispersion and needs
+    # 2 samples per group. Both refuse a taxon with no reads in one group.
     method: nb_glm
     # How library size enters each model, as a log offset: tss (total reads per
     # sample) or rle (median-of-ratios over the taxa present in every sample).
     # rle is refused when no taxon is present in every sample.
-    # Used by nb_glm only; clr_welch ignores it, since log-ratios carry no library size.
+    # Used by nb_glm only; clr_welch and the compositional models ignore it, since
+    # log-ratios carry no library size.
     offset: tss
+    # multinomial and dirichlet_multinomial only: the taxon every estimate is a
+    # log ratio against. ~ uses the fitted taxon with the most reads. It must
+    # have reads in both groups and pass min_prevalence.
+    mn_reference_taxon: ~
     # nb_glm only: the fits and the test. glm_nb (the default) fits
     # MASS::glm.nb per taxon with its maximum-likelihood theta and Wald-tests
     # the group coefficient. glmGamPoi fits one glmGamPoi::glm_gp across the

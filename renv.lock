@@ -589,6 +589,40 @@
       "Maintainer": "Brian Ripley <Brian.Ripley@R-project.org>",
       "Repository": "CRAN"
     },
+    "MGLM": {
+      "Package": "MGLM",
+      "Version": "0.2.3",
+      "Source": "Repository",
+      "Date": "2026-08-23",
+      "Title": "Multivariate Response Generalized Linear Models",
+      "Authors@R": "c( person(\"Yiwen\", \"Zhang\", email = \"zhangyiwen1015@gmail.com\", role = c(\"aut\")), person(\"Hua\", \"Zhou\", email = \"huazhou@ucla.edu\", role = c(\"aut\")), person(\"Juhyun\", \"Kim\", email = \"juhkim111@ucla.edu\", role = c(\"cre\")), person(\"Magdalena\", \"Czapiewska\", role = c(\"ctb\"), comment = c(ORCID = \"0009-0004-3265-1614\")) )",
+      "Depends": [
+        "R (>= 3.0.0)"
+      ],
+      "Imports": [
+        "methods",
+        "stats",
+        "parallel",
+        "stats4"
+      ],
+      "Suggests": [
+        "ggplot2",
+        "plyr",
+        "reshape2",
+        "knitr",
+        "testthat (>= 3.0.0)"
+      ],
+      "Description": "Provides functions that (1) fit multivariate discrete distributions, (2) generate random numbers from multivariate discrete distributions, and (3) run regression and penalized regression on the multivariate categorical response data.  Implemented models include: multinomial logit model, Dirichlet multinomial model, generalized Dirichlet multinomial model, and negative multinomial model. Making the best of the minorization-maximization (MM) algorithm and Newton-Raphson method, we derive and implement stable and efficient algorithms to find the maximum likelihood estimates. On a multi-core machine, multi-threading is supported.",
+      "VignetteBuilder": "knitr",
+      "LazyLoad": "yes",
+      "LazyData": "yes",
+      "Repository": "CRAN",
+      "License": "GPL (>= 2)",
+      "RoxygenNote": "7.1.2",
+      "NeedsCompilation": "no",
+      "Author": "Yiwen Zhang [aut], Hua Zhou [aut], Juhyun Kim [cre], Magdalena Czapiewska [ctb] (ORCID: <https://orcid.org/0009-0004-3265-1614>)",
+      "Maintainer": "Juhyun Kim <juhkim111@ucla.edu>"
+    },
     "Matrix": {
       "Package": "Matrix",
       "Version": "1.7-3",

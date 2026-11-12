@@ -75,3 +75,28 @@ describe('clr_welch results', () => {
     expect(differentialCsv(clr).split('\r\n')[2]).toBe(`# ${configLine(clr)}`)
   })
 })
+
+describe('compositional results', () => {
+  const mn: DifferentialResult = {
+    ...result,
+    method: 'Multinomial logit regression',
+    effect: { key: 'log2_fold_change', label: 'log2 fold change of the ratio to Prevotella' },
+    config: { method: 'dirichlet_multinomial', min_prevalence: 0.1, mn_reference_taxon: null },
+    diagnostics: { ...result.diagnostics, reference_taxon: 'Prevotella', n_taxa_in_composition: 2 },
+    rows: [
+      result.rows[0],
+      { taxon: 'Prevotella', status: 'reference', note: 'the reference taxon', estimate: null,
+        log2_fold_change: null, standard_error: null, statistic: null, pvalue: null, padj: null,
+        dispersion_theta: null, prevalence: 1 },
+    ],
+  }
+
+  test('the settings line names the reference taxon actually used', () => {
+    expect(configLine(mn)).toBe("method dirichlet_multinomial, reference taxon Prevotella, min_prevalence 0.1; estimate is the fold change of each taxon's ratio to the reference taxon")
+  })
+
+  test('the reference row is kept in the CSV with no statistics', () => {
+    const lines = differentialCsv(mn).trimEnd().split('\r\n')
+    expect(lines[5]).toBe('Prevotella,reference,,,,,,,,1,the reference taxon')
+  })
+})

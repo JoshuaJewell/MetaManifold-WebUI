@@ -29,6 +29,7 @@ const REQUIRED_R_PACKAGES = [
     "glmGamPoi"     => "shared dispersion-trend differential abundance",
     "MASS"          => "negative-binomial differential abundance",
     "zCompositions" => "CLR differential abundance (clr_welch)",
+    "MGLM"          => "multinomial and Dirichlet-multinomial differential abundance",
 ]
 
 # Thrown when a caller that declines to wait indefinitely gives up on the runtime.

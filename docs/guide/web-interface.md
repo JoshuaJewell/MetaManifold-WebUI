@@ -72,7 +72,8 @@ read-count bounds to the differential-abundance request, so those bounds do
 not exclude samples from this analysis.
 
 All `analysis.differential` options below (`method`, `offset`, `dispersion`,
-`min_prevalence` and `replacement_delta`) are resolved at study scope.
+`min_prevalence`, `replacement_delta` and `mn_reference_taxon`) are resolved
+at study scope.
 Set them in the study configuration; group and run overrides are not used
 by this endpoint, including when called from a group Analysis workspace.
 
@@ -94,8 +95,28 @@ by this endpoint, including when called from a group Analysis workspace.
   replacement with `zCompositions::cmultRepl`. The effect is a CLR difference,
   not a fold change. `replacement_delta` controls the replacement fraction
   (default 0.65); `offset` is not used.
+- `multinomial` and `dirichlet_multinomial`: one joint model of every
+  sample's composition, fitted by `MGLM::MGLMreg.fit` (`dist = "MN"` or
+  `"DM"`) and conditioned on each sample's read total, so there is no offset
+  and no zero replacement. Every effect is the log2 fold change of a taxon's
+  ratio to a reference taxon, which `mn_reference_taxon` names; empty (the
+  default) uses the fitted taxon with the most reads. The reference row has
+  status `reference` and no test. A taxon with no reads in every sample of one
+  group has no finite estimate, so it is reported as failed and left out of
+  the composition. The multinomial has no overdispersion, so its standard
+  errors are too small when samples differ by more than sampling explains.
+  The Dirichlet-multinomial lets each group's mean composition and
+  overdispersion differ, needs at least 2 samples in each group, and reports
+  each group's `theta` (0 is the multinomial). When a group shows no
+  overdispersion its concentration has no finite estimate. The rows are then
+  marked `boundary` and keep their statistics, because a log-ratio contrast
+  does not depend on that concentration; or MGLM refuses the fit and the
+  refusal names the flat group. Only when both groups are flat do the
+  estimates equal the multinomial's, and only then does the note point to
+  `multinomial`. At most 1000 taxa enter one
+  fit. These methods need the pinned MGLM R package.
 
-For either method, `min_prevalence` (default 0) filters taxa by the fraction of
+For every method, `min_prevalence` (default 0) filters taxa by the fraction of
 samples with nonzero counts. Benjamini–Hochberg adjustment includes only taxa
 that produced a p-value. Failed or filtered taxa have no substitute p-value;
 inspect their status and note in the results table. Invalid input or an
