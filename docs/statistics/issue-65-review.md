@@ -32,7 +32,7 @@ involvement and conflicts so independence can be assessed.
 | Approximate metrics | `src/analysis/high_precision.jl`: MPFR rounding/precision scope, input checks, cancellation and approximate labelling. |
 | Boundaries | `src/canonical.jl`, `src/server/routes/validated_statistics.jl`: JSON integer syntax, DuckDB streaming, finite limits and immutable persistence. |
 | User interpretation | `frontend/src/components/ValidatedStatisticsPanel.tsx`: exact displays, review-pending notice and absence of inference claims. |
-| Real-data evidence | Run_A/run_B counts, sample mapping, input/configuration/software hashes and Python receipts; use pre-taxonomy `seqtab_nochim.csv`. |
+| Real-data evidence | Run_A/run_B counts, sample mapping, input/configuration/software hashes and producer results; use pre-taxonomy `seqtab_nochim.csv`. |
 | Rights and identity | `miseq-data-use.md`, source manifest and six original FASTQ comparisons. |
 | Proof scope | `numeric-contracts.md`: arithmetic model obligations and runtime assumptions; no whole-application or biological correctness proof. |
 

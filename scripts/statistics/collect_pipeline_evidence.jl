@@ -113,8 +113,6 @@ function collect_pipeline_evidence(output::String;
         write(provenance_path, jcs_bytes(provenance))
         result_path = joinpath(directory, "result.json")
         biological_results(joinpath(directory, "counts.csv"), provenance_path, result_path)
-        run_command = `python3 $(joinpath(root, "test/references/check_biological_reference.py")) $(joinpath(directory, "counts.csv")) $result_path $(joinpath(directory, "independent-check.json")) $provenance_path`
-        Base.run(run_command)
     end
 end
 

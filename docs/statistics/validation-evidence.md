@@ -18,26 +18,33 @@ For a generated counts-only feature-by-sample CSV:
 
 ```sh
 julia --project=. scripts/statistics/biological_validation.jl counts.csv provenance.json result.json
-python3 test/references/check_biological_reference.py counts.csv result.json check.json provenance.json
 ```
 
-The producer reads every CSV field as text and parses counts exactly. The
-independent checker rereads the original CSV using a different parser, computes
-totals and reduced proportions with Python integers/Fraction, and compares all
-values at zero tolerance. It independently computes Shannon and Gini–Simpson
-using 100 decimal digits and a fixed `1e-65` absolute tolerance against 256-bit
-MPFR. That tolerance is a test threshold, not a proved universal error bound.
-The checker refuses Python's optimisation mode, which disables assertions.
-It emits a passing receipt only after every comparison passes. When supplied,
-the original provenance file is independently hashed and compared too. CI uses
-`scripts/statistics/collect_pipeline_evidence.jl` after the integration suite;
-this also checks every installed R package against the lockfile and records
-the versions and executable hashes of the pipeline tools.
+The producer reads every CSV field as text and parses counts exactly. Its
+arithmetic is checked against committed known answers, not against a second
+program at run time. MetaManifold has no Python, so there is no Python oracle:
+
+- Exact totals and reduced proportions: `test/unit/test_exact_summaries.jl`
+  compares two tables with the fractions worked by hand in its comments,
+  including a count of 2^80 + 17, at zero tolerance.
+- Shannon and Gini–Simpson: `test/unit/test_statistics_evidence.jl` checks
+  counts 1 and 2 against Gini–Simpson 4/9 exactly and Shannon
+  ln 3 − (2/3) ln 2, whose 100 digits come from `bc -l`, with a fixed
+  `1e-65` absolute tolerance against 256-bit MPFR. That tolerance is a test
+  threshold, not a proved universal error bound.
+- High-precision constants: `test/unit/test_high_precision.jl` documents
+  where each constant comes from and the `bc` command that reproduces it.
+
+None of these is a run-time check of a real pipeline matrix. To review a real
+run, `scripts/statistics/collect_pipeline_evidence.jl` records the producer's
+result with the run's provenance: every installed R package against the
+lockfile, and the versions and executable hashes of the pipeline tools. CI
+does not run it.
 
 Before starting a pipeline run, record its start time with
 `export STATISTICS_PIPELINE_STARTED_UNIX=$(date +%s)`. The collector requires
-this timestamp and refuses absent, empty or older matrices. CI records it
-before the integration suite so that stale output cannot satisfy a skipped run.
+this timestamp and refuses absent, empty or older matrices, so stale output
+cannot stand in for a skipped run.
 
 Retain the CSV and its SHA-256, the generated result and check receipts, sample
 mapping, original FASTQ hashes, effective configuration, Julia/R/package/tool

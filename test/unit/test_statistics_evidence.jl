@@ -41,21 +41,38 @@ end
     end
 end
 
-@testset "R row-name CSVs reach the independent reference checker" begin
+# Known answers for counts 1 and 2 (total 3), worked by hand:
+#   proportions 1/3 and 2/3; richness 2;
+#   Gini-Simpson 1 - (1^2 + 2^2) / 3^2 = 4/9, exactly;
+#   Shannon -(1/3 ln 1/3 + 2/3 ln 2/3) = ln 3 - (2/3) ln 2.
+# The Shannon digits come from `bc -l` with `scale=100; l(3) - (2/3)*l(2)`,
+# not from Julia or MPFR. The 256-bit result must agree to 1e-65.
+const HAND_SHANNON_1_2 = "0.6365141682948128184504238226170746592638238015825792823209076606418985452388124898030402034827862971"
+
+@testset "R row-name CSVs give the hand-worked descriptive results" begin
     mktempdir() do directory
         csv = joinpath(directory, "counts.csv")
         provenance = joinpath(directory, "provenance.json")
         result = joinpath(directory, "result.json")
-        receipt = joinpath(directory, "check.json")
         # The pipeline's R writer leaves the feature-column heading empty.
         write(csv, ",sample,empty\nASV1,1,0\nASV2,2,0\n")
         write(provenance, "{\"source\":\"known unit fixture\"}")
         StatisticsPipelineEvidenceScript.biological_results(csv, provenance, result)
-        python = something(Sys.which("python3"), Sys.which("python"))
-        checker = joinpath(@__DIR__, "../references/check_biological_reference.py")
-        @test success(`$python $checker $csv $result $receipt $provenance`)
-        checked = JSON3.read(read(receipt, String))
-        @test checked.status == "passed"
+        report = JSON3.read(read(result, String))
+        sample, empty = report.exact.samples
+        @test sample.label == "sample" && sample.status == "success"
+        @test sample.total == 3 && sample.counts == [1, 2] && sample.richness == 2
+        @test sample.proportions == ["1/3", "2/3"]
+        @test empty.label == "empty" && empty.status == "undefined_zero_total"
+        @test empty.total == 0 && all(isnothing, empty.proportions)
+        high, high_empty = report.high_precision.samples
+        @test high.shannon.kind == "approximate" && high.shannon.precision_bits == 256
+        setprecision(BigFloat, 512) do
+            @test abs(parse(BigFloat, high.shannon.value) - parse(BigFloat, HAND_SHANNON_1_2)) <= big"1e-65"
+            @test abs(parse(BigFloat, high.gini_simpson.value) - big(4) / 9) <= big"1e-65"
+        end
+        @test high_empty.status == "undefined_zero_total"
+        @test isnothing(high_empty.shannon) && isnothing(high_empty.gini_simpson)
         # A blank sample heading still must fail, even though the feature
         # heading may legitimately be blank.
         write(csv, ",\nASV1,1\n")

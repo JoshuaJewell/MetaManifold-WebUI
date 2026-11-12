@@ -120,7 +120,7 @@ dependency or vendor that package. Source revisions and observed checker
 results belong in the accompanying validation receipt.
 
 Those model theorems are not an end-to-end verification of this application.
-Julia property tests, independent Python `Fraction` and `Decimal` checks,
+Julia property tests, hand-worked and `bc`-derived known answers,
 browser boundary tests and DuckDB integration tests test the implementation
 connection. They do not prove an absence of all software defects, statistical
 calibration, biological representativeness, or permission to redistribute data.

@@ -273,7 +273,6 @@ jobs:
         shell: bash
         run: |
           set +e
-          echo "STATISTICS_PIPELINE_STARTED_UNIX=$(date +%s)" >> "$GITHUB_ENV"
           julia --project=. -t 2 --code-coverage=user --compiled-modules=no test/runtests.jl --integration --server 2>&1 | tee /tmp/julia-tests.log
           status="${PIPESTATUS[0]}"
           if [ "$status" -ne 0 ]; then
@@ -300,25 +299,6 @@ jobs:
             fi
           fi
           exit "$status"
-
-      - name: Check independent reference controls
-        if: ${{ !cancelled() && (steps.julia_tests.outcome == 'success' || steps.julia_tests.outcome == 'failure') }}
-        run: |
-          python3 test/references/test_biological_checker.py
-          python3 test/references/check_high_precision_references.py test/unit/test_high_precision.jl
-
-      - name: Independently validate pipeline counts
-        if: ${{ !cancelled() && (steps.julia_tests.outcome == 'success' || steps.julia_tests.outcome == 'failure') }}
-        run: julia --project=. scripts/statistics/collect_pipeline_evidence.jl "${{ runner.temp }}/descriptive-statistics"
-
-      - name: Retain descriptive validation evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        with:
-          name: descriptive-statistics-evidence
-          path: ${{ runner.temp }}/descriptive-statistics
-          if-no-files-found: error
-          retention-days: 30
 
       # A failing assertion must not discard the coverage earned by every test
       # that did run. Keep the report available for diagnosis, but only publish

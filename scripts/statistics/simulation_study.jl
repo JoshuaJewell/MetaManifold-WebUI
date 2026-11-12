@@ -16,7 +16,8 @@
 # Tolerances are declared before the run: `tolerance(bits) = 2^-(bits-16)`,
 # This is an absolute-error budget, not a claim about units in the last place.
 # Both calculations use MPFR; this study checks precision consistency, while
-# test/references/check_biological_reference.py uses an independent implementation.
+# the known answers in test/unit/test_high_precision.jl and
+# test/unit/test_statistics_evidence.jl come from bc and hand working instead.
 # The study fails if any replicate
 # exceeds its tolerance; it never widens a tolerance after seeing a result.
 #

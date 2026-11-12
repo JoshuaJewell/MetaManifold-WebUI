@@ -6,8 +6,17 @@ using MetaManifold.NumericPolicy
 using MetaManifold.HighPrecision
 using MetaManifold.Canonical
 
-# Independently produced with Python decimal. These are reference values, not
-# values copied from Julia/MPFR; REF_LN2 has enough digits for the 1024-bit test.
+# Reference constants, not values copied from Julia/MPFR. Each is rounded to
+# 460 significant digits; REF_LN2 has enough for the 1024-bit test.
+#   REF_LN2        ln 2 (OEIS A002162)
+#   REF_LN3        ln 3 (OEIS A002391)
+#   REF_TWO_THIRDS 2/3
+#   REF_H_1234     Shannon entropy of counts 1, 2, 3, 4 (p = 0.1, 0.2, 0.3, 0.4):
+#                  -sum p ln p = ln 10 - (0.2 + 0.8) ln 2 - 0.3 ln 3 = ln 5 - 0.3 ln 3
+# Reproduce them with the POSIX calculator, which shares no code with MPFR:
+#   echo 'scale=470; l(2); l(3); 2/3; l(5) - 0.3*l(3)' | BC_LINE_LENGTH=0 bc -l
+# bc truncates where these are rounded, so the last digit can differ by one;
+# on 2026-11-12 all four agreed with bc to 457 significant digits.
 const HP_FIXTURE = [1 2; 1 0; 1 0]
 const HP_LABELS = ["A", "B"]
 const HP_FEATURES = ["f1", "f2", "f3"]

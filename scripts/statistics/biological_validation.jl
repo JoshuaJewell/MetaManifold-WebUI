@@ -46,7 +46,7 @@ function biological_results(input::String, provenance::String, output::String)
         "provenance" => ijson_read(read(provenance)),
         "exact" => summary_to_storage(exact),
         "high_precision" => high_precision_to_storage(high),
-        "independent_check" => "not performed by this producer; run check_biological_reference.py",
+        "independent_check" => "not performed by this producer; the arithmetic is checked against hand-worked and bc-derived known answers in test/unit",
         "limitations" => ["descriptive counts only", "no taxonomy validation", "no population representativeness claim",
                            "scientific review, data-use approval and release approval are separate gates"],
     )

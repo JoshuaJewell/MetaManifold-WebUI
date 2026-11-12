@@ -142,51 +142,51 @@ end
     end
 end
 
-@testset "Independent Python fractions reference" begin
-    python = Sys.which("python3")
-    if isnothing(python)
-        @info "Skipping Independent Python fractions reference: python3 is unavailable"
-    else
-        payloads = [
-            Dict{String,Any}(
-                "sample_labels" => ["A", "B", "empty"],
-                "feature_labels" => ["x", "y", "z"],
-                "groups" => ["g1", "g1", "g2"],
-                "counts" => [["4", "2", "0"], ["6", "4", "0"], ["0", "0", "0"]],
-            ),
-            Dict{String,Any}(
-                "sample_labels" => ["large", "small"],
-                "feature_labels" => ["x", "y"],
-                "groups" => nothing,
-                "counts" => [[string(big(2)^80 + 17), "1"], ["1", "3"]],
-            ),
-        ]
-        script = joinpath(@__DIR__, "..", "references", "exact_summary_reference.py")
-        strings(values) = [isnothing(value) ? nothing : string(value) for value in values]
-        for payload in payloads
-            labels = payload["sample_labels"]
-            features = payload["feature_labels"]
-            counts = [parse(BigInt, payload["counts"][i][j])
-                      for i in eachindex(features), j in eachindex(labels)]
-            summary = exact_summary(counts; sample_labels=labels,
-                feature_labels=features, groups=payload["groups"])
-            stored = summary_to_storage(summary)
-            mktempdir() do directory
-                input = joinpath(directory, "input.json")
-                write(input, JSON3.write(payload))
-                reference = JSON3.read(read(`$python $script $input`, String))
-                for kind in ("samples", "groups")
-                    for (i, actual) in enumerate(stored[kind])
-                        expected = reference[kind][i]
-                        @test actual["label"] == expected["label"]
-                        @test string(actual["total"]) == expected["total"]
-                        @test strings(actual["counts"]) == strings(expected["counts"])
-                        @test strings(actual["proportions"]) == strings(expected["proportions"])
-                    end
-                end
-            end
-        end
+# Known answers worked by hand. Rows are features, columns are samples.
+# Table 1: x = (4, 2, 0), y = (6, 4, 0), z = (0, 0, 0) over samples A, B, empty.
+#   A: 4 + 6 = 10 reads, so 4/10 = 2/5, 6/10 = 3/5, 0/10 = 0/1.
+#   B: 2 + 4 = 6 reads, so 2/6 = 1/3, 4/6 = 2/3, 0/1.
+#   empty: no reads, so every proportion is undefined (nothing), not zero.
+#   Group g1 = A + B: x 6, y 10, total 16, so 6/16 = 3/8, 10/16 = 5/8, 0/1.
+#   Group g2 = empty: total 0, undefined.
+# Table 2: x = (2^80 + 17, 1), y = (1, 3) over samples large, small; no groups.
+#   large: total 2^80 + 18. Consecutive integers are coprime, so
+#   (2^80 + 17)/(2^80 + 18) and 1/(2^80 + 18) are already in lowest terms.
+#   small: total 4, so 1/4 and 3/4.
+#   2^80 = 1208925819614629174706176.
+@testset "Exact summaries match hand-worked fractions" begin
+    strings(values) = [isnothing(value) ? nothing : string(value) for value in values]
+    check(stored, expected) = for (actual, (label, total, counts, proportions)) in zip(stored, expected)
+        @test actual["label"] == label
+        @test string(actual["total"]) == total
+        @test strings(actual["counts"]) == counts
+        @test strings(actual["proportions"]) == proportions
     end
+
+    counts = BigInt[4 2 0; 6 4 0; 0 0 0]
+    stored = summary_to_storage(exact_summary(counts; sample_labels=["A", "B", "empty"],
+        feature_labels=["x", "y", "z"], groups=["g1", "g1", "g2"]))
+    @test length(stored["samples"]) == 3 && length(stored["groups"]) == 2
+    check(stored["samples"], [
+        ("A", "10", ["4", "6", "0"], ["2/5", "3/5", "0/1"]),
+        ("B", "6", ["2", "4", "0"], ["1/3", "2/3", "0/1"]),
+        ("empty", "0", ["0", "0", "0"], [nothing, nothing, nothing]),
+    ])
+    check(stored["groups"], [
+        ("g1", "16", ["6", "10", "0"], ["3/8", "5/8", "0/1"]),
+        ("g2", "0", ["0", "0", "0"], [nothing, nothing, nothing]),
+    ])
+
+    @test big(2)^80 == parse(BigInt, "1208925819614629174706176")
+    counts = BigInt[big(2)^80+17 1; 1 3]
+    stored = summary_to_storage(exact_summary(counts; sample_labels=["large", "small"],
+        feature_labels=["x", "y"], groups=nothing))
+    @test length(stored["samples"]) == 2 && isempty(stored["groups"])
+    check(stored["samples"], [
+        ("large", "1208925819614629174706194", ["1208925819614629174706193", "1"],
+         ["1208925819614629174706193/1208925819614629174706194", "1/1208925819614629174706194"]),
+        ("small", "4", ["1", "3"], ["1/4", "3/4"]),
+    ])
 end
 
 @testset "Legacy analysis remains detached from opt-in statistics" begin
