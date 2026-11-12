@@ -9,7 +9,7 @@
     status: "pending_review",
     review_status: "independent scientific review and upstream release approval pending",
     review_reference: "https://github.com/JoshuaJewell/MetaManifold-WebUI/issues/65",
-    scope: "v1 permits exact descriptive summaries and high-precision descriptive diversity; parametric fits and resampling remain catalogued but unimplemented; exact statistical tests are deferred; symbolic mathematics is out of scope",
+    scope: "v1 lists only implemented methods: exact descriptive summaries and high-precision descriptive diversity; a method is added when it is implemented",
     claim_language: "descriptive only; no hypothesis test, confidence interval, significance claim or estimator coverage guarantee is made by a supported method in this release",
   },
   methods: [
@@ -120,133 +120,6 @@
         "test/unit/test_statistics_properties.jl",
         "docs/statistics/numeric-contracts.md",
       ],
-    },
-    {
-      id: "parametric-model-fits",
-      status: "unsupported",
-      reason: "not implemented in this release; a method may only be implemented after its conditions document, convergence and identifiability checks, known-answer evidence and independent review are published",
-      summary: "Maximum-likelihood parametric fits, including count and composition models.",
-      response_types: [
-        "not applicable in this release",
-      ],
-      designs: [
-        "not applicable in this release",
-      ],
-      supported_conditions: [
-        "not applicable in this release",
-      ],
-      unsupported_conditions: [
-        "all parametric fits are unavailable until separately approved and validated",
-        "no ordinary or validated endpoint may fall back to a parametric model",
-      ],
-      uncertainty: "not estimated because no method in this entry is implemented",
-      effect_sizes: "not applicable",
-      multiple_testing: "not applicable",
-      diagnostics: [
-        "not applicable",
-      ],
-      warnings: [
-        "selecting a model name does not perform a fit in this release",
-      ],
-      references: [
-        "The existing R-backed differential workflow remains the only implemented inferential path; it is outside this catalogue.",
-      ],
-      evidence: [],
-    },
-    {
-      id: "nonparametric-resampling",
-      status: "unsupported",
-      reason: "not implemented in this release; exchangeability or resampling units, seeds, Monte Carlo limitations and coverage evidence must be published before a method can be supported",
-      summary: "Permutation and bootstrap analyses.",
-      response_types: [
-        "not applicable in this release",
-      ],
-      designs: [
-        "not applicable in this release",
-      ],
-      supported_conditions: [
-        "not applicable in this release",
-      ],
-      unsupported_conditions: [
-        "all permutation and bootstrap methods are unavailable until separately approved and validated",
-        "a seed alone is not a validation of exchangeability",
-      ],
-      uncertainty: "not estimated because no method in this entry is implemented",
-      effect_sizes: "not applicable",
-      multiple_testing: "not applicable",
-      diagnostics: [
-        "not applicable",
-      ],
-      warnings: [
-        "no resampling method is available in this release",
-      ],
-      references: [
-        "Anderson, M. J. (2001). A new method for non-parametric multivariate analysis of variance.",
-      ],
-      evidence: [],
-    },
-    {
-      id: "exact-statistical-tests",
-      status: "deferred",
-      reason: "deferred beyond the initial descriptive increment; tracked separately and requiring its own assumptions, supported designs, computational limits, known-answer cases and validation",
-      summary: "Exact Fisher, permutation and negative-binomial tests.",
-      response_types: [
-        "not applicable in this release",
-      ],
-      designs: [
-        "not applicable in this release",
-      ],
-      supported_conditions: [
-        "not applicable in this release",
-      ],
-      unsupported_conditions: [
-        "no exact test is implemented by the validated statistics layer in this release",
-        "an approximate method must not be substituted silently when an exact method is infeasible",
-      ],
-      uncertainty: "not applicable because no exact test is implemented",
-      effect_sizes: "not applicable",
-      multiple_testing: "not applicable",
-      diagnostics: [
-        "not applicable",
-      ],
-      warnings: [
-        "exact tests are deferred and remain unavailable",
-      ],
-      references: [
-        "R. A. Fisher (1935). The Design of Experiments.",
-      ],
-      evidence: [],
-    },
-    {
-      id: "symbolic-mathematics",
-      status: "out_of_scope",
-      reason: "symbolic algebra is outside the descriptive-statistics scope of upstream issue #65",
-      summary: "Symbolic algebraic manipulation.",
-      response_types: [
-        "not applicable",
-      ],
-      designs: [
-        "not applicable",
-      ],
-      supported_conditions: [
-        "not applicable",
-      ],
-      unsupported_conditions: [
-        "symbolic mathematics is not implemented by this descriptive-statistics layer",
-      ],
-      uncertainty: "not applicable",
-      effect_sizes: "not applicable",
-      multiple_testing: "not applicable",
-      diagnostics: [
-        "not applicable",
-      ],
-      warnings: [
-        "no symbolic result is claimed",
-      ],
-      references: [
-        "JoshuaJewell/MetaManifold-WebUI issue #65",
-      ],
-      evidence: [],
     },
   ],
   limits: {

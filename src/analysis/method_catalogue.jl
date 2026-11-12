@@ -21,7 +21,9 @@ export CATALOGUE_SCHEMA, CATALOGUE_STATUSES, catalogue_path,
        catalogue_to_storage, supported_method_ids, method_by_id
 
 const CATALOGUE_SCHEMA = "metamanifold.statistics-method-catalogue.v1"
-const CATALOGUE_STATUSES = ("supported", "unsupported", "deferred", "out_of_scope")
+# The catalogue lists implemented methods only. A method that is not implemented
+# is not catalogued at all, so there is no status for one.
+const CATALOGUE_STATUSES = ("supported",)
 
 # The limits the catalogue must state exactly. The catalogue is not allowed to
 # advertise a larger matrix, precision or rational budget than the code enforces.
@@ -93,13 +95,9 @@ function _validate_method(method::Any, index::Int)
     _require_strings(method, "warnings", context)
     _require_strings(method, "references", context)
     evidence = _require_strings(method, "evidence", context)
-    if status == "supported"
-        _require_string(method, "implementation", context)
-        isempty(evidence) && throw(ArgumentError(
-            "$context is supported but names no evidence"))
-    else
-        _require_string(method, "reason", context)
-    end
+    _require_string(method, "implementation", context)
+    isempty(evidence) && throw(ArgumentError(
+        "$context is supported but names no evidence"))
     method
 end
 

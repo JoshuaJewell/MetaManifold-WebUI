@@ -32,22 +32,20 @@ end
     @test method_by_id(document, "exact-descriptive-summaries")["status"] == "supported"
     @test method_by_id(document, "not-a-method") === nothing
     @test supported == ["exact-descriptive-summaries", "high-precision-descriptive-diversity"]
-    @test !("parametric-model-fits" in supported)
-    @test !("nonparametric-resampling" in supported)
-    @test !("exact-statistical-tests" in supported)
-    @test !("symbolic-mathematics" in supported)
+    # Only implemented methods are catalogued.
+    @test [m["id"] for m in document["methods"]] == supported
+    @test CATALOGUE_STATUSES == ("supported",)
+    unimplemented = deepcopy(document)
+    unimplemented["methods"][1]["status"] = "unsupported"
+    @test_throws ArgumentError validate_catalogue(unimplemented)
 
     for method in document["methods"]
         @test !isempty(method["warnings"])
         @test !isempty(method["references"])
         @test !isempty(method["diagnostics"])
-        if method["status"] == "supported"
-            @test !isempty(method["evidence"])
-            @test !isempty(method["implementation"])
-            @test isfile(joinpath(dirname(loaded.path), "..", "..", method["implementation"]))
-        else
-            @test !isempty(method["reason"])
-        end
+        @test !isempty(method["evidence"])
+        @test !isempty(method["implementation"])
+        @test isfile(joinpath(dirname(loaded.path), "..", "..", method["implementation"]))
     end
 
     storage = catalogue_to_storage(document)
@@ -89,12 +87,11 @@ end
     @test rejected(doc -> doc["methods"] = Any[])
     @test rejected(doc -> doc["methods"][1]["status"] = "maybe")
     @test rejected(doc -> doc["methods"][1]["evidence"] = Any[])
-    # Flipping an unsupported entry to supported is refused: it has no
-    # implementation and no evidence. Clearing the evidence of a *supported*
-    # entry is refused too, which is why the second mutation targets entry 2:
-    # an unsupported entry has no evidence to clear, and removing it is legal.
-    @test rejected(doc -> doc["methods"][3]["status"] = "supported")
+    # Every entry is implemented, so one without an implementation or without
+    # evidence is refused, as is any status other than supported.
+    @test rejected(doc -> delete!(doc["methods"][2], "implementation"))
     @test rejected(doc -> doc["methods"][2]["evidence"] = Any[])
+    @test rejected(doc -> doc["methods"][2]["status"] = "deferred")
     @test rejected(doc -> doc["methods"][1]["id"] = doc["methods"][2]["id"])
     @test rejected(doc -> doc["limits"]["max_cells"] = MAX_CELLS + 1)
     @test rejected(doc -> doc["limits"]["max_precision_bits"] = MAX_PRECISION_BITS + 1)
